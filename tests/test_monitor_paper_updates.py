@@ -48,6 +48,7 @@ class MonitorPaperUpdateTests(unittest.TestCase):
                 storage.close()
         functions = "\n".join([
             ui_function_block("function updatePaperState", "function initialAuthorMonitorSelectedId"),
+            ui_function_block("function applyPaperFilesPayloads", "function paperFileRoleLabel"),
             ui_function_block("async function addPaperToLibrary", "async function moveLibraryEntry"),
             ui_function_block("function setReportLibraryButtonShowState", "async function navigateToPaperInLibrary"),
             ui_function_block("async function downloadReportPaper", "async function deletePaperAsset"),
@@ -62,7 +63,7 @@ const state = {
   reportSelectedPaperId: paperId, themeGroups: [{key: "sensing"}, {key: "computing"}],
   monitorPaperOperations: new Map(), papers: [], themePapers: [structuredClone(monitor)], reportCache: {},
   themePapersByDate: {}, libraryLoaded: false, libraryItems: [],
-  myPublications: [], authorMonitorPapers: []
+  myPublications: [], authorMonitorPapers: [], paperFilesByPaperId: {}, paperFileRequests: {}
 };
 // These aliases are created by applyThemeReportData and renderThemeMonitor.
 state.papers = state.themePapers;
@@ -140,6 +141,21 @@ assert.equal(state.paperFilesByPaperId[paperId], undefined);
 assert.equal(state.paperFileRequests[paperId], undefined);
 assert.equal(state.papers[0].merged_pdf_path, "fixture.pdf");
 assert.equal(state.monitorPaperOperations.get(paperId).download, undefined);
+''')
+
+    def test_add_replaces_recycled_file_cache_without_changing_monitor_selection(self):
+        self.run_javascript(r'''
+state.paperFilesByPaperId[paperId] = {files: [{id: 10, local_path: "Recycle/old.pdf"}]};
+state.paperFileRequests[paperId] = Promise.resolve({files: []});
+fetch = async () => ({ok: true, json: async () => ({paper: updated,
+  paper_files: [{paper_id: paperId, paper: {...updated, merged_pdf_path: "Library/new.pdf"},
+    files: [{id: 10, local_path: "Library/new.pdf"}]}]})});
+await addPaperToLibrary(article, paperId, {folderId: 1});
+assert.equal(state.paperFilesByPaperId[paperId].files[0].local_path, "Library/new.pdf");
+assert.equal(state.paperFileRequests[paperId], undefined);
+assert.equal(state.reportSelectedPaperId, paperId);
+assert.equal(state.activeThemeGroupKey, "sensing");
+assert.equal(state.mode, "theme");
 ''')
 
     def test_shared_download_request_keeps_distinct_papers_independent_and_allows_retry(self):

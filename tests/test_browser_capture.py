@@ -99,6 +99,49 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(self.storage.get_paper('first')['doi'], before['doi'])
         self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
 
+    def test_custom_default_is_shared_but_existing_placement_and_explicit_choice_win(self):
+        from paper_monitor.library_destination import save_default_add_folder
+        inbox = self.storage.create_library_folder(parent_id=1, name='Inbox')
+        space = self.storage.create_library_root_folder(name='Reading Space')
+        save_default_add_folder(self.storage, inbox['id'])
+        capture = self.begin()
+        before = self.count('library_items')
+        self.assertEqual(self.review(capture)['destination']['folder_id'], inbox['id'])
+        self.assertEqual(self.count('library_items'), before)
+        # Preference changes between Review and Save are resolved on Save.
+        save_default_add_folder(self.storage, space['id'])
+        saved = self.save(capture)
+        self.assertEqual(saved['folder_id'], space['id'])
+        save_default_add_folder(self.storage, inbox['id'])
+        again = self.begin()
+        self.upload(again)
+        self.assertEqual(self.review(again)['destination']['folder_id'], space['id'])
+        retained = self.save(again, include_pdf=True)
+        self.assertEqual(retained['item_id'], saved['item_id'])
+        self.assertEqual(retained['gewu_key'], saved['gewu_key'])
+        self.assertEqual(self.count('library_items'), 1)
+        explicit = self.begin()
+        self.review(explicit)
+        result = self.service.save(explicit, self.storage, {'folder_id':inbox['id'], 'folder_selection_explicit':True})
+        self.assertEqual(result['folder_id'], inbox['id'])
+        self.assertEqual(self.count('library_items'), 2)
+
+    def test_custom_default_in_recycled_parent_falls_back_without_review_writes(self):
+        from paper_monitor.library_destination import save_default_add_folder
+        parent = self.storage.create_library_folder(parent_id=1, name='Reading')
+        inbox = self.storage.create_library_folder(parent_id=parent['id'], name='Inbox')
+        save_default_add_folder(self.storage, inbox['id'])
+        capture = self.begin()
+        self.assertEqual(self.review(capture)['destination']['folder_id'], inbox['id'])
+        recycle = self.storage.ensure_library_folder(parent_id=1, name='Recycle')
+        self.storage.move_library_folder_to_trash(folder_id=parent['id'], recycle_folder_id=recycle['id'])
+        changes = self.storage.conn.total_changes
+        destination = self.service.destination(capture, self.storage, '', self.service.folders(self.storage))
+        self.assertEqual(destination['title'], 'Library / unsorted')
+        self.assertEqual(self.storage.conn.total_changes, changes)
+        result = self.save(capture)
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
+
     def test_new_article_defaults_to_unsorted_without_writing_during_review(self):
         capture = self.begin()
         before = self.count('library_folders')

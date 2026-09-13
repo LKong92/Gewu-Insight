@@ -40,9 +40,11 @@ from pypdf import PdfReader, PdfWriter
 import requests
 
 from . import search_matching
+from .library_destination import active_folders, default_add_destination, save_default_add_folder
 from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
 from .publication_deletion import delete_publications
 from .recycle import delete_recycle_selection, preview_recycle_selection
+from .file_placement import active_directories, move_original, rescue_active_original
 from .publication_errors import report_publication_error
 from .workflow_store import (publication_work_snapshot, preserve_subject_history,
                              subject_revision, subject_window_preserved)
@@ -725,6 +727,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/quick-look":
                 self.handle_get_quick_look_settings()
                 return
+            if parsed.path == "/api/settings/add-to-library":
+                self.handle_get_library_destination_settings()
+                return
             if parsed.path == "/api/settings/website-links":
                 self.handle_get_website_link_settings()
                 return
@@ -915,6 +920,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/quick-look":
                 self.handle_set_quick_look_settings(payload)
+                return
+            if parsed.path == "/api/settings/add-to-library":
+                self.handle_set_library_destination_settings(payload)
                 return
             if parsed.path == "/api/settings/website-links":
                 self.handle_set_website_link_settings(payload)
@@ -2695,11 +2703,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
             work = publication_work_snapshot(storage)
+            refreshed_files = paper_files_state_payloads(storage, [])
         finally:
             storage.close()
         if not self.documentation_mode:
             publication_jobs.start_workers(self.configured_db_path)
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications, "work": work})
+        self.send_json({"publication": my_publication_to_api(publication), "publications": publications, "work": work,
+                        "paper_files": refreshed_files})
 
     def handle_import_google_scholar_publications(self, payload: dict[str, Any]) -> None:
         profile_url = str(payload.get("url") or "").strip()
@@ -3772,6 +3782,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     target_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME)
                     folder_id = int(target_folder.get("id") or 1)
                 else:
+                    if not payload.get("folder_id"):
+                        folder_id = int(default_add_destination(storage, create=True)["folder_id"])
                     target_folder = storage.get_library_folder(folder_id)
                     if not target_folder:
                         self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library or Space folder was not found")
@@ -3805,6 +3817,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
                 updated_paper = updated_papers[0] if updated_papers else updated_paper
                 item_api = library_item_to_api(item, updated_paper) if item else {}
+                refreshed_files = paper_files_state_payloads(storage, [])
                 snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
             finally:
                 storage.close()
@@ -3812,6 +3825,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "item": item_api,
                 "folder": target_folder_api,
                 "paper": paper_to_api(updated_paper),
+                "paper_files": refreshed_files,
                 **snapshot,
             })
 
@@ -3882,6 +3896,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(response)
+
+    def handle_get_library_destination_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            self.send_json(default_add_destination(storage))
+        finally:
+            storage.close()
+
+    def handle_set_library_destination_settings(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            self.send_json(save_default_add_folder(storage, payload.get("folder_id")))
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        finally:
+            storage.close()
 
     def handle_get_website_link_settings(self) -> None:
         storage = Storage(self.configured_db_path)
@@ -4361,7 +4391,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             deleted = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
-            refreshed_files = deleted.get("paper_files", [])
+            refreshed_files = deleted.get("paper_files", []) + paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except (ValueError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -4404,6 +4434,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 result = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
                 deleted.append(result or {"type": entry_type, "id": entry_id})
             refreshed_files = list({p["paper_id"]: p for result in deleted for p in result.get("paper_files", [])}.values())
+            refreshed_files += paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except (ValueError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -4619,13 +4650,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             recovered = self.recover_library_entry_in_storage(storage, entry_type, entry_id)
             if entry_type == "folder" and recovered:
                 recovered = library_folder_to_api(recovered, storage)
+            refreshed_files = paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"recovered": dict(recovered or {}), **snapshot})
+        self.send_json({"recovered": dict(recovered or {}), "paper_files": refreshed_files, **snapshot})
 
     def recover_library_entry_in_storage(self, storage: Storage, entry_type: str, entry_id: int) -> dict[str, Any]:
         special = ensure_library_special_folders(storage)
@@ -4795,13 +4827,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if entry_type == "folder" and pasted
                 else None
             )
+            refreshed_files = paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"pasted": dict(pasted or {}), "pasted_tree": pasted_tree, **snapshot})
+        self.send_json({"pasted": dict(pasted or {}), "pasted_tree": pasted_tree, "paper_files": refreshed_files, **snapshot})
 
     def handle_paste_library_entries(self, payload: dict[str, Any]) -> None:
         target_folder_id = int(payload.get("target_folder_id") or 1)
@@ -4823,13 +4856,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if entry_type == "folder" and pasted:
                     pasted_entry["tree"] = library_folder_tree_snapshot(storage, int(pasted.get("id") or 0))
                 pasted_entries.append(pasted_entry)
+            refreshed_files = paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"pasted": pasted_entries, **snapshot})
+        self.send_json({"pasted": pasted_entries, "paper_files": refreshed_files, **snapshot})
 
     def paste_library_entry_in_storage(
         self,
@@ -9995,6 +10029,7 @@ def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]
 
 def paper_files_state_payloads(storage: Storage, paper_ids: Iterable[str]) -> list[dict[str, Any]]:
     affected = {str(paper_id) for paper_id in paper_ids if str(paper_id or "")}
+    affected.update(getattr(storage, "_relocated_paper_ids", set()))
     for paper_id in list(affected):
         canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
         if canonical:
@@ -10534,6 +10569,7 @@ def library_add_targets_snapshot(storage: Storage) -> dict[str, Any]:
     special = ensure_library_special_folders(storage)
     return {
         "root_id": 1,
+        "default_add_folder_id": default_add_destination(storage)["folder_id"],
         "unsorted_id": int(special["unsorted"].get("id") or 0),
         "recycle_id": int(special["recycle"].get("id") or 0),
         "folders": [
@@ -21430,26 +21466,24 @@ def relocate_associated_work_dir(
     if destination.exists() or destination.is_symlink():
         destination = unique_path_in_dir(destination)
     old_source = source
+    path_moves: dict[Path, tuple[Path, list[str]]] = {}
+    for resource in storage.list_paper_resources(str(paper_id), ensure_primary=False):
+        value = storage.resource_local_path(resource)
+        if not value:
+            continue
+        old_file = Path(value).expanduser().resolve()
+        try:
+            relative_file = old_file.relative_to(old_source.resolve())
+        except ValueError:
+            continue
+        owners = paper_ids_referencing_pdf_path(storage, old_file, include_resources=True)
+        path_moves[old_file] = (destination / relative_file, list(dict.fromkeys([str(paper_id), *owners])))
     shutil.move(str(source), str(destination))
     try:
         storage.conn.execute("BEGIN IMMEDIATE")
-        rows = storage.conn.execute(
-            "SELECT id, stored_path FROM resources WHERE paper_id = ?",
-            (str(paper_id),),
-        ).fetchall()
-        timestamp = now_iso()
-        for row in rows:
-            stored_path = clean_text(row["stored_path"] or "")
-            if not stored_path:
-                continue
-            try:
-                relative_resource = Path(stored_path).expanduser().resolve().relative_to(old_source.resolve())
-            except (OSError, ValueError):
-                continue
-            storage.conn.execute(
-                "UPDATE resources SET stored_path = ?, updated_at = ? WHERE id = ?",
-                (str(destination / relative_resource), timestamp, int(row["id"])),
-            )
+        for old_file, (new_file, owners) in path_moves.items():
+            for owner_id in owners:
+                update_paper_file_path_references(storage, owner_id, old_file, new_file, commit=False)
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
@@ -22958,7 +22992,7 @@ def pdf_path_referenced_by_other_paper(storage: Storage, path: Path, paper_id: s
     return False
 
 
-def paper_ids_referencing_pdf_path(storage: Storage, path: Path) -> list[str]:
+def paper_ids_referencing_pdf_path(storage: Storage, path: Path, *, include_resources: bool = False) -> list[str]:
     requested = path.expanduser().resolve()
     values = {
         str(path),
@@ -22985,6 +23019,20 @@ def paper_ids_referencing_pdf_path(storage: Storage, path: Path) -> list[str]:
         """,
         [*values, *values, *values],
     ).fetchall()
+    if include_resources:
+        slots = ",".join("?" for _ in values)
+        rows += storage.conn.execute(
+            f"SELECT paper_id FROM resources WHERE stored_path IN ({slots}) OR source_path IN ({slots})",
+            [*values, *values],
+        ).fetchall()
+        rows += storage.conn.execute(
+            f"SELECT paper_id FROM papers WHERE analysis_path IN ({slots})", values,
+        ).fetchall()
+        rows += storage.conn.execute(
+            f"""SELECT DISTINCT papers.paper_id FROM papers,
+                json_each(CASE WHEN json_valid(supplement_pdf_paths) THEN supplement_pdf_paths ELSE '[]' END) AS paths
+                WHERE paths.value IN ({slots})""", values,
+        ).fetchall()
     return sorted(
         dict.fromkeys(str(row["paper_id"] or "") for row in rows if row["paper_id"])
     )
@@ -23480,7 +23528,7 @@ def update_paper_file_path_references(
     old_value = str(old_path)
     new_value = str(new_path)
     updates: dict[str, str] = {}
-    for key in ("main_pdf_path", "merged_pdf_path", "source_path"):
+    for key in ("main_pdf_path", "merged_pdf_path", "source_path", "analysis_path"):
         raw_value = str(paper.get(key) or "")
         try:
             matches_old = bool(raw_value) and Path(raw_value).expanduser().resolve() == old_path.expanduser().resolve()
@@ -23488,6 +23536,17 @@ def update_paper_file_path_references(
             matches_old = raw_value == old_value
         if matches_old:
             updates[key] = new_value
+    supplements = paper.get("supplement_pdf_paths") or "[]"
+    if isinstance(supplements, str):
+        try:
+            supplements = json.loads(supplements)
+        except (TypeError, ValueError):
+            supplements = []
+    if isinstance(supplements, list):
+        remapped = [new_value if value and Path(value).expanduser().resolve() == old_path.expanduser().resolve()
+                    else value for value in supplements]
+        if remapped != supplements:
+            updates["supplement_pdf_paths"] = json.dumps(remapped, ensure_ascii=False)
     raw = parse_raw_json(paper)
     imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
     stored_path = clean_text(imported.get("stored_path") or "")
@@ -23901,6 +23960,11 @@ def sync_alias_for_library_item(
     canonical = canonical_pdf_path_for_paper(paper)
     if not item or not paper or not canonical:
         return None
+    old_target = rescue_active_original(storage, paper_id)
+    if old_target:
+        sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target)
+        paper = storage.get_paper(paper_id)
+        canonical = canonical_pdf_path_for_paper(paper)
     target_dir = local_copy_dir_for_library_folder(storage, folder_id).resolve()
     alias = create_pdf_alias(
         canonical,
@@ -23912,6 +23976,9 @@ def sync_alias_for_library_item(
 
 def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
     paper_id = storage.resolve_paper_id(paper_id)
+    old_target = rescue_active_original(storage, paper_id)
+    if old_target:
+        sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target)
     canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return None
@@ -23926,6 +23993,11 @@ def sync_all_pdf_aliases_for_paper(
     preserve_canonical_name: bool = False,
 ) -> dict[str, Any]:
     paper_id = storage.resolve_paper_id(paper_id)
+    rescued_target = rescue_active_original(storage, paper_id)
+    if rescued_target:
+        if old_target:
+            remove_symlinks_to(old_target, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
+        old_target = rescued_target
     paper = storage.get_paper(str(paper_id))
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
@@ -24312,14 +24384,11 @@ def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, tar
         canonical.relative_to(DEFAULT_PDF_DIR.resolve())
     except ValueError:
         return False
-    target_dir.mkdir(parents=True, exist_ok=True)
-    removed = remove_direct_symlinks_to(canonical, [target_dir])
-    cleanup_local_copy_empty_parents(removed)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
     old_path = canonical
-    shutil.move(str(canonical), str(target_path))
-    update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved into local Library storage")
+    target_path = move_original(storage, paper_id, canonical, target_dir,
+                                filename=paper_pdf_basename(paper, canonical))
+    if target_path == old_path:
+        return False
     cleanup_empty_parents([str(old_path)], DEFAULT_PDF_DIR.resolve())
     sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
     return True
@@ -24332,10 +24401,13 @@ def reconcile_paper_pdf_storage(
     target_dir: Path | None = None,
 ) -> bool:
     paper_id = storage.resolve_paper_id(paper_id)
+    old_target = rescue_active_original(storage, paper_id)
+    if old_target:
+        sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target)
     target = target_dir or preferred_local_pdf_dir_for_paper(storage, paper_id)
     if not target:
-        return False
-    changed = move_monitor_pdf_into_context_if_needed(storage, paper_id, target)
+        return bool(old_target)
+    changed = move_monitor_pdf_into_context_if_needed(storage, paper_id, target) or bool(old_target)
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
@@ -24344,9 +24416,10 @@ def reconcile_paper_pdf_storage(
         return changed
     canonical_value = str(canonical)
     stored_paths = [str(paper.get(key) or "") for key in ("main_pdf_path", "merged_pdf_path")]
-    if any(path and str(Path(path).expanduser().absolute()) != canonical_value for path in stored_paths):
-        update_paper_pdf_paths(storage, paper_id, canonical, message="PDF path normalized to local Library storage")
-        changed = True
+    for path in stored_paths:
+        if path and str(Path(path).expanduser().absolute()) != canonical_value and Path(path).expanduser().resolve() == canonical:
+            update_paper_file_path_references(storage, paper_id, Path(path), canonical)
+            changed = True
     sync_all_pdf_aliases_for_paper(storage, paper_id)
     return changed
 
@@ -24367,13 +24440,12 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
     if source_dir == target_dir:
         return False
     if is_path_inside_dir(canonical, source_dir) and canonical.parent == source_dir:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        remove_direct_symlinks_to(canonical, [target_dir])
-        target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
         old_path = canonical
+        target_path = move_original(
+            storage, paper_id, canonical, target_dir,
+            filename=paper_pdf_basename(paper, canonical), exclude_item_id=int(item.get("id") or 0),
+        )
         if old_path != target_path:
-            shutil.move(str(old_path), str(target_path))
-            update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library shortcut")
             remove_symlinks_to(old_path, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
             cleanup_local_copy_empty_parents([str(old_path)])
             return True
@@ -24496,11 +24568,9 @@ def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]
         target_dir = target_dirs[item_folder_id]
         old_path = entry.get("old_path")
         if isinstance(old_path, Path) and old_path.exists():
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = unique_path_in_dir(target_dir / finder_safe_name(str(entry.get("basename") or old_path.name), old_path.name))
+            target_path = move_original(storage, paper_id, old_path, target_dir,
+                                        filename=str(entry.get("basename") or old_path.name))
             if old_path != target_path:
-                shutil.move(str(old_path), str(target_path))
-                update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library folder")
                 canonical_moves.setdefault(str(old_path.resolve()), (paper_id, old_path))
                 canonical_moved_paper_ids.add(paper_id)
                 removed_paths.append(str(old_path))
@@ -24535,22 +24605,8 @@ def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]
 
 def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_id: int) -> Path | None:
     paper_id = storage.resolve_paper_id(paper_id)
-    rows = storage.conn.execute(
-        """
-        SELECT folder_id
-        FROM library_items
-        WHERE paper_id = ?
-        ORDER BY id ASC
-        """,
-        (str(paper_id),),
-    ).fetchall()
-    for row in rows:
-        folder_id = int(row["folder_id"] or 0)
-        if folder_id and not library_folder_is_within(storage, folder_id, recycle_folder_id):
-            return local_copy_dir_for_library_folder(storage, folder_id)
-    if storage.conn.execute("SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1", (str(paper_id),)).fetchone():
-        return MY_PUBLICATIONS_LOCAL_COPY_ROOT
-    return None
+    directories = active_directories(storage, [paper_id])
+    return directories[0] if directories else None
 
 
 def first_outside_reference_item(
@@ -24561,6 +24617,7 @@ def first_outside_reference_item(
     exclude_item_id: int = 0,
 ) -> dict[str, Any] | None:
     paper_id = storage.resolve_paper_id(paper_id)
+    active_ids = {folder["id"] for folder in active_folders(storage)}
     rows = storage.conn.execute(
         """
         SELECT *
@@ -24574,7 +24631,7 @@ def first_outside_reference_item(
     for row in rows:
         item = dict(row)
         folder_id = int(item.get("folder_id") or 0)
-        if folder_id and not library_folder_is_within(storage, folder_id, recycle_folder_id):
+        if folder_id in active_ids and not item.get("trashed_at"):
             return item
     return None
 
@@ -24589,12 +24646,8 @@ def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recyc
     if canonical.parent.resolve() == target_dir.resolve():
         sync_all_pdf_aliases_for_paper(storage, paper_id)
         return
-    target_dir.mkdir(parents=True, exist_ok=True)
-    remove_direct_symlinks_to(canonical, [target_dir])
-    target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
     old_path = canonical
-    shutil.move(str(old_path), str(target_path))
-    update_paper_pdf_paths(storage, paper_id, target_path, message="PDF kept with remaining Library reference")
+    move_original(storage, paper_id, canonical, target_dir, filename=paper_pdf_basename(paper, canonical))
     sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
     cleanup_local_copy_empty_parents([str(old_path)])
 
@@ -33061,6 +33114,7 @@ INDEX_HTML = """<!doctype html>
     .app.loader-window-mode #pdfRenameSettingsBackdrop,
     .app.loader-window-mode #quickLookSettingsBackdrop,
     .app.loader-window-mode #websiteLinkSettingsBackdrop,
+    .app.loader-window-mode #libraryDestinationSettingsBackdrop,
     .app.loader-window-mode #fontSizeSettingsBackdrop {
       display: none !important;
     }
@@ -35351,6 +35405,29 @@ INDEX_HTML = """<!doctype html>
           </div>
         </section>
       </div>
+      <div class="settings-backdrop" id="libraryDestinationSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="libraryDestinationSettingsTitle">
+          <div class="settings-modal-head">
+            <div><h2 id="libraryDestinationSettingsTitle">Add to Library</h2><p>Choose the default folder for newly added papers.</p></div>
+            <button class="settings-modal-close" id="closeLibraryDestinationSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Default Folder</strong></div>
+              <p id="libraryDestinationPath" style="overflow-wrap:anywhere">Library / unsorted</p>
+              <button class="smallbtn" id="chooseLibraryDestination" type="button" aria-expanded="false">Choose Folder</button>
+              <div class="library-add-menu" data-role="library-add-menu" aria-hidden="true"></div>
+              <p class="field-settings-note">Used by Journal, Subject and Author Monitor, and by Save to Gewu when the paper has no existing Library or Space location.</p>
+              <p class="field-settings-note">Save to Gewu keeps an existing paper in its current location. A folder you select while adding a paper takes priority. If the default folder is unavailable, new papers go to Library / unsorted.</p>
+              <div class="field-settings-note"><span class="field-settings-actions">
+                <button class="smallbtn" id="resetLibraryDestinationSettings" type="button">Restore Default</button>
+                <button class="smallbtn" id="saveLibraryDestinationSettings" type="button">Save</button>
+              </span></div>
+              <div class="citation-settings-status" id="libraryDestinationSettingsStatus" role="status"></div>
+            </div>
+          </div>
+        </section>
+      </div>
       <div class="settings-backdrop" id="websiteLinkSettingsBackdrop" aria-hidden="true">
         <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="websiteLinkSettingsTitle">
           <div class="settings-modal-head">
@@ -35598,6 +35675,10 @@ INDEX_HTML = """<!doctype html>
       websiteLinkBrowser: "builtin",
       browserCaptureDetailsExpanded: false,
       websiteLinkSettingsBusy: false,
+      libraryDefaultAddFolderId: 0,
+      libraryDestinationDraftId: 0,
+      libraryDestinationSettingsBusy: false,
+      libraryDestinationSettingsLoaded: false,
       fontSizeScale: 100,
       fontSizeSettingsLoaded: false,
       fontSizeSettingsPromise: null,
@@ -37026,6 +37107,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyMyPublications(data) {
+      applyPaperFilesPayloads(data.paper_files);
       if (data.work) state.myPublicationWork = data.work;
       if (Array.isArray(data.publications)) {
         state.myPublications = data.publications;
@@ -38291,6 +38373,7 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not load Library folders");
       state.libraryRootId = Number(data.root_id || state.libraryRootId || 1);
+      state.libraryDefaultAddFolderId = Number(data.default_add_folder_id || data.unsorted_id || 0);
       state.libraryFolders = Array.isArray(data.folders) ? data.folders : state.libraryFolders;
       state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
       rebuildLibraryIndexes();
@@ -38739,7 +38822,7 @@ INDEX_HTML = """<!doctype html>
         await ensureLibrarySnapshotForAddMenu();
         if (!menu.isConnected || !menu.classList.contains("open")) return;
         let rootId = Number(state.libraryRootId || 1);
-        let selectedId = Number(options.selectedFolderId || libraryUnsortedFolderId());
+        let selectedId = Number(options.selectedFolderId || state.libraryDefaultAddFolderId || libraryUnsortedFolderId());
         const selectedFolder = libraryFolderById(selectedId);
         if (!libraryAddFolderCanTarget(selectedFolder)) selectedId = Number(libraryUnsortedFolderId() || rootId);
         const workspace = libraryAddWorkspaceRoots().find(item => libraryFolderIsWithin(selectedId, Number(item.root_folder_id)));
@@ -38787,7 +38870,7 @@ INDEX_HTML = """<!doctype html>
       const folderId = Number(options.folderId || 0);
       const payload = folderId
         ? {paper_id: paperId, folder_id: folderId, snapshot: false}
-        : {paper_id: paperId, unsorted: true, snapshot: false};
+        : {paper_id: paperId, snapshot: false};
       try {
         const res = await fetch("/api/library/items", {
           method: "POST",
@@ -38796,6 +38879,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add to library");
+        applyPaperFilesPayloads(data.paper_files);
         if (Array.isArray(data.items) && Array.isArray(data.folders)) {
           applyLibrarySnapshot(data);
         } else if (state.libraryLoaded) {
@@ -39188,6 +39272,7 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not recover library entry");
+      applyPaperFilesPayloads(data.paper_files);
       if (type === "item") applyLocalLibraryItemMove(id, Number(data.recovered?.folder_id || libraryUnsortedFolderId()), data.recovered || null);
       else upsertLibraryFolderLocal(data.recovered);
       const recoveredId = Number(data.recovered?.id || id);
@@ -39214,6 +39299,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not paste library entries");
+        applyPaperFilesPayloads(data.paper_files);
         (Array.isArray(data.pasted) ? data.pasted : []).forEach((pasted, index) => {
           if (pasted?.type === "folder") applyLibraryTreeSnapshotLocal(pasted.tree);
           else {
@@ -55725,6 +55811,93 @@ INDEX_HTML = """<!doctype html>
       saveQuickLookSettings("builtin_all");
     }
 
+    function setLibraryDestinationSettingsBusy(busy) {
+      state.libraryDestinationSettingsBusy = busy;
+      ["chooseLibraryDestination", "saveLibraryDestinationSettings", "resetLibraryDestinationSettings"].forEach(id => {
+        $(id).disabled = busy || !state.libraryDestinationSettingsLoaded;
+      });
+    }
+
+    function applyLibraryDestinationSettings(settings) {
+      state.libraryDefaultAddFolderId = Number(settings.folder_id || 0);
+      state.libraryDestinationDraftId = state.libraryDefaultAddFolderId;
+      $("libraryDestinationPath").textContent = settings.title || "Library / unsorted";
+    }
+
+    async function openLibraryDestinationSettings() {
+      const backdrop = $("libraryDestinationSettingsBackdrop");
+      if (!backdrop || state.libraryDestinationSettingsBusy) return;
+      closeLibraryAddMenus();
+      state.libraryDestinationSettingsLoaded = false;
+      setLibraryDestinationSettingsBusy(true);
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
+      const status = $("libraryDestinationSettingsStatus");
+      status.textContent = "Loading folders...";
+      status.className = "citation-settings-status";
+      try {
+        const settings = await fetchJson("/api/settings/add-to-library");
+        if (!backdrop.classList.contains("open")) return;
+        applyLibraryDestinationSettings(settings);
+        state.libraryDestinationSettingsLoaded = true;
+        status.textContent = settings.fallback ? "The saved folder is unavailable. Using Library / unsorted." : "Choose a folder, then Save.";
+      } catch (error) {
+        status.textContent = error.message || "Could not load the default folder";
+        status.className = "citation-settings-status err";
+      } finally {
+        setLibraryDestinationSettingsBusy(false);
+      }
+    }
+
+    function closeLibraryDestinationSettings() {
+      closeLibraryAddMenus();
+      $("libraryDestinationSettingsBackdrop").classList.remove("open");
+      $("libraryDestinationSettingsBackdrop").setAttribute("aria-hidden", "true");
+    }
+
+    async function chooseLibraryDestination(event) {
+      event?.preventDefault();
+      event?.stopPropagation();
+      if (state.libraryDestinationSettingsBusy || !state.libraryDestinationSettingsLoaded) return;
+      const backdrop = $("libraryDestinationSettingsBackdrop");
+      await openLibraryAddMenu(backdrop, "", $("chooseLibraryDestination"), null, {
+        selectedFolderId: state.libraryDestinationDraftId,
+        portalRoot: backdrop,
+        onSelect: ({folderId, path}) => {
+          state.libraryDestinationDraftId = folderId;
+          $("libraryDestinationPath").textContent = path;
+          $("libraryDestinationSettingsStatus").textContent = "Click Save to use this folder.";
+          $("libraryDestinationSettingsStatus").className = "citation-settings-status";
+        }
+      });
+    }
+
+    async function saveLibraryDestinationSettings(reset = false) {
+      if (state.libraryDestinationSettingsBusy || !state.libraryDestinationSettingsLoaded) return;
+      closeLibraryAddMenus();
+      const folder_id = reset ? 0 : Number(state.libraryDestinationDraftId || 0);
+      setLibraryDestinationSettingsBusy(true);
+      const status = $("libraryDestinationSettingsStatus");
+      status.textContent = "Saving default folder...";
+      status.className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/add-to-library", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({folder_id})
+        });
+        const settings = await res.json();
+        if (!res.ok) throw new Error(settings.error || "Could not save the default folder");
+        applyLibraryDestinationSettings(settings);
+        status.textContent = "Default folder saved.";
+        status.className = "citation-settings-status ok";
+      } catch (error) {
+        status.textContent = error.message || "Could not save the default folder";
+        status.className = "citation-settings-status err";
+      } finally {
+        setLibraryDestinationSettingsBusy(false);
+      }
+    }
+
     function applyWebsiteLinkSettings(settings = {}) {
       state.websiteLinkBrowser = settings.browser === "system" ? "system" : "builtin";
       state.browserCaptureDetailsExpanded = settings.capture_details_expanded === true;
@@ -58447,6 +58620,13 @@ INDEX_HTML = """<!doctype html>
     });
     $("saveQuickLookSettings").addEventListener("click", () => saveQuickLookSettings());
     $("resetQuickLookSettings").addEventListener("click", resetQuickLookSettings);
+    $("closeLibraryDestinationSettings").addEventListener("click", closeLibraryDestinationSettings);
+    $("libraryDestinationSettingsBackdrop").addEventListener("click", event => {
+      if (event.target === $("libraryDestinationSettingsBackdrop")) closeLibraryDestinationSettings();
+    });
+    $("chooseLibraryDestination").addEventListener("click", chooseLibraryDestination);
+    $("saveLibraryDestinationSettings").addEventListener("click", () => saveLibraryDestinationSettings());
+    $("resetLibraryDestinationSettings").addEventListener("click", () => saveLibraryDestinationSettings(true));
     $("closeWebsiteLinkSettings").addEventListener("click", closeWebsiteLinkSettings);
     $("websiteLinkSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("websiteLinkSettingsBackdrop")) closeWebsiteLinkSettings();
@@ -58556,6 +58736,12 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         event.stopPropagation();
         closeQuickLookSettings();
+        return;
+      }
+      if ($("libraryDestinationSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryDestinationSettings();
         return;
       }
       if ($("websiteLinkSettingsBackdrop").classList.contains("open")) {
@@ -58753,6 +58939,7 @@ INDEX_HTML = """<!doctype html>
     window.openArxivSettings = openArxivSettings;
     window.openFieldSettings = openFieldSettings;
     window.openQuickLookSettings = openQuickLookSettings;
+    window.openLibraryDestinationSettings = openLibraryDestinationSettings;
     window.openWebsiteLinkSettings = openWebsiteLinkSettings;
     window.openFontSizeSettings = openFontSizeSettings;
     window.openPdfRenameSettings = openPdfRenameSettings;

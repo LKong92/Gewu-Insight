@@ -5211,12 +5211,16 @@ class Storage:
         return self.get_library_item(int(item_id)) or {}
 
     def recover_library_item(self, *, item_id: int, fallback_folder_id: int) -> dict[str, Any]:
+        from .library_destination import active_folders
         source = self.get_library_item(item_id)
         if not source:
             raise ValueError("Library item not found")
         target_folder_id = int(source.get("original_folder_id") or fallback_folder_id or 1)
-        if not self.get_library_folder(target_folder_id):
+        active_ids = {folder["id"] for folder in active_folders(self)}
+        if target_folder_id not in active_ids:
             target_folder_id = int(fallback_folder_id or 1)
+        if target_folder_id not in active_ids:
+            raise ValueError("Choose an active recovery folder")
         existing = self.conn.execute(
             """
             SELECT *
@@ -5263,13 +5267,17 @@ class Storage:
         return self.get_library_folder(folder_id) or {}
 
     def recover_library_folder(self, *, folder_id: int, fallback_parent_id: int) -> dict[str, Any]:
+        from .library_destination import active_folders
         folder_id = int(folder_id)
         source = self.get_library_folder(folder_id)
         if not source:
             raise ValueError("Folder not found")
         parent_id = int(source.get("original_parent_id") or fallback_parent_id or 1)
-        if parent_id == folder_id or self._folder_is_descendant(parent_id, folder_id) or not self.get_library_folder(parent_id):
+        active_ids = {folder["id"] for folder in active_folders(self)}
+        if parent_id == folder_id or self._folder_is_descendant(parent_id, folder_id) or parent_id not in active_ids:
             parent_id = int(fallback_parent_id or 1)
+        if parent_id not in active_ids:
+            raise ValueError("Choose an active recovery folder")
         sort_order = self._next_library_sort_order("library_folders", parent_id)
         self.conn.execute(
             """

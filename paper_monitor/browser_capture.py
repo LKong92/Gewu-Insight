@@ -358,26 +358,8 @@ class BrowserCaptureService:
 
     @staticmethod
     def folders(storage):
-        nodes = {int(n["id"]): n for n in storage.list_library_folders()}
-        result = []
-        def walk(node_id, prefix, seen):
-            if node_id in seen or node_id not in nodes:
-                return
-            node = nodes[node_id]
-            if node.get("trashed_at") or (node.get("parent_id") == 1 and node.get("name") == "Recycle"):
-                return
-            name = "Library" if node_id == 1 else (prefix + " / " if prefix else "") + node["name"]
-            result.append({"id": node_id, "title": name})
-            for child in nodes.values():
-                if child.get("parent_id") == node_id:
-                    walk(int(child["id"]), name, seen | {node_id})
-        walk(1, "", set())
-        # The shared Monitor picker also offers Space roots, which are separate
-        # top-level folders in the same Library placement model.
-        for node in nodes.values():
-            if int(node["id"]) != 1 and node.get("parent_id") is None:
-                walk(int(node["id"]), "", set())
-        return result
+        from .library_destination import active_folders
+        return active_folders(storage)
 
     @staticmethod
     def destination(capture, storage, paper_id, folders, payload=None):
@@ -398,13 +380,9 @@ class BrowserCaptureService:
                 preferred = int(capture.snapshot.get("origin_library_item_id") or 0)
                 item = next((item for item in items if int(item["id"]) == preferred), items[0])
                 return {"folder_id": int(item["folder_id"]), "item_id": int(item["id"]), "reused": True}
-            # Review is read-only, including a fresh database where unsorted
-            # has not been created yet. Save creates it only when needed.
-            unsorted = storage.conn.execute(
-                "SELECT id FROM library_folders WHERE parent_id=1 AND name='unsorted'"
-            ).fetchone()
-            folder_id = int(unsorted["id"]) if unsorted and int(unsorted["id"]) in active else None
-            return {"folder_id": folder_id, "item_id": None, "reused": False, "title": "Library / unsorted"}
+            from .library_destination import default_add_destination
+            destination = default_add_destination(storage, folders=folders)
+            return {"folder_id": destination["folder_id"], "item_id": None, "reused": False, "title": destination["title"]}
         if requested not in active:
             raise ValueError("Choose an active Library folder.")
         return {"folder_id": requested, "item_id": None, "reused": False}

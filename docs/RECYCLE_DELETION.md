@@ -1,5 +1,19 @@
 # Recycle deletion
 
+## Moving a placement into or out of Recycle
+
+An original may live in the local Recycle directory only while no active Library, Space or My Publications placement uses it. Deleting or dragging a folder applies this rule to each paper in its entire subtree. A surviving normal placement retains the original, or receives it if the owning placement moves away; recycled placements keep shortcuts to that original. Different paper records sharing the same registered bytes are protected too.
+
+Restoring, copying or adding a recycled paper to an active location moves its original back out of Recycle and rebuilds the shortcuts. This includes Monitor Add to Library, Browser Save to Gewu and My Publications additions. Recovery falls back to an active folder if the original parent was also recycled. The common placement check runs during these operations; it does not perform a startup sweep or alter unrelated historical records.
+
+Moves update the existing SQLite file pointers and Associated Files paths, including analysis and supplemental-file projections. They retain Gewu Key, resource IDs, classifications, manual Default and file contents. Filesystem/path-update failures restore the moved original and any replaced destination shortcut. Unrelated files with the same name are never overwritten. Ordinary copies whose original already resides outside Recycle retain the lightweight alias-only path.
+
+These placement operations differ from deleting one attachment inside Paper Files: that explicit action removes the attachment registration and sends its private managed copy directly to macOS Trash. Shared bytes and external originals are retained; the current Default cannot be deleted until another Default is selected. Because placements share one Paper Object, deleting an attachment affects that object's Paper Files at every location.
+
+Regression coverage in `tests/test_file_placement.py` uses temporary SQLite, nested Library/Space folders, synthetic files and real handler calls for deletion, drag, recovery, copying, Monitor additions and Browser captures. It also checks shared primary/resource/supplement references, target-name collisions, failure rollback, attached Markdown/multiple PDF versions and unchanged classification/Default.
+
+## Emptying Recycle and permanent deletion
+
 `Empty Recycle` appears only on the Recycle root folder or blank space directly inside that root. It is hidden on every child file/folder and on blank space inside a nested folder. `Delete` applies to the selected entries.
 
 Emptying clears all Recycle placements and child folders from SQLite and moves every direct child of the corresponding local Recycle directory to macOS Trash. This includes unregistered files, hidden entries, empty directories and dangling symlinks. The Recycle root remains. Deleting an individual folder moves that entire directory with its contents and hierarchy intact; it does not unpack its PDFs into Trash.

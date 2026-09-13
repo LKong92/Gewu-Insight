@@ -1922,6 +1922,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     pdfRenameSettingsItem.target = self;
     NSMenuItem *quickLookSettingsItem = [settingMenu addItemWithTitle:@"Quick Look Settings" action:@selector(openQuickLookSettings:) keyEquivalent:@""];
     quickLookSettingsItem.target = self;
+    NSMenuItem *libraryDestinationSettingsItem = [settingMenu addItemWithTitle:@"Add to Library" action:@selector(openLibraryDestinationSettings:) keyEquivalent:@""];
+    libraryDestinationSettingsItem.target = self;
     NSMenuItem *websiteLinkSettingsItem = [settingMenu addItemWithTitle:@"Website Links" action:@selector(openWebsiteLinkSettings:) keyEquivalent:@""];
     websiteLinkSettingsItem.target = self;
     NSMenuItem *aiAccessItem = [settingMenu addItemWithTitle:@"AI Access" action:@selector(openAIAccessSettings:) keyEquivalent:@""];
@@ -2166,6 +2168,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openAIAccessSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openAIAccessSettings && window.openAIAccessSettings()" completionHandler:nil];
+}
+
+- (void)openLibraryDestinationSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openLibraryDestinationSettings && window.openLibraryDestinationSettings()" completionHandler:nil];
 }
 
 - (void)openWebsiteLinkSettings:(id)sender {
