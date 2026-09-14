@@ -28,8 +28,25 @@ const functions=names.map(n=>{const re=new RegExp('    (?:async )?function '+n+'
  await page.evaluate(()=>updateAuthorMonitorActivityStatus('Finished',{delay:15}));
  await page.waitForTimeout(35);
  assert.match(await page.locator('#authorMonitorActivityStatus').innerText(),/Last successful check/,'completed transient restores durable status');
+ await page.evaluate(()=>{
+   window.healthyAuthor={...state.authorMonitors[0]};
+   Object.assign(state.authorMonitors[0],{status:'error',network_retryable:true,
+     message:'Google Scholar temporarily unavailable',
+     error_detail:'HTTPSConnectionPool: NameResolutionError: Failed to resolve scholar.google.com',
+     last_checked_at:'2026-09-14T13:08:28+08:00'});
+   syncAuthorMonitorActivityDisplay();
+ });
+ assert.equal(await page.locator('#authorMonitorActivityStatus').innerText(),'Google Scholar temporarily unavailable');
+ assert.doesNotMatch(await page.locator('#authorMonitorActivityStatus').innerText(),/HTTPSConnectionPool/);
+ assert.doesNotMatch(await page.locator('#authorMonitorActivityStatus').getAttribute('class'),/\berr\b/);
+ assert.match(await page.locator('#authorMonitorActivityStatus').getAttribute('title'),/NameResolutionError.*\nLast attempt:/);
+ assert.match(await page.locator('#authorMonitorActivityStatus').getAttribute('title'),/Automatic retry pending/);
  await page.evaluate(()=>{paused=true;syncAuthorMonitorActivityDisplay();});
  assert.match(await page.locator('#authorMonitorActivityStatus').innerText(),/paused/);
+ assert.match(await page.locator('#authorMonitorActivityStatus').getAttribute('class'),/\berr\b/,'access cooldown remains distinct from network retry');
+ await page.evaluate(()=>{paused=false;state.authorMonitors=[window.healthyAuthor];syncAuthorMonitorActivityDisplay();});
+ assert.match(await page.locator('#authorMonitorActivityStatus').innerText(),/Last successful check/,'successful recovery replaces the saved failure');
+ assert.doesNotMatch(await page.locator('#authorMonitorActivityStatus').getAttribute('title'),/NameResolutionError/);
  await page.evaluate(()=>{paused=false;refreshAuthorMonitorInPlace();$('authorMonitorPaperList').scrollTop=160;window.retained=$('authorMonitorPaperList').querySelector('[data-paper-id="p3"]');$('editor').focus();});
  const before=await page.evaluate(()=>{const l=$('authorMonitorPaperList'),a=l.querySelector('[data-paper-id="p3"]');return a.getBoundingClientRect().top-l.getBoundingClientRect().top});
  await page.evaluate(()=>{papers=[{paper_id:'new',title:'New paper'},...papers.map(p=>({...p,citation_count:99}))];refreshAuthorMonitorInPlace();});
@@ -49,6 +66,6 @@ const functions=names.map(n=>{const re=new RegExp('    (?:async )?function '+n+'
    applyAuthorMonitorIndex({indexReady:true,papers:papers.map(p=>({...p})),authors:state.authorMonitors});
  });
  assert.equal(await page.evaluate(()=>state.authorMonitorSelectedPaperId),'p3','background index cannot restore an older remembered selection');
- assert.deepEqual(errors,[]);console.log('Expired cache, durable status, cooldown display, retained cards, reading anchor, input/tab focus and background workspace checks passed.');
+ assert.deepEqual(errors,[]);console.log('Expired cache, network retry and recovery status, raw hover details, cooldown display, retained cards, reading anchor, input/tab focus and background workspace checks passed.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

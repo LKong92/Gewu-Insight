@@ -39,7 +39,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
-from . import search_matching
+from . import search_matching, author_profile_retry
 from .library_destination import active_folders, default_add_destination, save_default_add_folder
 from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
 from .publication_deletion import delete_publications
@@ -9655,11 +9655,15 @@ def author_monitor_checked_today(monitor: dict[str, Any], today: date) -> bool:
     return checked.astimezone(local_timezone()).date() == today
 
 
-def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any]:
+def run_auto_author_monitor_once(
+    db_path: Path, run_date: date, *, retry_only: bool = False, now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or datetime.now(local_timezone())
     storage = Storage(db_path)
     try:
         authors = storage.list_author_monitors()
         global_cooldown = google_scholar_global_cooldown(storage)
+        network_retry = author_profile_retry.read(storage)
     finally:
         storage.close()
     results: list[dict[str, Any]] = []
@@ -9671,8 +9675,17 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
         )
     ]
     scholar_request_seen = False
+    retry_count = 0
+    unavailable_providers: set[str] = set()
     for author in eligible_authors:
-        if author_monitor_checked_today(author, run_date):
+        network_error = author_profile_retry.retryable(author)
+        source = author_profile_retry.provider(author)
+        if source in unavailable_providers or not author_profile_retry.provider_ready(network_retry, author, current):
+            continue
+        if network_error:
+            if retry_count >= author_profile_retry.BATCH_SIZE or not author_profile_retry.due(network_retry, author, current):
+                continue
+        elif retry_only or author_monitor_checked_today(author, run_date):
             continue
         is_scholar = clean_text(
             author.get("source_type") or "google_scholar"
@@ -9691,7 +9704,7 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
                 }
             )
             continue
-        if is_scholar and author_monitor_cooldown_active(author):
+        if is_scholar and author_monitor_cooldown_active(author, now=current):
             results.append(
                 {
                     "author_id": int(author.get("id") or 0),
@@ -9709,14 +9722,21 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
             )
         if is_scholar:
             scholar_request_seen = True
-        results.append(
-            refresh_author_monitor_for_db(
-                db_path,
-                int(author.get("id") or 0),
-                initial=False,
-                force=False,
-            )
+        if network_error:
+            retry_count += 1
+        result = refresh_author_monitor_for_db(
+            db_path,
+            int(author.get("id") or 0),
+            initial=False,
+            force=False,
         )
+        results.append(result)
+        if result.get("network_retryable") or result.get("status") in {"cooldown", "global-cooldown"}:
+            # One failed probe is enough for this provider. Do not walk the
+            # entire author list while disconnected or after a restriction.
+            unavailable_providers.add(source)
+        elif result.get("status") == "success":
+            network_retry.pop(source, None)
     status = {
         "run_date": run_date.isoformat(),
         "finished_at": now_iso(),
@@ -9742,8 +9762,9 @@ def run_auto_author_monitor_scheduler(db_path: Path) -> None:
     while True:
         try:
             now = datetime.now(local_timezone())
-            if now.hour >= AUTO_AUTHOR_MONITOR_HOUR:
-                run_auto_author_monitor_once(db_path, now.date())
+            run_auto_author_monitor_once(
+                db_path, now.date(), retry_only=now.hour < AUTO_AUTHOR_MONITOR_HOUR, now=now,
+            )
             time.sleep(AUTO_AUTHOR_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Author Monitor scheduler error: {exc}")
@@ -14334,7 +14355,15 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "avatar_override_path": clean_text(row.get("avatar_override_path") or ""),
         "sort_order": int(row.get("sort_order") or 0),
         "status": clean_text(row.get("status") or "idle"),
-        "message": clean_text(row.get("message") or ""),
+        "message": (
+            "Google Scholar temporarily unavailable"
+            if author_profile_retry.retryable(row) and source_type == "google_scholar"
+            else "Publication source temporarily unavailable"
+            if author_profile_retry.retryable(row)
+            else clean_text(row.get("message") or "")
+        ),
+        "network_retryable": author_profile_retry.retryable(row),
+        "error_detail": clean_text(row.get("message") or "") if row.get("status") == "error" else "",
         "paper_count": int(row.get("paper_count") or 0),
         "unread_count": int(row.get("unread_count") or 0),
         "last_checked_at": clean_text(row.get("last_checked_at") or ""),
@@ -14947,6 +14976,7 @@ def refresh_author_monitor_for_db(
                 last_success_at=success_at,
                 cooldown_until="",
             )
+            author_profile_retry.succeeded(storage, monitor)
             return {
                 "author_id": author_monitor_id,
                 "status": "success",
@@ -14986,17 +15016,23 @@ def refresh_author_monitor_for_db(
             }
         except Exception as exc:
             message = clean_text(str(exc)) or "Author refresh failed"
+            network_error = author_profile_retry.network_failure(exc)
+            if network_error and not author_profile_retry.network_failure(message):
+                message = f"Network connection interrupted: {message}"
             storage.update_author_monitor(
                 author_monitor_id,
                 status="error",
                 message=message,
                 last_checked_at=now_iso(),
             )
+            if network_error:
+                author_profile_retry.failed(storage, monitor, datetime.now(local_timezone()))
             return {
                 "author_id": author_monitor_id,
                 "status": "error",
                 "added": 0,
                 "message": message,
+                "network_retryable": network_error,
             }
     finally:
         storage.close()
@@ -53126,6 +53162,11 @@ INDEX_HTML = """<!doctype html>
       const active = scope.find(authorMonitorIsBackgroundScholarJob);
       if (active) return {text: `${active.name || "Author"} · ${active.message || "Checking publications..."}`, live: true};
       const failed = scope.find(a => ["error", "cooldown"].includes(a.status));
+      if (failed?.network_retryable) return {
+        text: failed.message,
+        detail: `${failed.name || "Author"}\n${failed.error_detail || failed.message}\nLast attempt: ${autoStatusTime(failed.last_checked_at)}\nAutomatic retry pending`,
+        live: false, waiting: true
+      };
       if (failed) return {text: `${failed.name || "Author"} · ${failed.message || "Last check failed"}`, live: false};
       const times = scope.map(a => a.last_success_at).filter(Boolean).sort();
       return {text: times.length ? `Publications · Last successful check ${autoStatusTime(times[times.length - 1])}${selected ? ` · ${selected.message || ""}` : ` · ${times.length} authors`}` : "Publications · Waiting for scheduled check", live: false};
@@ -53142,8 +53183,9 @@ INDEX_HTML = """<!doctype html>
 
     function authorMonitorActivityStatusClass(channel = "primary") {
       const base = `library-activity-status${channel === "secondary" ? " secondary" : ""}`;
-      const {text, live} = authorMonitorDisplayedActivity(channel);
+      const {text, live, waiting} = authorMonitorDisplayedActivity(channel);
       if (live) return `${base} live`;
+      if (waiting) return base;
       if (text === "Refresh complete") return `${base} refresh-complete`;
       if (/failed|could not|error|paused/i.test(text)) return `${base} err`;
       return text ? `${base} ok` : base;
@@ -53153,9 +53195,9 @@ INDEX_HTML = """<!doctype html>
       for (const channel of ["primary", "secondary"]) {
         const element = $(channel === "secondary" ? "authorMonitorSecondaryActivityStatus" : "authorMonitorActivityStatus");
         if (!element) continue;
-        const {text} = authorMonitorDisplayedActivity(channel);
+        const {text, detail} = authorMonitorDisplayedActivity(channel);
         element.textContent = text;
-        element.title = text;
+        element.title = detail || text;
         element.className = authorMonitorActivityStatusClass(channel);
       }
     }
@@ -53797,7 +53839,7 @@ INDEX_HTML = """<!doctype html>
             <div class="author-monitor-detail-body library-detail" id="authorMonitorDetailBody"></div>
           </aside>
           <div class="author-monitor-status-bar">
-            <span class="${scholarPauseApplies ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPauseApplies ? scholarGlobalCooldownText() : authorMonitorDisplayedActivity().text)}">${escapeHtml(scholarPauseApplies ? scholarGlobalCooldownText() : authorMonitorDisplayedActivity().text)}</span>
+            <span class="${scholarPauseApplies ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPauseApplies ? scholarGlobalCooldownText() : (authorMonitorDisplayedActivity().detail || authorMonitorDisplayedActivity().text))}">${escapeHtml(scholarPauseApplies ? scholarGlobalCooldownText() : authorMonitorDisplayedActivity().text)}</span>
             <span class="${authorMonitorActivityStatusClass("secondary")}" id="authorMonitorSecondaryActivityStatus" title="${escapeAttr(authorMonitorDisplayedActivity("secondary").text)}">${escapeHtml(authorMonitorDisplayedActivity("secondary").text)}</span>
           </div>
         </div>
