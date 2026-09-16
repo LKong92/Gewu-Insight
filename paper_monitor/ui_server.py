@@ -46221,13 +46221,16 @@ INDEX_HTML = """<!doctype html>
       return request;
     }
 
-    async function uploadPaperFiles(panel, paperId, fileList) {
+    async function uploadPaperFiles(panel, paperId, fileList, dropOptions = null) {
       const files = Array.from(fileList || []);
       for (const file of files) {
         const form = new FormData();
         form.append("paper_id", paperId);
         form.append("file_type", "unknown");
         form.append("file_source", "user_import");
+        if (dropOptions) {
+          Object.entries(paperFileDropMetadata(file.name, dropOptions)).forEach(([key, value]) => form.set(key, value));
+        }
         form.append("file", file, file.name);
         const res = await fetch("/api/paper-files", {method: "POST", body: form});
         const data = await res.json();
@@ -46237,24 +46240,29 @@ INDEX_HTML = """<!doctype html>
       await loadPaperFiles(paperId, {force: true});
     }
 
+    function paperFileDropMetadata(name, {fileRole = "other", versionRole = ""} = {}) {
+      const isPdf = String(name).toLowerCase().endsWith(".pdf");
+      const role = isPdf ? fileRole : (fileRole === "publication_version" ? "other" : fileRole);
+      return {
+        file_role: role,
+        version_role: role === "publication_version" ? versionRole : "",
+        file_type: role === "publication_version"
+          ? ({version_of_record: "published_version", accepted_manuscript: "accepted_manuscript", preprint: "preprint"}[versionRole] || "unknown")
+          : "unknown",
+        file_source: "user_import"
+      };
+    }
+
     async function uploadPaperFilePaths(paperId, paths, {fileRole = "other", versionRole = "", addedVia = "paper_details_path"} = {}) {
       const selectedPaths = Array.from(paths || []).filter(Boolean);
       for (const sourcePath of selectedPaths) {
-        const lowerPath = String(sourcePath).toLowerCase();
-        const isPdf = lowerPath.endsWith(".pdf");
-        const role = isPdf ? fileRole : (fileRole === "publication_version" ? "other" : fileRole);
         const res = await fetch("/api/paper-files/path", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({
             paper_id: paperId,
             source_path: sourcePath,
-            file_role: role,
-            version_role: role === "publication_version" ? versionRole : "",
-            file_type: role === "publication_version"
-              ? ({version_of_record: "published_version", accepted_manuscript: "accepted_manuscript", preprint: "preprint"}[versionRole] || "unknown")
-              : "unknown",
-            file_source: "user_import",
+            ...paperFileDropMetadata(sourcePath, {fileRole, versionRole}),
             added_via: addedVia
           })
         });
@@ -49275,8 +49283,63 @@ INDEX_HTML = """<!doctype html>
       input.focus();
     }
 
+    function wireLibraryPaperFilesDropTarget(shell) {
+      // WebKit may deliver Finder drops over the scrolling body to the DOM
+      // instead of the native WKWebView delegate. Accept both paths across
+      // the entire column, including cards, controls and empty space.
+      if (!shell || shell.dataset.paperFilesDropWired === "1") return;
+      shell.dataset.paperFilesDropWired = "1";
+      const targetFor = (event) => {
+        if (state.mode !== "library" || libraryDragPayload(event)) return null;
+        if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return null;
+        const column = event.target?.closest?.("[data-library-resource-paper]");
+        return column?.dataset.libraryResourcePaper && shell.contains(column) ? column : null;
+      };
+      ["dragenter", "dragover"].forEach((eventName) => {
+        shell.addEventListener(eventName, (event) => {
+          const target = targetFor(event);
+          if (!target) return;
+          event.preventDefault();
+          event.stopPropagation();
+          clearLibraryFinderDropTargetVisuals();
+          state.libraryFinderDropTargetFolderId = 0;
+          state.libraryFinderDropTargetKind = "resource-column";
+          shell.classList.add("finder-drag-over");
+          target.classList.add("finder-drop-association-target");
+          event.dataTransfer.dropEffect = "copy";
+        }, true);
+      });
+      shell.addEventListener("dragleave", (event) => {
+        const target = event.target?.closest?.("[data-library-resource-paper]");
+        if (target && !target.contains(event.relatedTarget)) clearLibraryFinderDropTarget();
+      }, true);
+      shell.addEventListener("drop", async (event) => {
+        const target = targetFor(event);
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const paperId = String(target.dataset.libraryResourcePaper);
+        const files = Array.from(event.dataTransfer.files || []);
+        clearLibraryFinderDropTarget();
+        if (!files.length) {
+          updateLibraryActivityStatus("Could not read the dropped files. Please drag them again.", {live: false, clear: false});
+          return;
+        }
+        try {
+          // Match the native Finder-drop classification, retaining the manual
+          // Add File dialog's existing Unknown default.
+          await uploadPaperFiles(target, paperId, files, {fileRole: "publication_version", versionRole: "preprint"});
+          renderLibrary();
+          updateLibraryActivityStatus(`${files.length} file${files.length === 1 ? "" : "s"} added.`, {delay: 2600});
+        } catch (error) {
+          updateLibraryActivityStatus(error.message || "Could not add file", {live: false, clear: false});
+        }
+      }, true);
+    }
+
     function wireLibraryResourceInteractions(shell) {
       if (!shell) return;
+      wireLibraryPaperFilesDropTarget(shell);
       shell.querySelectorAll(".library-resource-card[data-library-resource-id]").forEach((card) => {
         const paperId = String(card.dataset.libraryResourcePaperId || "");
         const resourceId = Number(card.dataset.libraryResourceId || 0);

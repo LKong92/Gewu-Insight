@@ -109,14 +109,15 @@ assert.equal(replaced, 1);
         self.assertIn('renderLibraryNavigationContent({preserveRows: true})', function("loadPaperFiles"))
 
     def test_footer_toggles_only_annotation_and_source_without_opening_file(self):
-        self.run_js(["wireLibraryResourceInteractions"], r'''
+        self.run_js(["wireLibraryPaperFilesDropTarget", "wireLibraryResourceInteractions"], r'''
 const handlers = {}, toggleHandlers = {}, details = {hidden: true}, attrs = {}, icon = {};
 const toggle = {addEventListener: (name, fn) => toggleHandlers[name] = fn,
  setAttribute: (key, value) => attrs[key] = value, querySelector: () => icon};
 const card = {dataset: {libraryResourcePaperId: 'paper', libraryResourceId: '8'},
  addEventListener: (name, fn) => handlers[name] = fn,
  querySelector: selector => selector === '[data-library-resource-toggle]' ? toggle : details};
-const shell = {querySelectorAll: selector => selector === '.library-resource-card[data-library-resource-id]' ? [card] : []};
+const shell = {dataset: {}, addEventListener() {},
+ querySelectorAll: selector => selector === '.library-resource-card[data-library-resource-id]' ? [card] : []};
 global.state = {expandedPaperResourceProperties: new Set()};
 let selected = 0, opened = 0, stopped = 0;
 global.setLibraryPaperResourceSelection = () => selected++;
