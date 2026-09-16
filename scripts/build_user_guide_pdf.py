@@ -632,6 +632,10 @@ def run(command: list[str], *, cwd: Path) -> None:
 
 
 def prepare_latex_body(source: str) -> str:
+    # Keep the short MCP configuration readable as one example after AI Access
+    # grows; its opening table name must not be stranded on the previous page.
+    source = source.replace("\\begin{verbatim}\n[mcp_servers.gewu-insight]",
+                            "\\Needspace{10\\baselineskip}\n\\begin{verbatim}\n[mcp_servers.gewu-insight]")
     # Scope the continuous-chapter rule by semantic part name, not page numbers
     # or individual chapter titles. Rebuilding or adding text must preserve it.
     parts = re.split(r"(\\part\{[^{}]*\})", source)

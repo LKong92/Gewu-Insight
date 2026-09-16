@@ -182,11 +182,16 @@ must also replace the old token in Codex's settings.
 | `list_folder_papers` | List direct or recursive paper memberships, keeping every authorized placement and Gewu Key | `folders:read` |
 | `get_paper` | Retrieve metadata, registered files and the Default file ID | `papers:read` |
 | `get_paper_file` | Deliver an original file and metadata to a read-only temporary copy on the local STDIO client host | `files:read` |
+| `get_file_delivery_status` | Show remaining temporary bytes/file slots and active delivery IDs in this MCP process | Local session only |
+| `release_paper_file` | Release a finished temporary copy by delivery ID and return updated quota | Local session only |
 | `read_paper` | Extract a page range from a PDF or read a text/Markdown chunk | `files:read` |
 | `save_analysis` | Add a new Markdown file to the same paper's Paper Files | `analysis:write` |
 
 All connections include `papers:read`. File-based analysis provenance also
-requires `files:read`. Tool discovery shows only permitted tools. Out-of-scope
+requires `files:read`. Tool discovery shows only permitted Library tools; the
+two local delivery-management tools need no additional grant. They remain
+available offline or after revocation/expiry, and cannot retrieve new content.
+Out-of-scope
 paper keys and file IDs return an unavailable response without revealing data.
 Search uses local metadata, not a semantic index or an external service.
 
@@ -309,13 +314,37 @@ Write derived outputs separately; no edits are synchronized back to Paper Files.
 No DOI refetch, model upload or external OCR service is invoked by Gewu. An AI
 client's model-provider behavior remains governed by that client's permissions.
 
-Copies last until normal MCP process exit, when its temporary directory is
-removed. A crash/forced kill may leave OS-managed temporary files. A session
-retains at most 256 MiB / 64 distinct files, plus one bounded in-flight transfer;
-a single file is limited to 64 MiB. Redelivery of an unchanged version replaces
-the same temporary destination after fresh authorization; no existing copy is
-evicted to make room. On a full session, finish using copies before restarting
-the MCP connection. Failed transfers do not return a path and remove partials.
+Copies last until explicit release or normal MCP process exit. A crash/forced
+kill may leave OS-managed temporary files. A session retains at most 256 MiB /
+64 distinct files, plus one bounded in-flight transfer; a single file is limited
+to 64 MiB. Every successful delivery returns `delivery.delivery_id` and `quota`
+with exact used/remaining/maximum bytes and file counts, a per-file limit and a
+readable summary. `get_file_delivery_status({})` returns the same quota and
+active delivery IDs, Gewu Keys, file IDs and sizes for this process only.
+
+After all readers, rendering and OCR tasks finish using a copy, call
+`release_paper_file({"delivery_id":"delivery_…"})` with the exact returned ID.
+It unlinks only that private temporary copy and immediately restores its quota;
+the result includes `released`, `freed_bytes` and updated `quota`. It accepts no
+path, key or original file ID. Releasing an unknown, already-released or
+old-session ID is a harmless `not_retained` result. A failed unlink retains the
+quota so the operation can be retried. Missing copies can be explicitly released
+to clear their accounting. Original Paper Files, saved analyses and derived
+client outputs are never removed.
+
+Active redelivery of an unchanged version shares the same destination and
+delivery ID after fresh authorization, without charging twice. Wait for every
+user of that shared copy before releasing it. Delivery after release receives a
+new ID, so a delayed retry of the old release cannot delete the new copy.
+Changed versions have separate IDs. Preserve the source file ID, SHA-256 and
+page references: they remain usable for citations and `save_analysis` after
+release, subject to its usual current-source and grant checks.
+
+No copy is automatically evicted to make room. A full-session error reports the
+remaining quota and requests release of finished copies followed by retry,
+without restarting MCP. Failed transfers remove their partials. Adapter 1.3.0
+adds these tools; reload the MCP connection once to activate an upgrade, after
+finishing any work using the old process's copies. No Gewu App restart is needed.
 
 Every delivery checks current permissions, collection membership, availability,
 revocation and expiry, including a final check after receipt. Cached copies do
@@ -323,8 +352,8 @@ not bypass new checks. Revocation blocks future retrieval, but cannot recall
 bytes already delivered to a client. Local copies are separate from the managed
 source, with read-only file mode; this is not an OS isolation mechanism.
 
-`get_paper_file` only reads registered files. `save_analysis` is the only writing
-tool and only appends Markdown. Neither can edit, replace or delete **any**
+`get_paper_file` only reads registered files. `save_analysis` is the only tool
+that writes to Paper Files and only appends Markdown. No tool can edit, replace or delete **any**
 existing Paper Files, including an earlier AI note, or change Default, categories,
 folders or paper metadata. Updates require saving a new analysis with a new
 request ID. The server rejects unsupported save arguments and chooses the new

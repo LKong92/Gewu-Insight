@@ -3737,6 +3737,8 @@ Tool & Result \\
 \texttt{list\_folder\_papers} & List each authorized paper placement and its Gewu Key in a directory, directly or recursively. Includes pagination and minimal metadata. Requires directory-browsing permission. \\
 \texttt{get\_paper} & Get the article metadata, file inventory and Default file ID for a Gewu Key. \\
 \texttt{get\_paper\_file} & Get an original PDF or registered attachment as a read-only temporary copy on the local AI client\textquotesingle s machine, with paper metadata, file ID and actual SHA-256. Requires file-reading permission. \\
+\texttt{get\_file\_delivery\_status} & Show used and remaining temporary capacity, file slots and active delivery IDs for this MCP connection. \\
+\texttt{release\_paper\_file} & Release a temporary copy by its delivery ID after reading finishes, and show the restored quota. Original Paper Files and saved analyses are preserved. \\
 \texttt{read\_paper} & Extract PDF text by page or read text/Markdown chunks. Use \texttt{get\_paper\_file} for the original file when text extraction is insufficient. \\
 \texttt{save\_analysis} & Add a new Markdown analysis to the same paper\textquotesingle s Paper Files when writing analyses is allowed. \\
 \end{longtable}
@@ -3798,7 +3800,11 @@ Pass the first returned \texttt{revision} with subsequent directory calls. A vis
 
 Use \texttt{get\_paper\_file} with the Gewu Key and a file ID from \texttt{get\_paper}, or \texttt{default}. When no Default exists, choose an explicit file ID. Gewu checks the connection and transfers the original bytes. The client receives a read-only temporary copy, title, authors, DOI, file classification and actual SHA-256. Its own tools can read the PDF, inspect pages and figures, or run OCR. Gewu does not render pages, run OCR, upload the file to a model or fetch a replacement from the DOI.
 
-The delivered copy is separate from Paper Files and never syncs changes back. Write any rendered pages or other intermediate results separately. Copies last until the MCP process exits normally; finish reading before restarting the connection. A file is limited to 64 MiB, with up to 256 MiB or 64 distinct copies per MCP session. Repeat delivery of the same file version reuses its temporary destination. A client needs access to the same local filesystem as its STDIO adapter; a returned path is not automatically a cloud PDF attachment. If the client cannot access it, report the limitation rather than reading the source Library directly.
+The delivered copy is separate from Paper Files and never syncs changes back. Write rendered pages and intermediate results separately. A file is limited to 64 MiB, with up to 256 MiB or 64 retained copies per MCP session. Each delivery returns a \texttt{delivery\_id} and \texttt{quota} showing used and remaining bytes and file slots. Use \texttt{get\_file\_delivery\_status} to check capacity and find active delivery IDs.
+
+After every reader, rendering and OCR task finishes with a copy, call \texttt{release\_paper\_file} with its delivery ID. This frees its temporary quota immediately; original Paper Files, saved analyses and derived outputs remain unchanged. Keep the source file ID, SHA-256 and page references for citations and saving analyses. Active repeat delivery shares the same copy and ID, so finish all its users before release. Repeating a release is safe. No files are automatically evicted: when quota is full, release finished copies and retry.
+
+Unreleased copies last until normal MCP process exit. The two local management tools also work offline or after grant expiry; they cannot retrieve new files. Reconnect MCP once after upgrading to discover them, after finishing work with old copies. A client needs access to the adapter\textquotesingle s local filesystem; a returned path is not a cloud PDF attachment. If unavailable, report that limitation rather than reading the source Library directly.
 
 Revocation, expiry or disabling AI Access prevents new deliveries. Copies already delivered to a client cannot be recalled. File transfer uses local disk and memory; PDF processing done by a client on the same computer can still compete for resources. Gewu adds no automatic whole-document OCR workload.
 
@@ -3812,6 +3818,8 @@ Revocation, expiry or disabling AI Access prevents new deliveries. Copies alread
   \textbf{Read.} Inspect the file inventory, then use \texttt{get\_paper\_file} to obtain the original PDF and read its temporary copy with the AI client\textquotesingle s tools. For text-only requests, \texttt{read\_paper} remains available. Retain the returned file ID, SHA-256 and page references.
 \item
   \textbf{Analyze and save.} Ask the AI to produce a Chinese Markdown analysis. With analysis-writing permission, call \texttt{save\_analysis} under the same key and include the source references. Reuse the request ID only for an identical retry; changed source bytes require a fresh read before saving.
+\item
+  \textbf{Release.} Once all work using a temporary copy finishes, call \texttt{release\_paper\_file} with its delivery ID. Check the returned remaining quota, then proceed to the next paper without restarting MCP.
 \item
   \textbf{Review and continue.} Inspect the note in Paper Files. In another task, retrieve that same paper and explicitly read the saved note before continuing. Each session works with the current authorized state.
 \end{enumerate}
@@ -3886,6 +3894,7 @@ Leave \textbf{Environment variable passthrough} empty. It is for forwarding vari
 
 \textbf{Copy MCP Configuration} currently produces generic JSON. Codex\textquotesingle s file uses TOML, so do not paste that JSON directly into it. If you prefer editing the file, merge this equivalent block into \texttt{\textasciitilde{}/.codex/config.toml}. Replace \texttt{\textless{}GEWU\_ROOT\textgreater{}} as explained above and \texttt{\textless{}GEWU\_TOKEN\textgreater{}} with your copied token; use the generated command and port if they differ. Preserve your other settings; update an existing \texttt{gewu-insight} block instead of adding a duplicate. Keep the quotation marks in this TOML version and reload the connection after saving.
 
+\Needspace{10\baselineskip}
 \begin{verbatim}
 [mcp_servers.gewu-insight]
 command = "<GEWU_ROOT>/.venv/bin/python"

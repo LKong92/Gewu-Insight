@@ -174,3 +174,23 @@ pre-update App backup are under `/private/tmp/gewu-identity-guide-qa/`. No colle
 classification, token replacement or grant change was performed for this
 verification. The existing connection was already enabled for directory
 browsing when live acceptance ran.
+
+## September 17 MCP temporary-copy lifecycle follow-up
+
+AI Access now documents `release_paper_file`, `get_file_delivery_status`,
+delivery IDs, remaining byte/file quotas, and the read–release–continue
+workflow. Local copy cleanup never removes original Paper Files, saved notes
+or derived outputs. Offline/expired cleanup, shared active handles, safe retry
+and the one-time adapter reconnect after upgrading are explained. Existing
+screenshots are retained. The short MCP configuration example stays together
+in the PDF builder so the expanded instructions do not orphan its first line.
+
+Validation uses temporary research data: all 52 AI/MCP tests, 27 Guide/audit
+checks and six PDF structure checks pass, including quota exhaustion/recovery,
+stale handles, failed cleanup, process isolation, scoped symlink handling and
+real STDIO read–release–save. The PDF remains 111 pages with 343 resolving
+internal links; changed contents and AI Access pages are visually reviewed.
+The signed App contains the same PDF; no native code or real research records
+are changed. Current AI clients require one MCP reconnect to load adapter
+1.3.0; this follow-up does not stop their active sessions. Evidence and the
+pre-update App backup are in `/private/tmp/gewu-mcp-release-qa/`.

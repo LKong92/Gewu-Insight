@@ -10,6 +10,7 @@ import hashlib
 from http.client import HTTPException
 import os
 import re
+import secrets
 import sys
 import tempfile
 from pathlib import Path
@@ -34,6 +35,11 @@ INSTRUCTIONS = ('Gewu Insight provides authorized research records. Use Gewu Key
     'That delivered copy may be read, rendered or OCR-processed by the client; do not open Gewu Library paths or bypass MCP. '
     'Gewu does not OCR, render or upload the delivered file. If your client cannot access the returned local copy, report that limitation. '
     'get_paper_file is read-only: it cannot edit, replace or delete any Paper Files. Delivered copies are read-only and never sync back. '
+    'After all reading, rendering and OCR using a delivered copy finish, call release_paper_file with its delivery_id. '
+    'Keep file_id, sha256 and page references for citations and save_analysis; releasing a copy does not invalidate these references. '
+    'Repeated delivery of an active file version shares its delivery_id, so finish all users of that copy before releasing it. '
+    'Use get_file_delivery_status to inspect remaining temporary bytes/files and active delivery IDs. '
+    'If delivery quota is full, release finished copies and retry; never release files still in use. '
     'Save new Markdown analyses only when requested; use a stable request_id when retrying. '
     'This connection cannot delete papers, overwrite files, browse credentials or execute commands.')
 
@@ -60,8 +66,17 @@ TOOLS = [
          'pages': {'type': 'array', 'items': {'type': 'integer', 'minimum': 1}, 'maxItems': 100}}, ['gewu_key', 'markdown', 'request_id'])},
 ]
 TOOLS.append({'name': 'get_paper_file',
-    'description': 'Read-only delivery of an original registered file, including PDFs, to this local STDIO client. Returns paper metadata, file ID, actual SHA-256, and an authorized read-only temporary local_path. Read that copy with client PDF/image/OCR tools; write derived outputs separately. Cannot edit, overwrite or delete Paper Files, and never syncs copies back. Maximum 64 MiB per file; copies last until this MCP process exits, with a 256 MiB / 64-file session limit. Requires files:read. No Library paths or credentials are returned.',
+    'description': 'Read-only delivery of an original registered file, including PDFs, to this local STDIO client. Returns paper metadata, file ID, actual SHA-256, temporary local_path, delivery_id and remaining quota. Read the copy with client PDF/image/OCR tools; write derived outputs separately. After all users finish, call release_paper_file with delivery_id. Active redeliveries share the same ID. Cannot edit, overwrite or delete Paper Files. Maximum 64 MiB per file and 256 MiB / 64 retained copies per session. Copies last until explicit release or process exit. Requires files:read. No Library paths or credentials are returned.',
     'inputSchema': schema({'gewu_key': KEY, 'file_id': FILE}, ['gewu_key'])})
+LOCAL_DELIVERY_TOOLS = {'get_file_delivery_status', 'release_paper_file'}
+TOOLS.extend([
+    {'name': 'get_file_delivery_status',
+     'description': 'Show this MCP process\'s temporary file quota: used, remaining and maximum bytes/files, a readable summary, and active delivery IDs with Gewu Key/file ID/size. No Library access. Available even when Gewu is offline or the grant has expired. Use release_paper_file only for copies whose readers have finished.',
+     'inputSchema': schema({})},
+    {'name': 'release_paper_file',
+     'description': 'Release one MCP-delivered temporary copy by its delivery_id, after all reading/rendering/OCR users finish. Frees temporary quota and reports remaining capacity. Repeated release is safe; unknown or old-session IDs do nothing. Never deletes original Paper Files, saved analyses, or client-generated outputs. Takes no path or Gewu Key. Works offline and after grant expiry; only this process\'s already-delivered copies can be released.',
+     'inputSchema': schema({'delivery_id': {'type': 'string', 'pattern': '^delivery_[0-9a-f]{32}$'}}, ['delivery_id'])},
+])
 PAGING = {
     'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100, 'default': 50},
     'cursor': {'type': 'string', 'maxLength': 1024, 'description': 'Opaque next_cursor from this same listing; omit on the first page.'},
@@ -78,7 +93,8 @@ TOOLS.extend([
          'recursive': {'type': 'boolean', 'default': False}}, ['folder_id'])},
 ])
 for tool in TOOLS:
-    tool['annotations'] = {'readOnlyHint': tool['name'] != 'save_analysis', 'destructiveHint': False,
+    tool['annotations'] = {'readOnlyHint': tool['name'] not in ('save_analysis', 'release_paper_file'),
+                           'destructiveHint': tool['name'] == 'release_paper_file',
                            'idempotentHint': True, 'openWorldHint': False}
 
 
@@ -106,6 +122,49 @@ class GewuClient:
             self._delivery_dir.cleanup()
             self._delivery_dir = None
             self._deliveries.clear()
+
+    def delivery_quota(self):
+        used = sum(copy['size_bytes'] for copy in self._deliveries.values())
+        count = len(self._deliveries)
+        remaining = max(0, MAX_DELIVERY_BYTES - used)
+        slots = max(0, MAX_DELIVERY_FILES - count)
+        return {'used_bytes': used, 'remaining_bytes': remaining, 'max_bytes': MAX_DELIVERY_BYTES,
+                'used_files': count, 'remaining_files': slots, 'max_files': MAX_DELIVERY_FILES,
+                'max_file_bytes': MAX_FILE_BYTES,
+                'summary': (f'Temporary copies: {count}/{MAX_DELIVERY_FILES} files; '
+                            f'{used / 1024**2:.2f}/{MAX_DELIVERY_BYTES / 1024**2:g} MiB used; '
+                            f'{remaining / 1024**2:.2f} MiB and {slots} file slots remaining.')}
+
+    def get_file_delivery_status(self, args):
+        if args:
+            raise ValueError('get_file_delivery_status takes no arguments.')
+        return {'quota': self.delivery_quota(), 'deliveries': [
+            {k: copy[k] for k in ('delivery_id', 'gewu_key', 'file_id', 'size_bytes')}
+            for copy in self._deliveries.values()]}
+
+    def release_paper_file(self, args):
+        delivery_id = args.get('delivery_id')
+        if set(args) != {'delivery_id'} or not isinstance(delivery_id, str) or not re.fullmatch(r'delivery_[0-9a-f]{32}', delivery_id):
+            raise ValueError('Provide only the delivery_id returned by get_paper_file or get_file_delivery_status.')
+        copy = self._deliveries.get(delivery_id)
+        if copy is None:
+            return {'delivery_id': delivery_id, 'released': False, 'status': 'not_retained',
+                    'freed_bytes': 0, 'quota': self.delivery_quota()}
+        try:
+            # Only unlink a server-created basename inside this private directory.
+            # Do not follow a replaced directory or a file symlink to its target.
+            fd = os.open(self._delivery_dir.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.unlink(copy['path'].name, dir_fd=fd)
+            finally:
+                os.close(fd)
+        except FileNotFoundError:
+            pass  # A missing copy is already released, but still needs accounting.
+        except OSError:
+            raise ValueError('The temporary copy could not be released; its quota is still reserved. Finish using it and retry.') from None
+        del self._deliveries[delivery_id]
+        return {'delivery_id': delivery_id, 'released': True, 'status': 'released',
+                'freed_bytes': copy['size_bytes'], 'quota': self.delivery_quota()}
 
     def get_paper_file(self, args):
         """Receive through authorized HTTP into client-owned temporary storage.
@@ -166,18 +225,25 @@ class GewuClient:
             if suffix not in ('.pdf', '.md', '.txt', '.csv', '.json', '.png', '.jpg', '.jpeg', '.tif', '.tiff'):
                 suffix = '.bin'
             destination = Path(self._delivery_dir.name) / f'{key}-{file_id}-{sha256}{suffix}'
-            retained = sum(self._deliveries.values()) - self._deliveries.get(destination, 0)
-            if retained + size > MAX_DELIVERY_BYTES or (destination not in self._deliveries and len(self._deliveries) >= MAX_DELIVERY_FILES):
-                raise ValueError('The temporary delivery session is full (256 MiB / 64 files). Finish using its copies, then restart the MCP connection.')
+            existing = next((copy for copy in self._deliveries.values() if copy['path'] == destination), None)
+            retained = sum(copy['size_bytes'] for copy in self._deliveries.values()) - (existing['size_bytes'] if existing else 0)
+            if retained + size > MAX_DELIVERY_BYTES or (existing is None and len(self._deliveries) >= MAX_DELIVERY_FILES):
+                quota = self.delivery_quota()
+                raise ValueError('The temporary delivery session is full. ' + quota['summary'] +
+                                 f' Requested file: {size} bytes. Use get_file_delivery_status to find delivery IDs, '
+                                 'then release_paper_file for copies you have finished reading and retry. Do not release copies still in use.')
             partial.chmod(0o400)
             os.replace(partial, destination)
             partial = None
-            self._deliveries[destination] = size
+            delivery_id = existing['delivery_id'] if existing else 'delivery_' + secrets.token_hex(16)
+            self._deliveries[delivery_id] = {'delivery_id': delivery_id, 'path': destination,
+                                            'gewu_key': key, 'file_id': file_id, 'size_bytes': size}
             return {'gewu_key': key, 'paper': {k: v for k, v in paper.items() if k != 'files'},
                     'file': {**selected, 'sha256': sha256, 'size_bytes': size}, 'sha256': sha256,
-                    'delivery': {'kind': 'client_local_file', 'local_path': str(destination),
-                                 'temporary': True, 'lifetime': 'Until this MCP process exits'},
-                    'usage': 'Read this MCP-delivered read-only copy using client tools; write rendered pages/OCR outputs separately. No edits sync back to Gewu. Preserve file_id and sha256 for citations and append-only save_analysis. Never modify or delete existing Paper Files.'}
+                    'delivery': {'kind': 'client_local_file', 'local_path': str(destination), 'delivery_id': delivery_id,
+                                 'temporary': True, 'lifetime': 'Until explicitly released or this MCP process exits'},
+                    'quota': self.delivery_quota(),
+                    'usage': 'Read this MCP-delivered read-only copy using client tools; write rendered pages/OCR outputs separately. After all users finish reading/rendering/OCR, release_paper_file with delivery_id to free quota. Preserve file_id and sha256 for citations and append-only save_analysis, which remain usable after release. Never modify or delete existing Paper Files.'}
         except HTTPError as exc:
             raise ValueError('Gewu refused the file transfer. Check the connection and file permissions, then retry.') from None
         except (OSError, TimeoutError, HTTPException):
@@ -232,23 +298,30 @@ def serve(client, source=sys.stdin, target=sys.stdout):
                 version = params.get('protocolVersion')
                 initialized = True
                 result = {'protocolVersion': version if version in SUPPORTED else VERSION,
-                          'capabilities': {'tools': {}}, 'serverInfo': {'name': 'gewu-insight', 'version': '1.2.0'},
+                          'capabilities': {'tools': {}}, 'serverInfo': {'name': 'gewu-insight', 'version': '1.3.0'},
                           'instructions': INSTRUCTIONS}
             elif method == 'ping':
                 result = {}
             elif not initialized:
                 raise ValueError('Initialize the MCP connection first.')
             elif method == 'tools/list':
-                scopes = client.request('capabilities')['scopes']
-                result = {'tools': [t for t in TOOLS if (t['name'] not in ('read_paper', 'get_paper_file') or 'files:read' in scopes)
+                try:
+                    scopes = client.request('capabilities')['scopes']
+                except ValueError:
+                    scopes = None  # Local cleanup must remain discoverable offline/revoked.
+                result = {'tools': [t for t in TOOLS if t['name'] in LOCAL_DELIVERY_TOOLS or (scopes is not None
+                                   and (t['name'] not in ('read_paper', 'get_paper_file') or 'files:read' in scopes)
                                    and (t['name'] != 'save_analysis' or 'analysis:write' in scopes)
-                                   and (t['name'] not in ('list_folders', 'list_folder_papers') or 'folders:read' in scopes)]}
+                                   and (t['name'] not in ('list_folders', 'list_folder_papers') or 'folders:read' in scopes))]}
             elif method == 'tools/call':
                 name, args = params.get('name'), params.get('arguments', {})
                 if name not in {t['name'] for t in TOOLS} or not isinstance(args, dict):
                     raise ValueError('Unknown tool or invalid arguments.')
                 try:
-                    data = client.get_paper_file(args) if name == 'get_paper_file' else client.request(name, args)
+                    if name in LOCAL_DELIVERY_TOOLS or name == 'get_paper_file':
+                        data = getattr(client, name)(args)
+                    else:
+                        data = client.request(name, args)
                     result = {'content': [{'type': 'text', 'text': json.dumps(data, ensure_ascii=False)}], 'isError': False}
                 except ValueError as exc:
                     result = {'content': [{'type': 'text', 'text': str(exc)}], 'isError': True}

@@ -295,7 +295,9 @@ class AIAccessTests(unittest.TestCase):
         results = [json.loads(line) for line in proc.stdout.splitlines()]
         self.assertEqual(len(results), 4)
         self.assertEqual(results[0]['result']['protocolVersion'], '2025-11-25')
-        self.assertEqual(len(results[1]['result']['tools']), 5)
+        self.assertEqual({t['name'] for t in results[1]['result']['tools']},
+                         {'search_papers', 'get_paper', 'read_paper', 'get_paper_file',
+                          'save_analysis', 'get_file_delivery_status', 'release_paper_file'})
         self.assertFalse(results[2]['result']['isError']); self.assertTrue(results[3]['result']['isError'])
         self.assertNotIn(self.token, proc.stdout + proc.stderr)
         for bad in ('https://example.org', 'http://127.0.0.1:8765/evil', 'http://user:pass@localhost:8765'):
@@ -333,7 +335,7 @@ class AIAccessTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         results = [json.loads(line)['result'] for line in proc.stdout.splitlines()]
         self.assertEqual(len(results[1]['tools']), len(TOOLS))
-        self.assertEqual(results[0]['serverInfo']['version'], '1.2.0')
+        self.assertEqual(results[0]['serverInfo']['version'], '1.3.0')
         for result in results[2:]:
             self.assertFalse(result['isError'])
         roots = json.loads(results[2]['content'][0]['text'])
@@ -483,6 +485,148 @@ class AIAccessTests(unittest.TestCase):
                 client.get_paper_file({'gewu_key': self.key})
         self.assertEqual(list(Path(client._delivery_dir.name).iterdir()), [])
 
+    def test_release_restores_byte_and_file_quota_for_continued_reading(self):
+        from paper_monitor import mcp_server
+        note = ui_server.attach_file_to_paper(self.storage, paper_id='one', filename='second.txt', content=b'second')
+        client = self.file_client()
+        for limits in ({'MAX_DELIVERY_FILES': 1}, {'MAX_DELIVERY_BYTES': len(self.pdf_bytes)}):
+            with patch.multiple(mcp_server, **limits):
+                for _ in range(3):
+                    first = client.get_paper_file({'gewu_key': self.key})
+                    quota = first['quota']
+                    self.assertEqual(quota['used_bytes'], len(self.pdf_bytes))
+                    self.assertEqual(quota['remaining_bytes'], mcp_server.MAX_DELIVERY_BYTES - len(self.pdf_bytes))
+                    self.assertEqual(quota['used_files'], 1)
+                    self.assertEqual(quota['remaining_files'], mcp_server.MAX_DELIVERY_FILES - 1)
+                    with self.assertRaisesRegex(ValueError, 'release_paper_file'):
+                        client.get_paper_file({'gewu_key': self.key, 'file_id': note['id']})
+                    self.assertTrue(Path(first['delivery']['local_path']).exists())
+                    self.assertEqual(list(Path(client._delivery_dir.name).glob('*.part')), [])
+                    released = client.release_paper_file({'delivery_id': first['delivery']['delivery_id']})
+                    self.assertEqual(released['freed_bytes'], len(self.pdf_bytes))
+                    self.assertEqual(released['quota']['used_bytes'], 0)
+                    self.assertEqual(released['quota']['used_files'], 0)
+                    second = client.get_paper_file({'gewu_key': self.key, 'file_id': note['id']})
+                    self.assertEqual(Path(second['delivery']['local_path']).read_bytes(), b'second')
+                    client.release_paper_file({'delivery_id': second['delivery']['delivery_id']})
+        self.assertEqual(Path(self.storage.get_paper('one')['main_pdf_path']).read_bytes(), self.pdf_bytes)
+
+    def test_active_redelivery_shares_quota_and_stale_release_cannot_delete_new_copy(self):
+        client = self.file_client()
+        first = client.get_paper_file({'gewu_key': self.key})
+        repeated = client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(first['delivery'], repeated['delivery'])
+        self.assertEqual(repeated['quota']['used_files'], 1)
+        release_args = {'delivery_id': first['delivery']['delivery_id']}
+        client.release_paper_file(release_args)
+        fresh = client.get_paper_file({'gewu_key': self.key})
+        self.assertNotEqual(first['delivery']['delivery_id'], fresh['delivery']['delivery_id'])
+        result = client.release_paper_file(release_args)
+        self.assertFalse(result['released'])
+        self.assertEqual(result['freed_bytes'], 0)
+        self.assertEqual(result['quota']['used_files'], 1)
+        self.assertEqual(Path(fresh['delivery']['local_path']).read_bytes(), self.pdf_bytes)
+
+    def test_release_is_scoped_to_connection_handles_and_never_accepts_paths(self):
+        client, other = self.file_client(), self.file_client()
+        first = client.get_paper_file({'gewu_key': self.key})
+        local = Path(first['delivery']['local_path'])
+        delivery_id = first['delivery']['delivery_id']
+        self.assertFalse(other.release_paper_file({'delivery_id': delivery_id})['released'])
+        for args in ({}, {'delivery_id': str(local)}, {'delivery_id': '../original.pdf'},
+                     {'delivery_id': True}, {'delivery_id': []},
+                     {'delivery_id': delivery_id, 'path': str(local)}, {'gewu_key': self.key}):
+            with self.assertRaises(ValueError): client.release_paper_file(args)
+        self.assertTrue(local.exists())
+        with self.assertRaises(ValueError): client.get_file_delivery_status({'path': str(local)})
+        status = client.get_file_delivery_status({})
+        self.assertEqual(status['deliveries'], [{'delivery_id': delivery_id, 'gewu_key': self.key,
+                                               'file_id': self.pdf['id'], 'size_bytes': len(self.pdf_bytes)}])
+        self.assertNotIn(str(self.root), json.dumps(status))
+        self.assertNotIn(self.token, json.dumps(status))
+
+    def test_changed_file_versions_have_independent_release_handles(self):
+        client = self.file_client()
+        first = client.get_paper_file({'gewu_key': self.key})
+        original = Path(self.storage.get_paper('one')['main_pdf_path'])
+        changed = self.pdf_bytes + b'\n% changed'
+        original.write_bytes(changed)
+        second = client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(second['quota']['used_files'], 2)
+        self.assertNotEqual(first['delivery']['delivery_id'], second['delivery']['delivery_id'])
+        result = client.release_paper_file({'delivery_id': first['delivery']['delivery_id']})
+        self.assertEqual(result['quota']['used_bytes'], len(changed))
+        self.assertEqual(Path(second['delivery']['local_path']).read_bytes(), changed)
+        self.assertEqual(original.read_bytes(), changed)
+
+    def test_release_failure_preserves_accounting_and_missing_copy_can_be_released(self):
+        client = self.file_client()
+        first = client.get_paper_file({'gewu_key': self.key})
+        args = {'delivery_id': first['delivery']['delivery_id']}
+        with patch('paper_monitor.mcp_server.os.unlink', side_effect=PermissionError('busy')):
+            with self.assertRaisesRegex(ValueError, 'quota is still reserved'):
+                client.release_paper_file(args)
+        self.assertEqual(client.delivery_quota()['used_files'], 1)
+        local = Path(first['delivery']['local_path'])
+        self.assertTrue(local.exists())
+        local.unlink()
+        self.assertTrue(client.release_paper_file(args)['released'])
+        self.assertEqual(client.delivery_quota()['used_files'], 0)
+        self.assertEqual(client.get_file_delivery_status({})['deliveries'], [])
+
+    def test_release_unlinks_only_temp_symlink_not_original_target(self):
+        client = self.file_client()
+        first = client.get_paper_file({'gewu_key': self.key})
+        original = Path(self.storage.get_paper('one')['main_pdf_path'])
+        local = Path(first['delivery']['local_path'])
+        local.unlink(); local.symlink_to(original)
+        client.release_paper_file({'delivery_id': first['delivery']['delivery_id']})
+        self.assertFalse(local.is_symlink())
+        self.assertEqual(original.read_bytes(), self.pdf_bytes)
+
+    def test_release_rejects_replaced_session_directory(self):
+        client = self.file_client()
+        first = client.get_paper_file({'gewu_key': self.key})
+        directory = Path(client._delivery_dir.name)
+        moved = directory.with_name(directory.name + '-moved')
+        directory.rename(moved)
+        directory.symlink_to(moved, target_is_directory=True)
+        try:
+            with self.assertRaisesRegex(ValueError, 'quota is still reserved'):
+                client.release_paper_file({'delivery_id': first['delivery']['delivery_id']})
+            self.assertEqual(client.delivery_quota()['used_files'], 1)
+            self.assertTrue((moved / Path(first['delivery']['local_path']).name).exists())
+        finally:
+            directory.unlink(); moved.rename(directory)
+
+    def test_local_status_and_release_work_over_rpc_after_revocation_or_offline(self):
+        from paper_monitor.mcp_server import LOCAL_DELIVERY_TOOLS
+        client = self.file_client()
+        first = client.get_paper_file({'gewu_key': self.key})
+        self.storage.conn.execute("UPDATE ai_connections SET revoked_at='now' WHERE id=?", (self.connection,))
+        self.storage.conn.commit()
+        messages = [{'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'},
+                    {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
+                    {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'get_file_delivery_status'}},
+                    {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {'name': 'release_paper_file',
+                        'arguments': {'delivery_id': first['delivery']['delivery_id']}}},
+                    {'jsonrpc': '2.0', 'id': 5, 'method': 'tools/call', 'params': {'name': 'get_paper_file',
+                        'arguments': {'gewu_key': self.key}}}]
+        for offline in (False, True):
+            output = io.StringIO()
+            source = io.StringIO('\n'.join(json.dumps(m) for m in messages) + '\n')
+            if offline:
+                with patch.object(client, 'request', side_effect=ValueError('offline')): serve(client, source, output)
+            else:
+                serve(client, source, output)
+            results = [json.loads(line)['result'] for line in output.getvalue().splitlines()]
+            self.assertEqual({t['name'] for t in results[1]['tools']}, LOCAL_DELIVERY_TOOLS)
+            self.assertFalse(results[2]['isError'])
+            self.assertFalse(results[3]['isError'])
+            self.assertTrue(results[4]['isError'])
+            self.assertEqual(json.loads(results[3]['content'][0]['text'])['quota']['used_bytes'], 0)
+        self.assertFalse(Path(first['delivery']['local_path']).exists())
+
     def test_stdio_client_can_read_delivered_file_and_append_analysis(self):
         script = Path(__file__).resolve().parents[1] / 'scripts' / 'gewu_mcp.py'
         process = subprocess.Popen([sys.executable, str(script)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -501,6 +645,12 @@ class AIAccessTests(unittest.TestCase):
             local = Path(data['delivery']['local_path'])
             self.assertEqual(local.read_bytes(), self.pdf_bytes)
             self.assertEqual(len(PdfReader(local).pages), 3)
+            released = rpc(20, 'tools/call', {'name': 'release_paper_file',
+                'arguments': {'delivery_id': data['delivery']['delivery_id']}})
+            self.assertFalse(released['isError'])
+            self.assertFalse(local.exists())
+            status = rpc(21, 'tools/call', {'name': 'get_file_delivery_status'})
+            self.assertEqual(json.loads(status['content'][0]['text'])['quota']['used_files'], 0)
             saved = rpc(3, 'tools/call', {'name': 'save_analysis', 'arguments': {'gewu_key': self.key,
                 'markdown': '# Client-generated fixture note', 'request_id': 'stdio-delivery-analysis',
                 'source_file_id': data['file']['file_id'], 'source_sha256': data['sha256'], 'pages': [1, 2, 3]}})
