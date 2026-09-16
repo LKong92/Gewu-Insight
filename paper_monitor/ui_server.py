@@ -27896,85 +27896,6 @@ INDEX_HTML = """<!doctype html>
       text-transform: uppercase;
       white-space: nowrap;
     }
-    .workspace-tools {
-      display: flex;
-      align-items: center;
-      gap: 8px 10px;
-      padding: 8px 16px 9px;
-      border-bottom: 1px solid var(--line);
-      margin: 0;
-      flex-wrap: nowrap;
-      grid-column: 1 / -1;
-      background: transparent;
-      min-width: 0;
-    }
-    .workspace-tool-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-      flex: 0 1 auto;
-    }
-    .workspace-tools input.search {
-      min-height: 28px;
-      border: 0;
-      border-radius: 7px;
-      padding: 0 8px;
-      background: transparent;
-      box-shadow: inset 0 0 0 1px rgba(216, 216, 220, 0.78);
-      color: var(--ink);
-      font-size: 12px;
-      transition: background 0.16s ease, box-shadow 0.16s ease;
-    }
-    .workspace-tools input.search:focus {
-      outline: 0;
-      background: transparent;
-      box-shadow: inset 0 0 0 1px #1f4f7a;
-    }
-    #workspaceNameInput {
-      width: 200px;
-      max-width: min(200px, 24vw);
-    }
-    #workspaceDoiInput {
-      width: 250px;
-      max-width: min(250px, 28vw);
-    }
-    .workspace-tools .smallbtn {
-      min-height: 28px;
-      border: 0;
-      border-radius: 7px;
-      background: rgba(31, 79, 122, 0.12);
-      color: #1f2328;
-      padding: 0 9px;
-      font-size: 12px;
-      font-weight: 650;
-      line-height: 1;
-      white-space: nowrap;
-      box-shadow: none;
-    }
-    .workspace-tools .smallbtn:hover {
-      background: rgba(31, 79, 122, 0.20);
-      color: #1f2328;
-      box-shadow: none;
-    }
-    .workspace-tools .workspace-move-library-button {
-      margin-left: auto;
-      flex: 0 0 auto;
-      background: rgba(31, 79, 122, 0.12);
-      color: #1f2328;
-    }
-    .workspace-tools .workspace-move-library-button:hover {
-      background: rgba(31, 79, 122, 0.20);
-      color: #1f2328;
-    }
-    .workspace-tools #workspaceAddDoiButton {
-      background: rgba(31, 79, 122, 0.12);
-      color: #1f2328;
-    }
-    .workspace-tools #workspaceAddDoiButton:hover {
-      background: rgba(31, 79, 122, 0.20);
-      color: #1f2328;
-    }
     .library-tab.drag-over {
       border-color: var(--accent);
       box-shadow: inset 0 0 0 1px var(--accent);
@@ -29331,12 +29252,12 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       height: 100%;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       overflow: hidden;
     }
     .library-main-area > .library-columns,
     .library-main-area > .library-search-results {
-      grid-row: 2;
+      grid-row: 1;
     }
     .library-shell > .library-pane {
       margin-left: 0;
@@ -29581,6 +29502,41 @@ INDEX_HTML = """<!doctype html>
       position: relative;
     }
     .library-column > .library-pane-header { display: none; }
+    .library-shell.has-navigation-header { grid-template-rows: auto minmax(0, 1fr) 26px; }
+    .library-shell.has-navigation-header > .library-tab-rail { grid-column: 1; grid-row: 1 / 3; }
+    .library-shell.has-navigation-header > .library-main-area { grid-row: 2; }
+    .library-shell.has-navigation-header > .library-detail-divider { grid-row: 1 / 3; }
+    .library-shell.has-navigation-header > .library-pane { grid-column: 4; grid-row: 1 / 3; }
+    .library-shell.has-navigation-header > .library-path-bar { grid-row: 3; }
+    .library-shell > .library-navigation-header {
+      grid-column: 2;
+      grid-row: 1;
+      min-height: 38px;
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--line);
+      align-items: center;
+      gap: 10px;
+      display: flex;
+      color: var(--ink);
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 13px;
+    }
+    .library-navigation-header .library-table-folder-title { flex: 1; }
+    .library-navigation-menu {
+      flex: 0 0 auto;
+      border: 0;
+      border-radius: 4px;
+      padding: 0 5px;
+      min-width: 24px;
+      height: 24px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .library-navigation-menu:hover { color: var(--accent-strong); background: #eef3f8; }
     .library-column:last-child { border-right: 0; }
     .library-columns.table-view .library-column.path-column {
       flex-basis: min(210px, var(--library-column-width, 210px));
@@ -30027,6 +29983,7 @@ INDEX_HTML = """<!doctype html>
       grid-template-rows: auto auto minmax(0, 1fr);
       background: #fff;
     }
+    .library-table.navigation-root-table { grid-template-rows: auto minmax(0, 1fr); }
     .library-table-head {
       min-width: 0;
       min-height: 38px;
@@ -30063,6 +30020,23 @@ INDEX_HTML = """<!doctype html>
       font-size: 11px;
       font-weight: 750;
       text-transform: uppercase;
+    }
+    .library-table-sort {
+      width: 100%;
+      min-height: 30px;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      font: inherit;
+      text-transform: inherit;
+      cursor: pointer;
+    }
+    .library-table-sort:hover, .library-table-sort.active { color: var(--accent-strong); }
+    .library-table-sort:focus-visible, .library-navigation-menu:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
     }
     .library-table-body {
       padding: 4px 8px;
@@ -35798,9 +35772,8 @@ INDEX_HTML = """<!doctype html>
       libraryNavigationFocusRevision: 0,
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
-      workspaceStatus: "",
-      workspaceAddPaperBusy: false,
       libraryInlineAddFolderId: 0,
+      libraryInlineAddContext: null,
       libraryInlineAddQuery: "",
       libraryInlineAddBusy: false,
       libraryInlineAddError: "",
@@ -35859,6 +35832,7 @@ INDEX_HTML = """<!doctype html>
       libraryContentView: initialLibraryContentView(),
       libraryClipboard: null,
       librarySortMode: initialLibrarySortMode(),
+      libraryTableSort: initialLibraryTableSort(),
       libraryActivityText: "",
       libraryActivityLive: false,
       libraryActivityTimer: 0,
@@ -37699,12 +37673,46 @@ INDEX_HTML = """<!doctype html>
     function setLibrarySortMode(mode) {
       const nextMode = normalizeLibrarySortMode(mode);
       state.librarySortMode = nextMode;
+      state.libraryTableSort = null;
+      try { window.localStorage?.removeItem("gewu-library-table-sort"); } catch (_) {}
       try {
         window.localStorage?.setItem(LIBRARY_SORT_STORAGE_KEY, nextMode);
       } catch (_) {
       }
       updateLibraryActivityStatus(`Sorted by ${librarySortLabel(nextMode)}.`, {live: false});
       renderLibrary();
+    }
+
+    function initialLibraryTableSort() {
+      try {
+        return normalizeLibraryTableSort(JSON.parse(window.localStorage?.getItem("gewu-library-table-sort") || "null"));
+      } catch (_) { return null; }
+    }
+
+    function normalizeLibraryTableSort(value) {
+      if (!["title", "authors", "year", "journal"].includes(value?.key)) return null;
+      return {key: value.key, direction: value.direction === "desc" ? "desc" : "asc"};
+    }
+
+    function setLibraryTableSort(key) {
+      const current = normalizeLibraryTableSort(state.libraryTableSort);
+      const next = normalizeLibraryTableSort({key, direction: current?.key === key && current.direction === "asc" ? "desc" : "asc"});
+      if (!next) return;
+      state.libraryTableSort = next;
+      try { window.localStorage?.setItem("gewu-library-table-sort", JSON.stringify(next)); } catch (_) {}
+      renderLibrary();
+      document.querySelector(`[data-library-table-sort="${key}"]`)?.focus({preventScroll: true});
+    }
+
+    function libraryTableSortValue(entry, key) {
+      if (entry.type === "folder") return libraryEntrySortName(entry);
+      const item = libraryItemById(entry.id) || {};
+      const paper = item.paper || {};
+      const name = item.display_name || libraryPaperDisplayName(paper);
+      if (key === "authors") return libraryPaperAuthorsText(paper, item, name);
+      if (key === "year") return libraryPaperYearText(paper, item, name);
+      if (key === "journal") return libraryPaperJournalText(paper);
+      return libraryPaperTableTitle(item, paper, name);
     }
 
     function initialLibraryContentView() {
@@ -37760,6 +37768,20 @@ INDEX_HTML = """<!doctype html>
       if (a.type === "folder" && b.type === "folder") {
         const specialDelta = libraryFolderSpecialRank(libraryFolderById(a.id)) - libraryFolderSpecialRank(libraryFolderById(b.id));
         if (specialDelta) return specialDelta;
+      }
+      const tableSort = libraryTableViewActive() ? normalizeLibraryTableSort(state.libraryTableSort) : null;
+      if (tableSort) {
+        const key = a.type === "folder" ? "title" : tableSort.key;
+        const left = String(libraryTableSortValue(a, key) || "").trim();
+        const right = String(libraryTableSortValue(b, key) || "").trim();
+        // Unknown metadata stays below known values in both directions.
+        if (!left !== !right) return left ? -1 : 1;
+        const delta = key === "year" ? Number(left) - Number(right)
+          : left.localeCompare(right, undefined, {numeric: true, sensitivity: "base"});
+        const descending = tableSort.direction === "desc" && (a.type !== "folder" || tableSort.key === "title");
+        if (delta) return descending ? -delta : delta;
+        return String(libraryTableSortValue(a, "title")).localeCompare(String(libraryTableSortValue(b, "title")), undefined, {numeric: true, sensitivity: "base"})
+          || Number(a.id || 0) - Number(b.id || 0);
       }
       if (normalizeLibrarySortMode(state.librarySortMode) === "modified") {
         const modifiedDelta = libraryEntryModifiedMs(b) - libraryEntryModifiedMs(a);
@@ -42006,7 +42028,7 @@ INDEX_HTML = """<!doctype html>
     function renderLibrary() {
       state.mode = "library";
       if (!state.libraryTab?.startsWith("shortcut-") && !state.libraryTab?.startsWith("workspace-")) state.libraryTab = "library";
-      if ((state.libraryTab !== "library" || librarySearchIsActive()) && state.libraryInlineAddFolderId) {
+      if (state.libraryInlineAddFolderId && (state.libraryInlineAddContext?.view !== state.libraryTab || !libraryInlineAddAllowed(state.libraryInlineAddFolderId))) {
         resetLibraryInlineAddPaper();
       }
       stopArxivUpdateCountdown();
@@ -42017,6 +42039,7 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").innerHTML = "";
       $("reportTitle").textContent = libraryViewTitle();
       const root = $("papers");
+      const navigation = activeLibraryNavigationToolContext();
       captureLibraryColumnScrollTops();
       captureLibraryNavigationScroll();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
@@ -42024,10 +42047,13 @@ INDEX_HTML = """<!doctype html>
       $("summary").textContent = "";
       root.classList.add("library-view");
       root.innerHTML = `
-        <div class="library-shell${paperFilesFocusActive ? " paper-files-focus-active" : ""}${state.libraryNavigationRailFocus ? " navigation-rail-focus-active" : ""}" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
+        <div class="library-shell${navigation ? " has-navigation-header" : ""}${paperFilesFocusActive ? " paper-files-focus-active" : ""}${state.libraryNavigationRailFocus ? " navigation-rail-focus-active" : ""}" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
           <aside class="library-tab-rail" id="libraryShortcutTabs" aria-label="Library shortcuts and spaces"></aside>
+          ${navigation ? `<header class="library-navigation-header" id="libraryNavigationHeader">
+            <span class="library-table-folder-title" title="${escapeAttr(navigation.label)}">${escapeHtml(navigation.label)}</span>
+            <span class="library-table-folder-count" id="libraryNavigationCount"></span>${libraryNavigationMenuMarkup(navigation)}
+          </header>` : ""}
           <div class="library-main-area">
-            ${workspaceToolsMarkup()}
             ${librarySearchIsActive()
               ? `<div class="library-search-results" id="librarySearchResults"></div>`
               : `<div class="library-columns" id="libraryColumns"></div>`}
@@ -42050,6 +42076,10 @@ INDEX_HTML = """<!doctype html>
           </div>
         </div>
         <div class="library-context-menu library-tab-context-menu" id="libraryTabContextMenu">
+          <button type="button" data-action="add-tab-paper">Add Paper</button>
+          <button type="button" data-action="rename-tab">Rename</button>
+          <button type="button" data-action="move-tab-library">Move Space to Library</button>
+          <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="remove-tab">Remove Shortcut</button>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
@@ -42114,7 +42144,6 @@ INDEX_HTML = """<!doctype html>
       else renderLibraryColumns();
       renderLibraryDetail();
       wireLibraryInteractions();
-      wireWorkspaceTools();
       updateToolbarLibraryImport();
       restoreLibraryColumnScrollTops();
       const columns = $("libraryColumns");
@@ -42186,6 +42215,7 @@ INDEX_HTML = """<!doctype html>
 
     function librarySelectionPathParts() {
       const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      const showAbsolutePath = state.libraryTab?.startsWith("shortcut-");
       const folderParts = [];
       const seen = new Set();
       let folderId = displayRootId;
@@ -42206,8 +42236,8 @@ INDEX_HTML = """<!doctype html>
         const folder = libraryFolderById(current);
         if (!folder) break;
         folderParts.unshift({type: "folder", name: folder.name || "Library", iconClass: libraryEntryIconClass("folder", folder)});
-        if (current === displayRootId) break;
-        current = Number(folder.parent_id || displayRootId);
+        if (current === displayRootId && !showAbsolutePath) break;
+        current = Number(folder.parent_id || 0);
       }
       if (!folderParts.length) {
         const displayRoot = libraryFolderById(displayRootId);
@@ -42326,27 +42356,6 @@ INDEX_HTML = """<!doctype html>
         };
       }
       return null;
-    }
-
-    function workspaceToolsMarkup() {
-      const context = activeLibraryNavigationToolContext();
-      if (!context) return "";
-      const status = String(state.workspaceStatus || "").trim();
-      const kindLabel = context.type === "workspace" ? "Space" : "Shortcut";
-      return `
-        <div class="workspace-tools">
-          <div class="workspace-tool-group">
-            <input class="search" id="workspaceNameInput" value="${escapeAttr(context.label)}" placeholder="${kindLabel} name">
-            <button class="smallbtn" id="workspaceRenameButton" type="button">Rename</button>
-          </div>
-          <div class="workspace-tool-group">
-            <input class="search" id="workspaceDoiInput" placeholder="DOI, arXiv ID, or title">
-            <button class="smallbtn" id="workspaceAddDoiButton" type="button"${state.workspaceAddPaperBusy ? " disabled" : ""}>Add Paper</button>
-          </div>
-          ${status ? `<span class="workspace-status" id="workspaceStatus">${escapeHtml(status)}</span>` : `<span class="workspace-status" id="workspaceStatus"></span>`}
-          ${context.type === "workspace" ? `<button class="smallbtn workspace-move-library-button" id="workspaceMoveToLibraryButton" type="button">Move Space to Library</button>` : ""}
-        </div>
-      `;
     }
 
     function updateToolbarLibraryImport() {
@@ -43837,7 +43846,7 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename shortcut");
       applyLibraryNavigationSnapshot(data);
-      state.workspaceStatus = "Shortcut renamed.";
+      updateLibraryActivityStatus("Shortcut renamed.", {live: false});
       if (state.libraryTab === `shortcut-${index}`) state.libraryTab = `shortcut-${index}`;
       renderLibrary();
     }
@@ -43863,7 +43872,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function renameLibraryWorkspace(index, labelOverride = null) {
-      const label = labelOverride === null ? ($("workspaceNameInput")?.value || `Space ${index + 1}`) : labelOverride;
+      const label = labelOverride === null ? window.prompt("Rename space", libraryWorkspaceLabel(index)) : labelOverride;
+      if (label === null || !String(label).trim()) return;
       const res = await fetch("/api/library/workspace-tabs/rename", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -43872,7 +43882,7 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename space");
       applyLibraryNavigationSnapshot(data);
-      state.workspaceStatus = "Space renamed.";
+      updateLibraryActivityStatus("Space renamed.", {live: false});
       state.libraryTab = `workspace-${index}`;
       renderLibrary();
     }
@@ -44139,95 +44149,27 @@ INDEX_HTML = """<!doctype html>
       renderLibrary();
     }
 
-    async function addLibraryNavigationPaper(tabType, index) {
-      const identifier = $("workspaceDoiInput")?.value || "";
-      if (!identifier.trim() || state.workspaceAddPaperBusy) return;
-      const isWorkspace = tabType === "workspace";
-      const tab = isWorkspace ? state.libraryWorkspaceTabs[index] : state.libraryShortcutTabs[index];
-      const rootFolderId = Number(isWorkspace ? tab?.root_folder_id : tab?.folder_id);
-      const tabKey = `${tabType}-${index}`;
-      const currentFolderId = Number(state.libraryCurrentFolderId || rootFolderId);
-      const targetFolderId = libraryFolderIsWithin(currentFolderId, rootFolderId)
-        ? currentFolderId
-        : rootFolderId;
-      const targetName = libraryFolderPath(targetFolderId)
-        || (isWorkspace ? libraryWorkspaceLabel(index) : libraryShortcutLabel(index))
-        || "current folder";
-      state.workspaceAddPaperBusy = true;
-      state.workspaceStatus = "Looking up paper...";
-      updateLibraryActivityStatus(
-        `Finding paper and adding it to ${targetName}...`,
-        {live: true, clear: false}
-      );
-      state.libraryTab = tabKey;
-      renderLibrary();
-      try {
-        const res = await fetch("/api/library/navigation-tabs/add-paper", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            tab_type: tabType,
-            tab_id: tab?.tab_id || "",
-            index,
-            identifier,
-            folder_id: targetFolderId
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not add paper");
-        applyLibraryNavigationSnapshot(data);
-        upsertLibraryItemLocal(data.item);
-        if (data.paper) updatePaperState(data.paper.paper_id || data.paper_id, data.paper);
-        const addedFolderId = Number(data.folder_id || targetFolderId || rootFolderId);
-        const added = data.item?.id
-          ? libraryItemById(Number(data.item.id))
-          : state.libraryItems.find((item) => (
-              String(item.paper_id || "") === String(data.paper_id || "")
-              && Number(item.folder_id) === addedFolderId
-            ));
-        if (added) {
-          state.libraryActiveFolderId = addedFolderId;
-          state.libraryCurrentFolderId = addedFolderId;
-          state.librarySelection = {type: "item", id: Number(added.id)};
-          setLibraryColumnSelection(addedFolderId, state.librarySelection);
-        }
-        state.workspaceStatus = "Literature added.";
-        state.libraryTab = tabKey;
-        const paperTitle = String(data.paper?.title || identifier).trim();
-        updateLibraryActivityStatus(
-          `Added ${paperTitle} to ${targetName}.`,
-          {live: false, delay: 4200}
-        );
-      } catch (error) {
-        const message = error.message || "Could not add paper";
-        state.workspaceStatus = message;
-        state.libraryTab = tabKey;
-        updateLibraryActivityStatus(
-          `Add Paper failed: ${message}`,
-          {live: false, delay: 5200}
-        );
-      } finally {
-        state.workspaceAddPaperBusy = false;
-        renderLibrary();
-      }
-    }
-
     function resetLibraryInlineAddPaper() {
       state.libraryInlineAddFolderId = 0;
+      state.libraryInlineAddContext = null;
       state.libraryInlineAddQuery = "";
       state.libraryInlineAddBusy = false;
       state.libraryInlineAddError = "";
     }
 
+    function libraryInlineAddAllowed(folderId) {
+      return !librarySearchIsActive()
+        && (state.libraryTab === "library" || Boolean(activeLibraryNavigationToolContext()))
+        && libraryAddFolderCanTarget(libraryFolderById(folderId))
+        && libraryFolderIsWithin(folderId, libraryDisplayRootId());
+    }
+
     function beginLibraryInlineAddPaper(folderId) {
-      const targetFolderId = Number(folderId || state.libraryActiveFolderId || state.libraryRootId);
-      if (
-        state.libraryTab !== "library"
-        || librarySearchIsActive()
-        || !libraryFolderById(targetFolderId)
-        || !libraryFolderIsWithin(targetFolderId, Number(state.libraryRootId || 1))
-        || targetFolderId === libraryRecycleFolderId()
-      ) return;
+      const targetFolderId = Number(folderId || state.libraryActiveFolderId || libraryDisplayRootId());
+      if (!libraryInlineAddAllowed(targetFolderId) || state.libraryInlineAddBusy) return;
+      const context = activeLibraryNavigationToolContext();
+      const tab = context?.type === "workspace" ? state.libraryWorkspaceTabs[context.index] : state.libraryShortcutTabs[context?.index];
+      state.libraryInlineAddContext = {view: state.libraryTab, tab_type: context?.type || "library", tab_id: tab?.tab_id || "", index: context?.index ?? 0};
       state.libraryInlineAddFolderId = targetFolderId;
       state.libraryInlineAddQuery = "";
       state.libraryInlineAddBusy = false;
@@ -44251,6 +44193,8 @@ INDEX_HTML = """<!doctype html>
         input?.focus({preventScroll: true});
         return;
       }
+      const context = state.libraryInlineAddContext;
+      if (!context || !libraryInlineAddAllowed(targetFolderId)) return;
       const targetName = libraryFolderPath(targetFolderId) || "current folder";
       state.libraryInlineAddBusy = true;
       state.libraryInlineAddError = "";
@@ -44260,10 +44204,11 @@ INDEX_HTML = """<!doctype html>
       );
       renderLibrary();
       try {
-        const res = await fetch("/api/library/add-paper", {
+        const endpoint = context.tab_type === "library" ? "/api/library/add-paper" : "/api/library/navigation-tabs/add-paper";
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({identifier, folder_id: targetFolderId})
+          body: JSON.stringify({identifier, folder_id: targetFolderId, tab_type: context.tab_type, tab_id: context.tab_id, index: context.index})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not add paper");
@@ -44277,8 +44222,9 @@ INDEX_HTML = """<!doctype html>
               String(item.paper_id || "") === String(data.paper_id || "")
               && Number(item.folder_id) === addedFolderId
             ));
-        resetLibraryInlineAddPaper();
-        if (added) {
+        const stillEditing = state.mode === "library" && state.libraryInlineAddContext === context && state.libraryTab === context.view;
+        if (stillEditing) resetLibraryInlineAddPaper();
+        if (added && stillEditing) {
           state.libraryActiveFolderId = addedFolderId;
           state.libraryCurrentFolderId = addedFolderId;
           state.librarySelection = {type: "item", id: Number(added.id)};
@@ -44290,6 +44236,7 @@ INDEX_HTML = """<!doctype html>
           {live: false, delay: 4200}
         );
       } catch (error) {
+        if (state.libraryInlineAddContext !== context) return;
         state.libraryInlineAddBusy = false;
         state.libraryInlineAddError = error.message || "Could not add paper";
         updateLibraryActivityStatus(
@@ -44297,51 +44244,7 @@ INDEX_HTML = """<!doctype html>
           {live: false, delay: 5200}
         );
       }
-      renderLibrary();
-    }
-
-    function wireWorkspaceTools() {
-      const context = activeLibraryNavigationToolContext();
-      if (!context) return;
-      $("workspaceRenameButton")?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        const label = $("workspaceNameInput")?.value || context.label;
-        if (context.type === "workspace") {
-          runLibraryMenuAction(() => renameLibraryWorkspace(context.index, label));
-        } else {
-          runLibraryMenuAction(() => renameLibraryShortcutTab(context.index, label));
-        }
-      });
-      $("workspaceNameInput")?.addEventListener("click", (event) => event.stopPropagation());
-      $("workspaceNameInput")?.addEventListener("keydown", (event) => {
-        event.stopPropagation();
-        if (event.key === "Enter") {
-          event.preventDefault();
-          const label = $("workspaceNameInput")?.value || context.label;
-          if (context.type === "workspace") {
-            runLibraryMenuAction(() => renameLibraryWorkspace(context.index, label));
-          } else {
-            runLibraryMenuAction(() => renameLibraryShortcutTab(context.index, label));
-          }
-        }
-      });
-      $("workspaceAddDoiButton")?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        runLibraryMenuAction(() => addLibraryNavigationPaper(context.type, context.index));
-      });
-      $("workspaceMoveToLibraryButton")?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        state.libraryNavWorkspaceTabId = String(state.libraryWorkspaceTabs[context.index]?.tab_id || "");
-        runLibraryMenuAction(() => openLibraryNavigationDialog("move-workspace"));
-      });
-      $("workspaceDoiInput")?.addEventListener("click", (event) => event.stopPropagation());
-      $("workspaceDoiInput")?.addEventListener("keydown", (event) => {
-        event.stopPropagation();
-        if (event.key === "Enter") {
-          event.preventDefault();
-          runLibraryMenuAction(() => addLibraryNavigationPaper(context.type, context.index));
-        }
-      });
+      if (state.mode === "library") renderActiveLibraryTab();
     }
 
     function renderMyPublications(options = {}) {
@@ -45436,6 +45339,15 @@ INDEX_HTML = """<!doctype html>
     function renderLibraryColumns({preserveRows = false} = {}) {
       const root = $("libraryColumns");
       if (!root) return;
+      const navigation = activeLibraryNavigationToolContext();
+      const count = $("libraryNavigationCount");
+      if (count && navigation) {
+        const entries = libraryEntriesForFolder(navigation.rootFolderId);
+        const folders = entries.filter(entry => entry.type === "folder").length;
+        const items = entries.filter(entry => entry.type === "item").length;
+        count.textContent = libraryFolderLoaded(navigation.rootFolderId)
+          ? `${folders} folder${folders === 1 ? "" : "s"} · ${items} item${items === 1 ? "" : "s"}` : "Loading";
+      }
       const folderIds = libraryColumnFolderIds();
       const pathFolderIds = selectedLibraryPathFolderIds();
       const tableMode = libraryTableViewActive();
@@ -45559,6 +45471,17 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function libraryNavigationHeaderContext(folderId) {
+      const context = activeLibraryNavigationToolContext();
+      return context && Number(context.rootFolderId) === Number(folderId) ? context : null;
+    }
+
+    function libraryNavigationMenuMarkup(context) {
+      return context ? `<button type="button" class="library-navigation-menu" data-library-navigation-menu
+        data-navigation-type="${context.type}" data-navigation-index="${context.index}"
+        aria-haspopup="menu" aria-label="${context.type === "workspace" ? "Space" : "Shortcut"} actions" title="${context.type === "workspace" ? "Space" : "Shortcut"} actions">⋯</button>` : "";
+    }
+
     function libraryColumnMarkup(folderId, pathFolderIds = new Set(), options = {}) {
       const folder = libraryFolderById(folderId) || {name: "Library"};
       const loaded = libraryFolderLoaded(folderId);
@@ -45595,19 +45518,22 @@ INDEX_HTML = """<!doctype html>
         ? `${folderCount} folder${folderCount === 1 ? "" : "s"} · ${itemCount} item${itemCount === 1 ? "" : "s"}`
         : "Loading";
       const inlineAddPaper = libraryInlineAddPaperMarkup(folderId, {table: true});
+      const navigation = libraryNavigationHeaderContext(folderId);
+      const sort = normalizeLibraryTableSort(state.libraryTableSort);
+      const headers = [["title", "Title"], ["authors", "Authors"], ["year", "Year"], ["journal", "Journal"]].map(([key, label]) => {
+        const active = sort?.key === key;
+        const direction = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
+        const next = active && sort.direction === "asc" ? "descending" : "ascending";
+        return `<span role="columnheader" aria-sort="${direction}"><button class="library-table-sort${active ? " active" : ""}" type="button" data-library-table-sort="${key}" title="Sort by ${label.toLowerCase()}, ${next}" aria-label="${label}, sort ${next}">${label}${active ? `<span aria-hidden="true"> ${sort.direction === "asc" ? "↑" : "↓"}</span>` : ""}</button></span>`;
+      }).join("");
       return `
         <section class="library-column table-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}">
-          <div class="library-table">
-            <div class="library-table-head">
+          <div class="library-table${navigation ? " navigation-root-table" : ""}">
+            ${navigation ? "" : `<div class="library-table-head">
               <div class="library-table-folder-title" title="${escapeAttr(folder.name || "Library")}">${escapeHtml(folder.name || "Library")}</div>
               <div class="library-table-folder-count">${escapeHtml(subtitle)}</div>
-            </div>
-            <div class="library-table-header-row" aria-hidden="true">
-              <span>Title</span>
-              <span>Authors</span>
-              <span>Year</span>
-              <span>Journal</span>
-            </div>
+            </div>`}
+            <div class="library-table-header-row" role="row">${headers}</div>
             <div class="library-column-body library-table-body">
               ${loaded
                 ? (inlineAddPaper + rows || surfaceInlineStatusMarkup("empty", "Empty folder", "Right-click to create a folder or add a paper."))
@@ -46039,6 +45965,12 @@ INDEX_HTML = """<!doctype html>
         correction_notice: "Correction notice",
         supplementary_material: "Supplementary material",
         peer_review_file: "Peer review file",
+        perspective: "Perspective",
+        news_and_views: "News and Views",
+        summary: "Summary",
+        analysis: "Analysis",
+        source_data: "Source Data",
+        source_code: "Source Code",
         other: "Other",
         unknown: "Unknown",
         invalid_file: "Invalid file"
@@ -46063,6 +45995,12 @@ INDEX_HTML = """<!doctype html>
         ["correction_notice", "Correction notice"],
         ["supplementary_material", "Supplementary material"],
         ["peer_review_file", "Peer review file"],
+        ["perspective", "Perspective"],
+        ["news_and_views", "News and Views"],
+        ["summary", "Summary"],
+        ["analysis", "Analysis"],
+        ["source_data", "Source Data"],
+        ["source_code", "Source Code"],
         ["other", "Other"],
         ["unknown", "Unknown"],
         ["invalid_file", "Invalid file"]
@@ -49485,6 +49423,12 @@ INDEX_HTML = """<!doctype html>
           if (folderId) state.libraryColumnScrollTops[folderId] = body.scrollTop;
         });
         column.addEventListener("click", (event) => {
+          const sortButton = event.target.closest("[data-library-table-sort]");
+          if (sortButton) {
+            event.stopPropagation();
+            setLibraryTableSort(sortButton.dataset.libraryTableSort);
+            return;
+          }
           if (state.suppressClickOnce) {
             event.preventDefault();
             event.stopPropagation();
@@ -49494,6 +49438,9 @@ INDEX_HTML = """<!doctype html>
           selectLibraryColumnFolder(Number(column.dataset.libraryColumnFolder || state.libraryRootId));
           renderLibrary();
           refreshLibraryQuickLookForSelection();
+        });
+        column.addEventListener("keydown", (event) => {
+          if (event.target.closest("[data-library-table-sort], [data-library-navigation-menu]")) event.stopPropagation();
         });
       });
       $("libraryColumns")?.addEventListener("scroll", (event) => {
@@ -49509,6 +49456,20 @@ INDEX_HTML = """<!doctype html>
       const shell = $("libraryShell");
       if (!shell) return;
       shell.addEventListener("pointerdown", () => setLibraryNavigationRailFocus(false), {capture: true});
+      const navigationHeader = $("libraryNavigationHeader");
+      const navigationMenu = navigationHeader?.querySelector("[data-library-navigation-menu]");
+      navigationMenu?.addEventListener("click", event => {
+        event.stopPropagation();
+        const rect = navigationMenu.getBoundingClientRect();
+        showLibraryTabContextMenu({clientX: rect.left, clientY: rect.bottom}, navigationMenu.dataset.navigationType, Number(navigationMenu.dataset.navigationIndex));
+      });
+      navigationHeader?.addEventListener("contextmenu", event => {
+        const context = activeLibraryNavigationToolContext();
+        if (!context) return;
+        event.preventDefault();
+        event.stopPropagation();
+        showLibraryTabContextMenu(event, context.type, context.index);
+      });
       const inlineAddPaper = shell.querySelector("[data-library-inline-add-paper]");
       const inlineAddPaperInput = inlineAddPaper?.querySelector("[data-library-inline-add-paper-input]");
       const inlineAddPaperSubmit = inlineAddPaper?.querySelector("[data-library-inline-add-paper-submit]");
@@ -51662,11 +51623,7 @@ INDEX_HTML = """<!doctype html>
       }
       if (addPaperButton) {
         const targetFolderId = Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId);
-        const canAddPaper = state.libraryTab === "library"
-          && !hasEntry
-          && !librarySearchIsActive()
-          && targetFolderId !== libraryRecycleFolderId()
-          && libraryFolderIsWithin(targetFolderId, Number(state.libraryRootId || 1));
+        const canAddPaper = !hasEntry && libraryInlineAddAllowed(targetFolderId);
         addPaperButton.style.display = canAddPaper ? "" : "none";
         addPaperButton.onclick = () => {
           hideLibraryContextMenu();
@@ -51687,7 +51644,7 @@ INDEX_HTML = """<!doctype html>
         [sortByModifiedButton, "modified", "Sort by Modified Time"]
       ].forEach(([button, mode, label]) => {
         if (!button) return;
-        const active = normalizeLibrarySortMode(state.librarySortMode) === mode;
+        const active = !(libraryTableViewActive() && state.libraryTableSort) && normalizeLibrarySortMode(state.librarySortMode) === mode;
         button.textContent = `${active ? "✓ " : ""}${label}`;
         button.onclick = () => {
           hideLibraryContextMenu();
@@ -51717,16 +51674,52 @@ INDEX_HTML = """<!doctype html>
       menu.style.top = `${event.clientY}px`;
       menu.classList.add("open");
       menu.onclick = (clickEvent) => clickEvent.stopPropagation();
+      const tabs = tabType === "workspace" ? state.libraryWorkspaceTabs : state.libraryShortcutTabs;
+      const tabId = tabs[index]?.tab_id;
+      // Resolve the stable tab again when an action runs, after any tab reorder.
+      const currentIndex = () => (tabType === "workspace" ? state.libraryWorkspaceTabs : state.libraryShortcutTabs).findIndex(tab => tab.tab_id === tabId);
+      const addPaperButton = menu.querySelector('[data-action="add-tab-paper"]');
+      addPaperButton.onclick = async () => {
+        hideLibraryTabContextMenu();
+        await runLibraryMenuAction(async () => {
+          const i = currentIndex();
+          if (i < 0) return;
+          if (state.libraryTab !== `${tabType}-${i}`) {
+            if (tabType === "workspace") await openLibraryWorkspaceTab(i);
+            else await openLibraryShortcutTab(i);
+          }
+          beginLibraryInlineAddPaper(libraryDisplayRootId());
+        });
+      };
+      const renameButton = menu.querySelector('[data-action="rename-tab"]');
+      renameButton.onclick = () => {
+        hideLibraryTabContextMenu();
+        const i = currentIndex();
+        if (i < 0) return;
+        runLibraryMenuAction(() => tabType === "workspace" ? renameLibraryWorkspaceFromTab(i) : renameLibraryShortcutTab(i));
+      };
+      const moveButton = menu.querySelector('[data-action="move-tab-library"]');
+      moveButton.style.display = tabType === "workspace" ? "" : "none";
+      moveButton.onclick = () => {
+        hideLibraryTabContextMenu();
+        if (currentIndex() < 0) return;
+        state.libraryNavWorkspaceTabId = tabId;
+        runLibraryMenuAction(() => openLibraryNavigationDialog("move-workspace"));
+      };
       const removeButton = menu.querySelector('[data-action="remove-tab"]');
       if (removeButton) removeButton.textContent = tabType === "workspace" ? "Remove Empty Space" : "Remove Shortcut";
       if (removeButton) {
         removeButton.onclick = async () => {
           const type = menu.dataset.tabType || "shortcut";
-          const tabIndex = Number(menu.dataset.tabIndex || 0);
+          const tabIndex = currentIndex();
           hideLibraryTabContextMenu();
+          if (tabIndex < 0) return;
           await runLibraryMenuAction(() => removeLibraryNavigationTab(type, tabIndex));
         };
       }
+      const rect = menu.getBoundingClientRect();
+      menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8))}px`;
+      menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8))}px`;
     }
 
     function hideLibraryTabContextMenu() {
@@ -51852,6 +51845,7 @@ INDEX_HTML = """<!doctype html>
 
     function handleLibraryKeydown(event) {
       if (state.mode !== "library") return false;
+      if (event.target?.closest?.("[data-library-table-sort], [data-library-navigation-menu]")) return false;
       const keyAliases = {
         "Up": "ArrowUp",
         "Down": "ArrowDown",

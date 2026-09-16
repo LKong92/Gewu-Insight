@@ -416,6 +416,55 @@ class PaperFilesVNextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid files"):
             self.storage.set_preferred_paper_resource("invalid-record", int(resource["id"]))
 
+    def test_additional_file_types_persist_without_replacing_default(self) -> None:
+        self.add_paper("classifications")
+        published = self.add_resource("classifications", "main.pdf", "published_version")
+        self.storage.set_preferred_paper_resource("classifications", int(published["id"]))
+        resources = []
+        for file_type, label, role in (
+            ("perspective", "Perspective", "other"),
+            ("news_and_views", "News and Views", "other"),
+            ("summary", "Summary", "other"),
+            ("analysis", "Analysis", "note"),
+            ("source_data", "Source Data", "data"),
+            ("source_code", "Source Code", "code"),
+        ):
+            with self.subTest(file_type=file_type):
+                if file_type in {"analysis", "source_data", "source_code"}:
+                    suffix = {"analysis": ".md", "source_data": ".csv", "source_code": ".py"}[file_type]
+                    path = self.root / (file_type + suffix)
+                    content = b"Temporary classification fixture\n"
+                    path.write_bytes(content)
+                    resource = self.storage.create_paper_resource(
+                        paper_id="classifications", stored_path=str(path), file_type="unknown",
+                    )
+                else:
+                    content = pdf_bytes()
+                    resource = self.add_resource("classifications", file_type + ".pdf", "unknown")
+                updated = ui_server.update_paper_resource_role(
+                    self.storage, "classifications", int(resource["id"]), file_type,
+                )
+                self.assertEqual(updated["file_type"], file_type)
+                self.assertEqual(updated["file_role"], role)
+                self.assertEqual(updated["version_label"], label)
+                self.assertTrue(updated["file_type_override"])
+                self.assertEqual(Path(updated["stored_path"]).read_bytes(), content)
+                self.assertEqual(self.storage.resolve_default_paper_resource("classifications")["id"], published["id"])
+                resources.append((resource["id"], file_type))
+        self.storage.close()
+        self.storage = Storage(self.db_path)
+        for resource_id, file_type in resources:
+            self.assertEqual(self.storage.get_paper_resource(resource_id)["file_type"], file_type)
+        # The new categories do not enter the automatic article-version ranking.
+        self.storage.set_preferred_paper_resource("classifications", None)
+        self.assertEqual(self.storage.resolve_default_paper_resource("classifications")["id"], published["id"])
+        self.storage.set_preferred_paper_resource("classifications", resources[-1][0])
+        self.assertEqual(self.storage.resolve_default_paper_resource("classifications")["id"], resources[-1][0])
+        browser = (Path(ui_server.__file__).parent / "browser_ui.js").read_text()
+        for label in ("Perspective", "News and Views", "Summary", "Analysis", "Source Data", "Source Code"):
+            self.assertIn(label, ui_server.INDEX_HTML)
+            self.assertIn('"' + label + '"', browser)
+
     def test_ui_exposes_only_flat_vnext_vocabulary(self) -> None:
         for label in (
             "Preprint",
@@ -457,6 +506,12 @@ class PaperFilesVNextTests(unittest.TestCase):
                 "corrected_published_version", "correction_notice",
                 "supplementary_material", "peer_review_file", "other",
                 "unknown", "invalid_file",
+                "perspective",
+                "news_and_views",
+                "summary",
+                "analysis",
+                "source_data",
+                "source_code",
             },
         )
 

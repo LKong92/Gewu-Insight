@@ -291,17 +291,14 @@ class LibraryNavigationTabTests(unittest.TestCase):
 
     def test_space_add_and_library_location_ui_contract(self) -> None:
         html = ui_server.INDEX_HTML
-        workspace = html.split("function workspaceToolsMarkup()", 1)[1].split(
+        context = html.split("function activeLibraryNavigationToolContext()", 1)[1].split(
             "function updateToolbarLibraryImport()", 1
         )[0]
-        context = html.split("function activeLibraryNavigationToolContext()", 1)[1].split(
-            "function workspaceToolsMarkup()", 1
-        )[0]
-        add_paper = html.split("async function addLibraryNavigationPaper(tabType, index)", 1)[1].split(
-            "function wireWorkspaceTools()", 1
-        )[0]
-        wire_tools = html.split("function wireWorkspaceTools()", 1)[1].split(
+        add_paper = html.split("async function submitLibraryInlineAddPaper()", 1)[1].split(
             "function renderMyPublications", 1
+        )[0]
+        menu = html.split("function showLibraryTabContextMenu", 1)[1].split(
+            "function hideLibraryTabContextMenu", 1
         )[0]
         search_row = html.split("function librarySearchResultRowMarkup", 1)[1].split(
             "function libraryRowMarkup", 1
@@ -319,31 +316,18 @@ class LibraryNavigationTabTests(unittest.TestCase):
             "function fileNameFromPath", 1
         )[0]
 
-        self.assertIn('placeholder="DOI, arXiv ID, or title"', workspace)
+        self.assertNotIn("workspaceToolsMarkup", html)
         self.assertIn('type: "shortcut"', context)
         self.assertIn('type: "workspace"', context)
-        self.assertIn('context.type === "workspace"', workspace)
-        self.assertIn("Move Space to Library", workspace)
-        self.assertIn(
-            "const currentFolderId = Number(state.libraryCurrentFolderId || rootFolderId)",
-            add_paper,
-        )
-        self.assertIn(
-            "libraryFolderIsWithin(currentFolderId, rootFolderId)",
-            add_paper,
-        )
-        self.assertIn('fetch("/api/library/navigation-tabs/add-paper"', add_paper)
-        self.assertIn("tab_type: tabType", add_paper)
+        self.assertIn('"/api/library/navigation-tabs/add-paper"', add_paper)
+        self.assertIn("tab_type: context.tab_type", add_paper)
         self.assertIn("folder_id: targetFolderId", add_paper)
-        self.assertIn("const addedFolderId = Number(data.folder_id || targetFolderId", add_paper)
-        self.assertIn("state.workspaceAddPaperBusy = true", add_paper)
-        self.assertIn("state.workspaceAddPaperBusy = false", add_paper)
-        self.assertIn("updateLibraryActivityStatus(", add_paper)
+        self.assertIn("state.libraryInlineAddBusy = true", add_paper)
+        self.assertIn("state.libraryInlineAddBusy = false", add_paper)
         self.assertIn("Finding paper and adding it to", add_paper)
         self.assertIn("Add Paper failed:", add_paper)
-        self.assertIn("renameLibraryShortcutTab(context.index, label)", wire_tools)
-        self.assertIn("renameLibraryWorkspace(context.index, label)", wire_tools)
-        self.assertIn("addLibraryNavigationPaper(context.type, context.index)", wire_tools)
+        self.assertIn("renameLibraryShortcutTab(i)", menu)
+        self.assertIn("renameLibraryWorkspaceFromTab(i)", menu)
         self.assertIn('data-action="show-library-search-result"', search_row)
         self.assertIn(">Show in Library</button>", search_row)
         self.assertNotIn("paper.journal", search_row)
@@ -361,7 +345,7 @@ class LibraryNavigationTabTests(unittest.TestCase):
     def test_main_library_inline_add_paper_ui_contract(self) -> None:
         html = ui_server.INDEX_HTML
         inline = html.split("function beginLibraryInlineAddPaper(folderId)", 1)[1].split(
-            "function wireWorkspaceTools()", 1
+            "function renderMyPublications", 1
         )[0]
         markup = html.split("function libraryInlineAddPaperMarkup(folderId", 1)[1].split(
             "function libraryColumnMarkup", 1
@@ -371,14 +355,14 @@ class LibraryNavigationTabTests(unittest.TestCase):
         )[0]
 
         self.assertIn('data-action="add-paper">Add Paper</button>', html)
-        self.assertIn('fetch("/api/library/add-paper"', inline)
+        self.assertIn('"/api/library/add-paper"', inline)
         self.assertIn("folder_id: targetFolderId", inline)
         self.assertIn("state.libraryInlineAddBusy = true", inline)
         self.assertIn("state.libraryInlineAddError = error.message", inline)
         self.assertIn("resetLibraryInlineAddPaper()", inline)
         self.assertIn('placeholder="DOI, arXiv ID, or title"', markup)
         self.assertIn("data-library-inline-add-paper-submit", markup)
-        self.assertIn('state.libraryTab === "library"', context_menu)
+        self.assertIn("libraryInlineAddAllowed(targetFolderId)", context_menu)
         self.assertIn("!hasEntry", context_menu)
         self.assertIn("beginLibraryInlineAddPaper(targetFolderId)", context_menu)
 

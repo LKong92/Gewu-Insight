@@ -88,7 +88,8 @@ const root = {classList: {contains: key => classes.has(key), toggle(key,on) {on 
  querySelectorAll: () => [folder], querySelector: () => ({remove() {removed++;}}),
  insertAdjacentHTML(position, markup) {assert.equal(position, 'beforeend'); appended++;},
  set innerHTML(value) {replaced++;}};
-global.$ = () => root;
+global.$ = id => id === 'libraryColumns' ? root : null;
+global.activeLibraryNavigationToolContext = () => null;
 global.state = {librarySelection: {type: 'item', id: 2}};
 global.libraryColumnFolderIds = () => ids;
 global.selectedLibraryPathFolderIds = () => new Set();

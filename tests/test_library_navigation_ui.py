@@ -116,19 +116,19 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertNotRegex(INDEX_HTML, r'\stype="button"\s+draggable="true"\s+data-workspace-tab')
         self.assertNotIn('if (!window.confirm(message)) return;', INDEX_HTML)
 
-    def test_shortcut_and_space_context_menu_uses_library_style_without_rename(self) -> None:
+    def test_shortcut_and_space_context_menu_exposes_compact_actions(self) -> None:
         menu_markup = INDEX_HTML.split(
             '<div class="library-context-menu library-tab-context-menu" id="libraryTabContextMenu">',
             1,
-        )[1].split("</div>", 1)[0]
+        )[1].split('<div class="library-context-menu" id="libraryContextMenu">', 1)[0]
         menu_logic = INDEX_HTML.split("function showLibraryTabContextMenu", 1)[1].split(
             "function hideLibraryTabContextMenu", 1
         )[0]
         self.assertIn('data-action="remove-tab"', menu_markup)
-        self.assertNotIn('data-action="rename-tab"', menu_markup)
+        self.assertIn('data-action="rename-tab"', menu_markup)
         self.assertIn('"Remove Empty Space"', menu_logic)
         self.assertIn('"Remove Shortcut"', menu_logic)
-        self.assertNotIn("renameButton", menu_logic)
+        self.assertIn("renameButton", menu_logic)
 
     def test_navigation_rail_uses_soft_borderless_tabs_without_a_left_inset(self) -> None:
         rail_css = INDEX_HTML.split(".library-tab-rail {", 1)[1].split("}", 1)[0]
@@ -316,7 +316,8 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn('id="libraryNavFolderPicker"', INDEX_HTML)
         self.assertIn("function renderLibraryNavigationFolderPicker", INDEX_HTML)
         self.assertNotIn('id="libraryShortcutFolderSelect"', INDEX_HTML)
-        self.assertIn('id="workspaceMoveToLibraryButton"', INDEX_HTML)
+        self.assertIn('data-action="move-tab-library"', INDEX_HTML)
+        self.assertNotIn('id="workspaceMoveToLibraryButton"', INDEX_HTML)
         self.assertIn("Move Space to Library", INDEX_HTML)
         self.assertIn("/api/library/workspace-tabs/move-to-library", INDEX_HTML)
 
