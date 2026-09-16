@@ -58,6 +58,11 @@
 @property(nonatomic, strong) NSMutableDictionary *pendingPDFDocument;
 @property(nonatomic, strong) WKNavigation *pdfNavigation;
 @property(nonatomic, strong) NSMapTable<id, NSDictionary *> *pdfDocuments;
+@property(nonatomic, strong) GewuBrowserPDFFile *capturedPDF;
+@property(nonatomic, copy) NSString *capturedPDFURL;
+@property(nonatomic, strong) NSDate *capturedPDFDate;
+@property(nonatomic) BOOL exportingPDF;
+@property(nonatomic, strong) NSDictionary *capturedPDFFrame;
 @end
 @implementation GewuBrowserPage
 @end
@@ -66,6 +71,8 @@
 @property(nonatomic, copy) NSString *identifier;
 @property(nonatomic, copy) NSString *originPaperID;
 @property(nonatomic, copy) NSString *originURL;
+@property(nonatomic) NSInteger originLibraryItemID;
+@property(nonatomic, copy) NSString *workspaceReturnID;
 @property(nonatomic, strong) GewuBrowserPage *homePage;
 @property(nonatomic, strong) GewuBrowserPage *contentPage;
 @property(nonatomic, strong) GewuBrowserPage *currentPage;
@@ -219,6 +226,7 @@
     if (!page) return;
     [self cancelPDFDownloadsForPage:page];
     [page.pdfDocuments removeAllObjects]; page.pendingPDFDocument = nil;
+    page.capturedPDF = nil; page.capturedPDFURL = nil; page.capturedPDFFrame = nil;
     for (NSString *key in @[@"URL", @"title", @"loading", @"estimatedProgress", @"canGoBack", @"canGoForward"])
         [page.view removeObserver:self forKeyPath:key];
     page.view.navigationDelegate = nil; page.view.UIDelegate = nil;
@@ -369,7 +377,7 @@
         @"home":@(home), @"title": home ? @"Favorites" : presented.title ?: @"", @"loading": @(self.currentPage.openingPDF || self.webView.loading || (pending && !self.currentPage.errorMessage.length)),
         @"progress": @(self.currentPage.openingPDF ? self.currentPage.pdfProgress : self.webView.estimatedProgress), @"canBack": @(self.session.index > 0),
         @"canForward": @(self.session.index + 1 < self.session.entries.count),
-        @"tab_id":self.selectedTab.identifier ?: @"", @"openingPDF":@(self.currentPage.openingPDF), @"error":self.currentPage.errorMessage ?: @"" }];
+        @"tab_id":self.selectedTab.identifier ?: @"", @"workspace_return_id":self.selectedTab.workspaceReturnID ?: @"", @"openingPDF":@(self.currentPage.openingPDF), @"error":self.currentPage.errorMessage ?: @"" }];
     [self emitTabs];
 }
 
@@ -562,6 +570,9 @@
         GewuBrowserTab *tab = [self addTabWithRequest:url ? [NSURLRequest requestWithURL:url] : nil configuration:nil];
         tab.originPaperID = [command[@"origin_paper_id"] isKindOfClass:NSString.class] ? command[@"origin_paper_id"] : nil;
         tab.originURL = url.absoluteString;
+        tab.originLibraryItemID = [command[@"origin_library_item_id"] integerValue];
+        tab.workspaceReturnID = [command[@"workspace_return_id"] isKindOfClass:NSString.class] ? command[@"workspace_return_id"] : nil;
+        [self emitState];
         if (!url) [self emit:@{@"event":@"focus-address"}];
     } else if ([@[@"select-tab", @"close-tab"] containsObject:action]) {
         NSString *identifier = [command[@"tab_id"] isKindOfClass:NSString.class] ? command[@"tab_id"] : @"";
@@ -576,6 +587,8 @@
         if (!GewuBrowserPublicURL(url)) { [self emit:@{ @"event": @"error", @"message": @"Use a public HTTP or HTTPS website. Local app and file addresses are not available in Browser." }]; return; }
         self.selectedTab.originPaperID = [command[@"origin_paper_id"] isKindOfClass:NSString.class] ? command[@"origin_paper_id"] : nil;
         self.selectedTab.originURL = url.absoluteString;
+        self.selectedTab.originLibraryItemID = [command[@"origin_library_item_id"] integerValue];
+        self.selectedTab.workspaceReturnID = [command[@"workspace_return_id"] isKindOfClass:NSString.class] ? command[@"workspace_return_id"] : nil;
         [self openContentRequest:[NSURLRequest requestWithURL:url]];
     } else if ([action isEqualToString:@"back"]) { [self moveInSession:-1]; }
     else if ([action isEqualToString:@"forward"]) { [self moveInSession:1]; }
@@ -632,16 +645,38 @@
             if (safari) [[NSWorkspace sharedWorkspace] openURLs:@[url] withApplicationAtURL:safari configuration:[NSWorkspaceOpenConfiguration configuration] completionHandler:nil];
         }
     } else if ([action isEqualToString:@"download"]) {
-        if (self.currentPage.openingPDF) return;
-        NSDictionary *pdf = self.currentPage.failedURL ? nil : [self PDFDocumentForPage:self.currentPage];
-        if (pdf) { [self saveDisplayedPDF:pdf]; return; }
-        NSURL *downloadURL = self.currentPage.failedURL ?: self.webView.URL;
-        if (GewuBrowserPublicURL(downloadURL)) {
-            __weak typeof(self) weakSelf = self;
-            [self.webView startDownloadUsingRequest:[NSURLRequest requestWithURL:downloadURL] completionHandler:^(WKDownload *download) {
-                [weakSelf registerDownload:download];
+        if (self.currentPage.openingPDF) { [self emit:@{@"event":@"download", @"message":@"Wait for the PDF to finish loading before saving it."}]; return; }
+        GewuBrowserPage *page = self.currentPage;
+        if (!page.failedURL && ([page.documentMIME.lowercaseString containsString:@"pdf"] || [self PDFDocumentForPage:page])) {
+            if (page.exportingPDF) { [self emit:@{@"event":@"download", @"message":@"Preparing the loaded PDF…"}]; return; }
+            page.exportingPDF = YES;
+            [self emit:@{@"event":@"download", @"message":@"Preparing the loaded PDF…"}];
+            [self loadedPDFForPage:page URL:page.view.URL.absoluteString completion:^(GewuBrowserPDFFile *file, NSString *error) {
+                page.exportingPDF = NO;
+                if (file) [self saveDisplayedPDF:@{@"file":file, @"filename":file.filename}];
+                else [self emit:@{@"event":@"error", @"message":error ?: @"The loaded PDF is unavailable. Retry after it finishes loading."}];
             }];
+            return;
         }
+        if(page.exportingPDF) return;
+        page.exportingPDF=YES;
+        NSString *generation=page.captureDocumentID;
+        GewuLoadedBrowserPDFFrames(page.view, ^(NSArray<NSDictionary *> *frames){
+            page.exportingPDF=NO;
+            if(self.invalidated || ![self tabForPage:page] || ![page.captureDocumentID isEqual:generation]) return;
+            NSArray *valid=[frames filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *frame,NSDictionary *bindings){return GewuBrowserPublicURL([NSURL URLWithString:frame[@"url"]]);}]];
+            if(valid.count>1){[self emit:@{@"event":@"error",@"message":@"Multiple loaded PDFs found. Use Save to Gewu to choose a PDF."}];return;}
+            if(valid.count==1){
+                page.exportingPDF=YES;
+                [self loadedPDFForPage:page frame:valid[0] completion:^(GewuBrowserPDFFile *file,NSString *error){
+                    page.exportingPDF=NO;
+                    if(file)[self saveDisplayedPDF:@{@"file":file,@"filename":file.filename}];
+                    else [self emit:@{@"event":@"error",@"message":error?:@"The embedded PDF is unavailable."}];
+                }]; return;
+            }
+            NSURL *downloadURL=page.failedURL?:page.view.URL;
+            if(GewuBrowserPublicURL(downloadURL)) [page.view startDownloadUsingRequest:[NSURLRequest requestWithURL:downloadURL] completionHandler:^(WKDownload *download){[self registerDownload:download];}];
+        });
     } else if ([action isEqualToString:@"find"]) {
         if ([self presentedPageForTab:self.selectedTab] == self.homePage) return;
         NSString *text = [command[@"text"] isKindOfClass:NSString.class] ? command[@"text"] : @"";
@@ -709,40 +744,126 @@
             if ([candidate isKindOfClass:NSString.class] && GewuBrowserPublicURL([NSURL URLWithString:candidate]) && ![urls containsObject:candidate]) [urls addObject:candidate];
             if (urls.count >= 8) break;
         }
-        NSString *key = NSUUID.UUID.UUIDString;
-        if (!self.captureSnapshots) self.captureSnapshots = [NSMutableDictionary dictionary];
-        // The UI has one review panel. Retain only its frozen source document.
-        [self.captureSnapshots removeAllObjects];
-        self.captureSnapshots[key] = @{@"page":page, @"url":url, @"generation":generation, @"urls":urls};
-        snapshot[@"url"] = url.absoluteString; snapshot[@"is_pdf"] = @(pdf); snapshot[@"pdf_urls"] = urls;
-        snapshot[@"snapshot_id"] = key; snapshot[@"tab_id"] = tab.identifier;
-        snapshot[@"origin_paper_id"] = tab.originPaperID ?: @""; snapshot[@"origin_url"] = tab.originURL ?: @"";
-        [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"snapshot":snapshot}];
+        GewuLoadedBrowserPDFFrames(page.view, ^(NSArray<NSDictionary *> *frames) {
+            if (![self.tabs containsObject:tab] || ![page.view.URL isEqual:url] || ![(page.captureDocumentID ?: @"") isEqual:generation]) {
+                [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"error":@"The page changed. Reopen Save to Gewu."}]; return;
+            }
+            NSMutableDictionary *embedded = [NSMutableDictionary dictionary];
+            NSMutableArray *loaded = [NSMutableArray array];
+            if (pdf) [loaded addObject:url.absoluteString];
+            for (NSDictionary *frame in frames) {
+                NSString *source=frame[@"url"];
+                if (!GewuBrowserPublicURL([NSURL URLWithString:source]) || embedded.count>=8) continue;
+                // Ambiguous identical URLs are not silently bound to an arbitrary frame.
+                if (embedded[source]) { embedded[source]=NSNull.null; continue; }
+                embedded[source]=frame;
+                if (![urls containsObject:source]) [urls insertObject:source atIndex:0];
+                [loaded addObject:source];
+            }
+            for (NSString *source in embedded.allKeys) if (embedded[source]==NSNull.null) { [embedded removeObjectForKey:source]; [loaded removeObject:source]; }
+            while (urls.count>8) [urls removeLastObject];
+            [loaded filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSString *source,NSDictionary *bindings){return [urls containsObject:source];}]];
+            NSString *key = NSUUID.UUID.UUIDString;
+            if (!self.captureSnapshots) self.captureSnapshots = [NSMutableDictionary dictionary];
+            [self.captureSnapshots removeAllObjects];
+            self.captureSnapshots[key] = @{@"page":page, @"url":url, @"generation":generation, @"urls":urls, @"frames":embedded};
+            snapshot[@"url"] = url.absoluteString; snapshot[@"is_pdf"] = @(pdf); snapshot[@"pdf_urls"] = urls;
+            snapshot[@"loaded_pdf_urls"]=loaded;
+            snapshot[@"snapshot_id"] = key; snapshot[@"tab_id"] = tab.identifier;
+            snapshot[@"origin_paper_id"] = tab.originPaperID ?: @""; snapshot[@"origin_url"] = tab.originURL ?: @"";
+            snapshot[@"origin_library_item_id"]=@(tab.originLibraryItemID);
+            [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"snapshot":snapshot}];
+        });
     }];
+}
+// Cache only bytes belonging to this exact document generation/candidate.
+// A navigation clears this cache even when a URL is reused for a different PDF.
+- (void)retainCapturedPDF:(GewuBrowserPDFFile *)file page:(GewuBrowserPage *)page URL:(NSString *)url {
+    page.capturedPDF = file; page.capturedPDFURL = url; page.capturedPDFFrame = nil; page.capturedPDFDate = NSDate.date;
+    NSMutableArray *pages = [NSMutableArray array]; NSUInteger bytes = 0;
+    for (GewuBrowserTab *tab in self.tabs) if (tab.contentPage.capturedPDF) {
+        [pages addObject:tab.contentPage]; bytes += tab.contentPage.capturedPDF.size;
+    }
+    [pages sortUsingComparator:^NSComparisonResult(GewuBrowserPage *a, GewuBrowserPage *b) { return [a.capturedPDFDate compare:b.capturedPDFDate]; }];
+    NSUInteger count = pages.count;
+    for (GewuBrowserPage *old in pages) {
+        if (bytes <= 256 * 1024 * 1024 && count <= 8) break;
+        if (old == page) continue;
+        bytes -= old.capturedPDF.size; count--; old.capturedPDF = nil; old.capturedPDFURL = nil;
+    }
+}
+- (void)loadedPDFForPage:(GewuBrowserPage *)page frame:(NSDictionary *)frame completion:(void (^)(GewuBrowserPDFFile *, NSString *))completion {
+    NSString *generation=page.captureDocumentID, *url=frame[@"url"];
+    void (^received)(GewuBrowserPDFFile *,NSString *)=^(GewuBrowserPDFFile *file,NSString *error){
+        if(self.invalidated || ![self tabForPage:page] || ![page.captureDocumentID isEqual:generation]) { completion(nil,@"The page changed. Reopen Save to Gewu."); return; }
+        if(file){[self retainCapturedPDF:file page:page URL:url];page.capturedPDFFrame=frame;}
+        completion(file,error);
+    };
+    if(page.capturedPDF && [page.capturedPDFURL isEqual:url] && [page.capturedPDFFrame[@"token"] isEqual:frame[@"token"]]) {
+        GewuBrowserPDFFrameIsCurrent(page.view,frame,^(BOOL current){received(current?page.capturedPDF:nil,current?nil:@"The embedded PDF changed. Reopen Save to Gewu.");});
+    } else GewuReadLoadedBrowserPDFFrame(page.view,frame,received);
+}
+- (void)loadedPDFForPage:(GewuBrowserPage *)page URL:(NSString *)url completion:(void (^)(GewuBrowserPDFFile *, NSString *))completion {
+    if (page.capturedPDF && [page.capturedPDFURL isEqual:url]) { completion(page.capturedPDF, nil); return; }
+    NSURL *pageURL = page.view.URL; NSString *generation = page.captureDocumentID;
+    if (![url isEqual:pageURL.absoluteString] || page.view.loading || page.openingPDF) {
+        completion(nil, @"The complete PDF is not loaded in this tab. Open it first, or explicitly download it in Details."); return;
+    }
+    void (^received)(GewuBrowserPDFFile *, NSString *) = ^(GewuBrowserPDFFile *file, NSString *error) {
+        if (self.invalidated || ![self tabForPage:page] || ![page.view.URL isEqual:pageURL] || ![page.captureDocumentID isEqual:generation]) {
+            completion(nil, @"The source page changed. Reopen Save to Gewu on the current PDF."); return;
+        }
+        if (file) [self retainCapturedPDF:file page:page URL:url];
+        completion(file, error);
+    };
+    NSDictionary *pdf = [self PDFDocumentForPage:page];
+    if (pdf) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            GewuBrowserPDFFile *file = [GewuBrowserPDFFile fileWithData:pdf[@"data"] filename:pdf[@"filename"]];
+            dispatch_async(dispatch_get_main_queue(), ^{ received(file, file ? nil : @"Choose a complete PDF up to 128 MB."); });
+        });
+    } else if ([page.documentMIME.lowercaseString containsString:@"pdf"]) {
+        GewuReadLoadedBrowserPDF(page.view, pageURL.lastPathComponent, received);
+    } else received(nil, @"Open the PDF itself before saving its loaded file, or explicitly download it in Details.");
 }
 - (void)captureDownload:(NSDictionary *)command {
     NSString *token = [command[@"token"] isKindOfClass:NSString.class] ? command[@"token"] : @"";
     NSDictionary *snapshot = self.captureSnapshots[command[@"snapshot_id"] ?: @""];
     GewuBrowserPage *page = snapshot[@"page"];
     NSString *url = [command[@"url"] isKindOfClass:NSString.class] ? command[@"url"] : @"";
-    if (!page || ![self tabForPage:page] || ![page.view.URL isEqual:snapshot[@"url"]]
-        || ![(page.captureDocumentID ?: @"") isEqual:snapshot[@"generation"]] || ![snapshot[@"urls"] containsObject:url] || !token.length) {
+    BOOL (^valid)(void) = ^BOOL{ return !self.invalidated && page && [self tabForPage:page] && [page.view.URL isEqual:snapshot[@"url"]]
+        && [(page.captureDocumentID ?: @"") isEqual:snapshot[@"generation"]] && [snapshot[@"urls"] containsObject:url] && token.length; };
+    if (!valid()) {
         [self emit:@{@"event":@"capture-pdf", @"token":token, @"error":@"The source page changed. Reopen Save to Gewu or choose a local PDF."}]; return;
     }
     if (!self.captures) self.captures = [NSMutableDictionary dictionary];
     [self.captures[token] cancel];
-    GewuBrowserCapture *capture = [[GewuBrowserCapture alloc] init];
-    self.captures[token] = capture;
+    GewuBrowserCapture *capture = [GewuBrowserCapture new]; self.captures[token] = capture;
     __weak typeof(self) weakSelf = self;
+    __weak GewuBrowserCapture *weakCapture = capture;
     void (^completion)(NSString *) = ^(NSString *error) {
+        if (!weakCapture || weakSelf.captures[token] != weakCapture) return;
         [weakSelf.captures removeObjectForKey:token];
         [weakSelf emit:@{@"event":@"capture-pdf", @"token":token, @"error":error ?: @""}];
     };
-    NSDictionary *pdf = [self PDFDocumentForPage:page];
-    if (pdf && [url isEqual:page.view.URL.absoluteString])
-        [capture uploadPDFData:pdf[@"data"] filename:pdf[@"filename"] sourceURL:[NSURL URLWithString:url]
-            workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:completion];
-    else [capture downloadURL:[NSURL URLWithString:url] fromView:page.view workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:completion];
+    capture.progress = ^(NSString *message) {
+        if (weakCapture && weakSelf.captures[token] == weakCapture)
+            [weakSelf emit:@{@"event":@"capture-progress", @"token":token, @"message":message}];
+    };
+    capture.receivedPDF = ^(GewuBrowserPDFFile *file) { if (valid()) [weakSelf retainCapturedPDF:file page:page URL:url]; };
+    if ([command[@"allow_download"] boolValue]) {
+        // This path is reachable only through the explicit Details download action.
+        [capture downloadURL:[NSURL URLWithString:url] fromView:page.view workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:completion];
+        return;
+    }
+    void (^readComplete)(GewuBrowserPDFFile *,NSString *) = ^(GewuBrowserPDFFile *file, NSString *error) {
+        if (weakSelf.captures[token] != capture) return; // cancelled/superseded panel
+        if (!file || !valid()) { completion(error ?: @"The source page changed. Reopen Save to Gewu."); return; }
+        [capture uploadPDFFile:file sourceURL:[NSURL URLWithString:url] workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:completion];
+    };
+    NSDictionary *frame = snapshot[@"frames"][url];
+    if (frame) [self loadedPDFForPage:page frame:frame completion:readComplete];
+    else [self loadedPDFForPage:page URL:url completion:readComplete];
 }
 
 - (void)showAddressSuggestions:(NSDictionary *)command {
@@ -1014,7 +1135,7 @@
         decisionHandler(WKNavigationActionPolicyCancel);
         GewuBrowserTab *origin = [self tabForPage:page];
         GewuBrowserTab *opened = [self addTabWithRequest:action.request configuration:nil];
-        opened.originPaperID = origin.originPaperID; opened.originURL = origin.originURL;
+        opened.originPaperID = origin.originPaperID; opened.originURL = origin.originURL; opened.originLibraryItemID = origin.originLibraryItemID; opened.workspaceReturnID = origin.workspaceReturnID; [self emitState];
         opened.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
         if (blob) { opened.currentPage.blobRequestURL = page.blobRequestURL; opened.currentPage.blobSourceURL = page.blobSourceURL; }
         return;
@@ -1042,7 +1163,7 @@
         || !(GewuBrowserPublicURL(action.request.URL) || blob || [action.request.URL.absoluteString isEqualToString:@"about:blank"])) return nil;
     GewuBrowserTab *origin = [self tabForPage:[self pageForView:webView]];
     GewuBrowserTab *tab = [self addTabWithRequest:action.request configuration:configuration];
-    tab.originPaperID = origin.originPaperID; tab.originURL = origin.originURL;
+    tab.originPaperID = origin.originPaperID; tab.originURL = origin.originURL; tab.originLibraryItemID = origin.originLibraryItemID; tab.workspaceReturnID = origin.workspaceReturnID; [self emitState];
     tab.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
     if (blob) { tab.currentPage.blobRequestURL = opener.blobRequestURL; tab.currentPage.blobSourceURL = opener.blobSourceURL; }
     return tab.currentPage.view;
@@ -1090,6 +1211,7 @@
     page.failedURL = nil; page.errorMessage = nil;
     page.ready = NO;
     page.captureDocumentID = NSUUID.UUID.UUIDString; page.documentMIME = nil;
+    page.capturedPDF = nil; page.capturedPDFURL = nil; page.capturedPDFFrame = nil;
     if (!page.reloadNavigation || !page.visitID) page.visitID = NSUUID.UUID.UUIDString;
     page.reloadNavigation = NO;
     if (webView == self.webView) {
@@ -1294,15 +1416,43 @@
         [page.pdfDocuments removeObjectForKey:entry[@"item"]];
     }
 }
+// WebKit's native PDF HUD hands its in-memory PDF to this optional delegate
+// callback. Without it, its download button has no host save implementation.
+- (void)_webView:(WKWebView *)webView saveDataToFile:(NSData *)data suggestedFilename:(NSString *)filename mimeType:(NSString *)mimeType originatingURL:(NSURL *)url {
+    GewuBrowserPage *page = [self pageForView:webView];
+    if (!page || self.invalidated || ![mimeType.lowercaseString containsString:@"pdf"] || !GewuBrowserPublicURL(url)) return;
+    [self emit:@{@"event":@"download", @"message":@"Preparing the loaded PDF…"}];
+    if (page.exportingPDF) return;
+    page.exportingPDF = YES;
+    NSString *generation = page.captureDocumentID;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        GewuBrowserPDFFile *file = [GewuBrowserPDFFile fileWithData:data filename:filename];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            page.exportingPDF = NO;
+            if (self.invalidated || ![self tabForPage:page] || ![page.captureDocumentID isEqual:generation]) return;
+            if (!file) { [self emit:@{@"event":@"error", @"message":@"WebKit did not provide a complete PDF up to 128 MB."}]; return; }
+            [self saveDisplayedPDF:@{@"file":file, @"filename":file.filename}];
+        });
+    });
+}
 - (void)saveDisplayedPDF:(NSDictionary *)pdf {
-    if (self.workspace.window.attachedSheet) return;
+    if (!self.workspace.window || self.workspace.window.attachedSheet) {
+        [self emit:@{@"event":@"error", @"message":@"Close the open dialog, then click Save Download again."}]; return;
+    }
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.title = @"Save Download"; panel.nameFieldStringValue = pdf[@"filename"] ?: @"Article.pdf";
-    panel.directoryURL = [[NSFileManager defaultManager] URLsForDirectory:NSDownloadsDirectory inDomains:NSUserDomainMask].firstObject;
+    panel.directoryURL = [NSFileManager.defaultManager URLsForDirectory:NSDownloadsDirectory inDomains:NSUserDomainMask].firstObject;
     [panel beginSheetModalForWindow:self.workspace.window completionHandler:^(NSModalResponse result) {
-        if (result != NSModalResponseOK || !panel.URL) return;
-        BOOL saved = [pdf[@"data"] writeToURL:panel.URL options:NSDataWritingAtomic error:nil];
-        [self emit:@{@"event":saved ? @"download" : @"error", @"message":saved ? @"File saved to the selected location." : @"The file could not be saved to the selected location."}];
+        if (result != NSModalResponseOK || !panel.URL) { [self emit:@{@"event":@"download", @"message":@"Save cancelled."}]; return; }
+        NSURL *destination = panel.URL;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            GewuBrowserPDFFile *file = pdf[@"file"];
+            NSData *data = file ? [NSData dataWithContentsOfURL:file.URL options:NSDataReadingMappedIfSafe error:nil] : pdf[@"data"];
+            BOOL saved = [data writeToURL:destination options:NSDataWritingAtomic error:nil];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self emit:@{@"event":saved ? @"download" : @"error", @"message":saved ? @"File saved to the selected location." : @"The file could not be saved to the selected location."}];
+            });
+        });
     }];
 }
 - (void)cancelPDFDownloadsForPage:(GewuBrowserPage *)page {

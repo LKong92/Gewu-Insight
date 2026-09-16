@@ -64,7 +64,11 @@ function workspaceFunction(name) {
           if(window.deferBegin) await new Promise(resolve=>{window.releaseBegin=resolve;});
           return {ok:true,json:async()=>structuredClone(review)};
         }
-        if (payload.action==='capture_review') return {ok:true,json:async()=>({...structuredClone(review),pdf_ready:true,can_save:true,suggested_file_type:'published_version',file_type_reason:'Publisher article PDF; the PDF DOI matches.'})};
+        if (payload.action==='capture_review') {
+          if(payload.target_key==='gw_0000000000') return {ok:false,json:async()=>({error:'Gewu Key not found.'})};
+          if(payload.target_key) return {ok:true,json:async()=>({...structuredClone(review),target_key:payload.target_key,paper:{...review.paper,paper_id:'target',existing:true,gewu_key:payload.target_key},destination:{folder_id:21,reused:true},pdf_ready:true,can_save:true})};
+          return {ok:true,json:async()=>({...structuredClone(review),pdf_ready:true,can_save:true,suggested_file_type:'published_version',file_type_reason:'Publisher article PDF; the PDF DOI matches.'})};
+        }
         if (payload.action==='capture_save') return {ok:true,json:async()=>({ok:true,paper_id:'paper',item_id:payload.folder_id===21?202:101,folder_id:payload.folder_id,gewu_key:'gw_1234567890',pdf_saved:payload.include_pdf,duplicate_file:window.duplicateFile||false,paper_files:[{paper_id:'paper',files:payload.include_pdf?[{id:9,file_type:'unknown',exists:true}]:[],paper:{paper_id:'paper',title:'Quantum sensing with light'}}]})};
         return {ok:true,json:async()=>({bookmarks:[],history:[],preferences:{},ok:true})};
       };
@@ -150,6 +154,7 @@ function workspaceFunction(name) {
     await details(); await page.click('[data-capture="download"]');
     assert.equal(await page.locator('[data-capture="save"]').isDisabled(),true);
     const transfer=await page.evaluate(()=>commands.filter(c=>c.action==='capture-download').at(-1));
+    assert.equal(transfer.allow_download,true,'article link download requires an explicit click');
     assert.equal(transfer.snapshot_id,'native-snapshot'); assert.equal(transfer.upload_token,'upload-token');
     await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:'Publisher unavailable.'}));
     assert.equal(await page.locator('[data-capture="save"]').isDisabled(),false,'metadata-only save stays available');
@@ -223,6 +228,7 @@ function workspaceFunction(name) {
     await page.evaluate(()=>{
       review.paper.existing=true;review.destination={folder_id:7,item_id:101,reused:true};
       state.librarySelection={type:'item',id:101};
+      review.snapshot.origin_library_item_id=101;
     });
     id=await start(); await deliver(id);
     await page.waitForFunction(()=>!document.querySelector('[data-capture="save"]').disabled);
@@ -257,6 +263,48 @@ function workspaceFunction(name) {
     assert.equal(await page.locator('.capture-status.error').isVisible(),true,'a collapsed conflict remains visible');
     await page.click('[data-capture="cancel"]');
     await page.evaluate(()=>{review.can_save=true;review.paper={paper_id:'paper',title:'Quantum sensing with light',gewu_key:'gw_1234567890'};review.conflict='';});
+
+    // Opening an inline PDF never grants permission to request it again.
+    await page.evaluate(()=>{review.snapshot.is_pdf=true;});
+    id=await start(); await deliver(id);
+    await page.waitForFunction(()=>commands.filter(c=>c.action==='capture-download').at(-1).allow_download===false);
+    assert.match(await page.locator('.capture-status').innerText(),/Reading the loaded PDF/);
+    await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-progress',token:'capture-token',message:'Reading PDF information…'}));
+    assert.match(await page.locator('.capture-status').innerText(),/Reading PDF information/);
+    await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-progress',token:'old-token',message:'Stale progress'}));
+    assert.doesNotMatch(await page.locator('.capture-status').innerText(),/Stale/);
+    await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:'Loaded original unavailable. No new download was started.'}));
+    await details();
+    assert.equal(await page.locator('[data-capture="download"]').innerText(),'Use Loaded PDF');
+    await page.click('[data-capture="download"]');
+    assert.equal(await page.evaluate(()=>commands.filter(c=>c.action==='capture-download').at(-1).allow_download),false,'retry still must not redownload');
+    await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:'Not ready.'}));
+    await page.click('[data-capture="redownload"]');
+    assert.equal(await page.evaluate(()=>commands.filter(c=>c.action==='capture-download').at(-1).allow_download),true,'explicit download again grants network permission');
+    await page.click('[data-capture="cancel"]');
+    await page.evaluate(()=>{gewuBrowserNativeEvent({event:'capture-progress',token:'capture-token',message:'Late'});review.snapshot.is_pdf=false;});
+    assert.equal(await page.locator('.browser-capture-panel').count(),0);
+    id=await start();await deliver(id);await details();
+    await page.fill('[name="target_key"]','gw_abcdef0123');
+    assert.equal(await page.locator('[data-capture="save"]').isDisabled(),true);
+    await page.press('[name="target_key"]','Enter');
+    await page.waitForFunction(()=>document.querySelector('.capture-target-status').textContent==='Target updated');
+    assert.match(await page.locator('.capture-identity').innerText(),/Existing article · gw_abcdef0123/);
+    assert.match(await page.locator('[data-capture="folder"]').innerText(),/Project Space \/ Space Papers/);
+    assert.notEqual(await page.evaluate(()=>document.activeElement.name),'target_key');
+    await page.fill('[name="target_key"]','gw_0000000000');await page.press('[name="target_key"]','Enter');
+    await page.waitForFunction(()=>document.querySelector('.capture-status').textContent.includes('Key not found'));
+    assert.equal(await page.locator('[data-capture="save"]').isDisabled(),true);
+    await page.click('[data-capture="automatic"]');
+    await page.waitForFunction(()=>!document.querySelector('[data-capture="save"]').disabled);
+    await page.click('[data-capture="cancel"]');
+    await page.evaluate(()=>{review.snapshot.loaded_pdf_urls=['https://example.org/paper.pdf'];review.snapshot.origin_library_item_id=202;});
+    id=await start();await deliver(id);
+    await page.waitForFunction(()=>commands.filter(c=>c.action==='capture-download').at(-1)?.allow_download===false);
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_begin').at(-1).snapshot.origin_library_item_id),202);
+    assert.equal(await page.evaluate(()=>commands.filter(c=>c.action==='capture-download').at(-1).url),'https://example.org/paper.pdf');
+    await page.click('[data-capture="cancel"]');
+    await page.evaluate(()=>{delete review.snapshot.loaded_pdf_urls;delete review.snapshot.origin_library_item_id;});
 
     await page.evaluate(()=>{deferBegin=true;});
     id=await start(); await deliver(id);

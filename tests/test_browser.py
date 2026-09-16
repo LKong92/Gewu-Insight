@@ -497,7 +497,7 @@ assert.equal(model.dayLabel('2026-09-01T10:00:00',new Date('2026-09-01T18:00:00'
         for phrase in ["Bookmarks", "History", "Clash", "PDF", "SQLite", "Open in Safari", "Google Scholar"]:
             self.assertIn(phrase, article.get_text())
         self.assertIn("opening a new webpage tab without replacing existing pages", article.get_text())
-        self.assertIn("Local PDF/Preview and Finder actions stay native", article.get_text())
+        self.assertIn("Library PDFs still open in macOS Preview", article.get_text())
         self.assertNotIn("elsewhere still use external browsers", article.get_text())
 
 

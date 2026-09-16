@@ -105,7 +105,7 @@
     preferences:{}, expanded:new Set(), width:250, hidden:false, url:"", title:"", loading:false,
     query:"", selected:null, favoritePath:null, favoritePage:0, favoriteLayout:"", home:false, fetching:0, layout:"", editor:null, confirm:null, searchTimer:null, persistTimer:null,
     addressQuery:"", suggestions:[], suggestionIndex:-1, suggestionGeneration:0, addressTimer:null, composing:false,
-    browserTabs:[], browserTab:"", tabsSignature:"", tabChrome:new Map(), workspaceReturn:null};
+    browserTabs:[], browserTab:"", tabsSignature:"", tabChrome:new Map(), workspaceReturn:null, workspaceReturns:new Map()};
   const icons = {
     back:'<path d="m14 5-7 7 7 7"/>', forward:'<path d="m10 5 7 7-7 7"/>',
     reload:'<path d="M19 8a8 8 0 1 0 1 7M19 3v6h-6"/>', stop:'<path d="m6 6 12 12M18 6 6 18"/>',
@@ -383,10 +383,16 @@
     if (status) captureStatus(c, status);
   }
   function renderCapture(c, review) {
+    if (c.review?.paper?.paper_id !== review.paper?.paper_id) c.folderSelectionExplicit = false;
     c.review = review;
     const q = s => c.element.querySelector(s), p = review.paper;
     q(".capture-identity").textContent = p ? `${p.title}\n${p.existing ? "Existing article" : "New article"} · ${p.gewu_key}${p.doi ? "\nDOI: " + p.doi : ""}${p.journal ? "\n" + p.journal : ""}` : "Article not identified yet. Enter its DOI/arXiv ID, or confirm a title below.";
     q('[name="identifier"]').value = review.identifier || "";
+    q('[name="target_key"]').value = review.target_key || (p?.existing ? p.gewu_key : "");
+    q('.capture-target-status').textContent = review.target_key ? "Target updated" : "";
+    q('.capture-target-confirm').hidden = !review.target_conflict;
+    q('[name="confirm_target"]').checked = Boolean(c.identity?.confirm_target);
+    q('.capture-origin').textContent = review.origin ? `Opened from: ${review.origin.title} · ${review.origin.gewu_key}` : "";
     if (!q('[name="title"]').value) q('[name="title"]').value = review.suggested_title || "";
     q(".capture-manual").hidden = Boolean(p);
     const target = q('[name="folder_id"]');
@@ -398,6 +404,9 @@
     const urls = q('[name="pdf_url"]'), selected = urls.value;
     urls.replaceChildren(...review.snapshot.pdf_urls.map(url => new Option(url, url)));
     if ([...urls.options].some(o => o.value === selected)) urls.value = selected;
+    const loaded = review.snapshot.is_pdf || review.snapshot.loaded_pdf_urls?.includes(urls.value);
+    q('[data-capture="download"]').textContent = loaded ? "Use Loaded PDF" : "Get PDF";
+    q('[data-capture="redownload"]').hidden = !loaded || review.pdf_ready;
     q('[name="include_pdf"]').checked = review.pdf_ready;
     q(".capture-file").textContent = review.pdf_ready ? `Ready: ${review.pdf_name}` : "No PDF attached. You can save the article alone.";
     if (!c.fileTypeManual) q('[name="file_type"]').value = review.suggested_file_type || "unknown";
@@ -417,11 +426,12 @@
       if (capturePanel === c) renderCapture(c, review);
     } catch (error) { if (capturePanel === c) { captureBusy(c, false); captureStatus(c, error.message, true); } }
   }
-  function downloadCapture(c) {
+  function downloadCapture(c, allowDownload = false) {
     if (!c.review || capturePanel !== c) return;
-    captureBusy(c, true, "Retrieving PDF from this browser session…");
+    if (c.identity) c.identity.confirm_target = false;
+    captureBusy(c, true, allowDownload ? "Downloading PDF…" : "Reading the loaded PDF…");
     native({action:"capture-download", token:c.review.token, upload_token:c.review.upload_token,
-      snapshot_id:c.snapshot.snapshot_id, url:c.element.querySelector('[name="pdf_url"]').value});
+      snapshot_id:c.snapshot.snapshot_id, url:c.element.querySelector('[name="pdf_url"]').value, allow_download:allowDownload});
   }
   function startCapture() {
     if (capturePanel) return;
@@ -434,10 +444,14 @@
       <button type="button" class="capture-details-toggle" data-capture="details" aria-expanded="false" aria-controls="browserCaptureDetails"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 3 4 3 4-3M4 9l4 3 4-3"/></svg><span>Details</span></button>
       <div class="capture-details-content" id="browserCaptureDetails" hidden>
       <div class="capture-identity"></div>
+      <p class="capture-origin"></p>
+      <label>Gewu Key<div class="capture-row"><input name="target_key" placeholder="Automatic, or enter an existing gw_…" autocomplete="off" spellcheck="false"><button data-capture="target">Use Key</button><button data-capture="automatic">Automatic</button></div></label>
+      <span class="capture-target-status" role="status" style="color:#36784b"></span>
+      <label class="capture-check capture-target-confirm" hidden><input name="confirm_target" type="checkbox"> I confirm this file belongs to the selected article.</label>
       <label>DOI or arXiv ID<div class="capture-row"><input name="identifier" placeholder="10.… or 2601.01234"><button data-capture="lookup">Identify</button></div></label>
       <div class="capture-manual"><label>Article title<input name="title" maxlength="1000" placeholder="Enter the article title"></label><button data-capture="manual">Use this title</button></div>
       <button data-capture="origin" hidden></button>
-      <label>PDF link<div class="capture-row"><select name="pdf_url" aria-label="PDF link"></select><button data-capture="download">Get PDF</button></div></label>
+      <label>PDF link<div class="capture-row"><select name="pdf_url" aria-label="PDF link"></select><button data-capture="download">Get PDF</button></div></label><button data-capture="redownload" hidden>Download PDF Again</button>
       <div class="capture-file"></div><label class="capture-local">Or choose a local PDF<input name="local_pdf" type="file" accept="application/pdf,.pdf"></label>
       <label class="capture-check"><input name="include_pdf" type="checkbox"> Include this PDF in Paper Files</label>
       <p class="capture-file-type-hint"></p>
@@ -446,14 +460,16 @@
       <footer><button data-capture="cancel">Cancel</button><button data-capture="save" class="capture-primary">Save to Library</button></footer>
     </section>`;
     const c = capturePanel = {element, requestID:crypto.randomUUID(), busy:true, review:null, snapshot:null};
-    c.originLibraryItemId = typeof state !== "undefined" && state.librarySelection?.type === "item"
-      ? Number(state.librarySelection.id || 0) : 0;
     document.body.append(element);
     captureDetails(c, typeof state !== "undefined" && state.browserCaptureDetailsExpanded === true);
     captureBusy(c, true); scheduleLayout();
     element.querySelector('[data-capture="cancel"]').focus();
     element.addEventListener("keydown", event => {
       event.stopPropagation();
+      if (event.key === "Enter" && !event.isComposing && !c.busy) {
+        const action = event.target.name === "target_key" ? "target" : event.target.name === "identifier" ? "lookup" : "";
+        if (action) { event.preventDefault(); element.querySelector(`[data-capture="${action}"]`).click(); }
+      }
       if (event.key === "Escape") {
         event.preventDefault();
         if (element.querySelector(".library-add-menu.open")) closeLibraryAddMenus();
@@ -477,9 +493,17 @@
       if (!action || c.busy || !c.review) return;
       const q = name => element.querySelector(`[name="${name}"]`);
       if (action === "lookup") return reviewCapture(c, {identifier:q("identifier").value});
+      if (action === "target") {
+        if (!q("target_key").value.trim()) { captureStatus(c, "Enter an existing Gewu Key, or choose Automatic.", true); return; }
+        await reviewCapture(c, {target_key:q("target_key").value});
+        if (c.review?.target_key) q("target_key").blur();
+        return;
+      }
+      if (action === "automatic") return reviewCapture(c, {});
       if (action === "manual") return reviewCapture(c, {manual:true, title:q("title").value, identifier:q("identifier").value});
       if (action === "origin") return reviewCapture(c, {use_origin:true});
-      if (action === "download") return downloadCapture(c);
+      if (action === "download") return downloadCapture(c, !(c.review.snapshot.is_pdf || c.review.snapshot.loaded_pdf_urls?.includes(q("pdf_url").value)));
+      if (action === "redownload") return downloadCapture(c, true);
       if (action === "folder") {
         if (typeof openLibraryAddMenu !== "function") { captureStatus(c, "The Library folder picker is unavailable. Reopen Gewu Insight.app.", true); return; }
         event.preventDefault(); event.stopPropagation();
@@ -523,11 +547,24 @@
       element.querySelector('[data-capture="save"]').disabled = true;
       captureStatus(c, "Click Identify to review the changed identifier before saving.");
     };
+    element.querySelector('[name="target_key"]').oninput = () => {
+      if (c.review) c.review.can_save = false;
+      element.querySelector('[data-capture="save"]').disabled = true;
+      element.querySelector('.capture-target-status').textContent = "";
+      captureStatus(c, "Press Enter or Use Key to review this target.");
+    };
+    element.querySelector('[name="confirm_target"]').onchange = event => reviewCapture(c, {...c.identity, confirm_target:event.target.checked});
+    element.querySelector('[name="pdf_url"]').onchange = () => {
+      const loaded = c.review.snapshot.is_pdf || c.review.snapshot.loaded_pdf_urls?.includes(element.querySelector('[name="pdf_url"]').value);
+      element.querySelector('[data-capture="download"]').textContent = loaded ? "Use Loaded PDF" : "Get PDF";
+      element.querySelector('[data-capture="redownload"]').hidden = !loaded || c.review.pdf_ready;
+    };
     element.querySelector('[name="local_pdf"]').onchange = async event => {
       const file = event.target.files[0];
       if (!file || c.busy || !c.review) return;
-      if (!file.size || file.size > 64 * 1024 * 1024) { captureStatus(c, "Choose a PDF up to 64 MB.", true); return; }
+      if (!file.size || file.size > 128 * 1024 * 1024) { captureStatus(c, "Choose a PDF up to 128 MB.", true); return; }
       captureBusy(c, true, "Checking the selected PDF…");
+      if (c.identity) c.identity.confirm_target = false;
       try {
         const response = await fetch("/api/browser-capture-file", {method:"POST", headers:{"Content-Type":"application/pdf", "X-Gewu-Capture-Token":c.review.upload_token, "X-Gewu-Filename":encodeURIComponent(file.name)}, body:file});
         const result = await response.json();
@@ -555,11 +592,17 @@
       if (event.error) { captureBusy(c, false); captureStatus(c, event.error, true); return; }
       c.snapshot = event.snapshot;
       try {
-        const review = await api("capture_begin", {snapshot:{...event.snapshot, origin_library_item_id:c.originLibraryItemId}});
+        const review = await api("capture_begin", {snapshot:event.snapshot});
         if (capturePanel !== c) { api("capture_cancel", {token:review.token}).catch(() => {}); return; }
         renderCapture(c, review);
-        if (review.snapshot.is_pdf && review.snapshot.pdf_urls.length) downloadCapture(c);
+        const loaded = review.snapshot.loaded_pdf_urls || [];
+        if ((review.snapshot.is_pdf && review.snapshot.pdf_urls.length) || loaded.length === 1) {
+          if (loaded.length === 1) c.element.querySelector('[name="pdf_url"]').value = loaded[0];
+          downloadCapture(c);
+        } else if (loaded.length > 1) captureStatus(c, "Multiple loaded PDFs found. Choose a PDF in Details.");
       } catch (error) { if (capturePanel === c) { captureBusy(c, false); captureStatus(c, error.message, true); } }
+    } else if (event.event === "capture-progress" && event.token === c.review?.token) {
+      if (c.busy && !c.saving) captureStatus(c, event.message || "Reading PDF information…");
     } else if (event.event === "capture-pdf" && event.token === c.review?.token) {
       if (event.error) { captureBusy(c, false); captureStatus(c, event.error + " You can save the article alone or choose a local PDF.", true); }
       else await reviewCapture(c);
@@ -625,14 +668,19 @@
     }
     const first = !data.opened;
     if (state.mode !== "browser") {
-      data.workspaceReturn = typeof captureBrowserWorkspaceReturn === "function" ? captureBrowserWorkspaceReturn() : null;
+      data.workspaceReturn = typeof captureBrowserWorkspaceReturn === "function" ? captureBrowserWorkspaceReturn(context) : null;
     }
+    const returnID = data.workspaceReturn ? crypto.randomUUID() : "";
+    if (returnID) data.workspaceReturns.set(returnID, data.workspaceReturn);
+    // A tab may retain its origin across workspace changes; bound old closures.
+    while (data.workspaceReturns.size > 64) data.workspaceReturns.delete(data.workspaceReturns.keys().next().value);
     // Suppress cold Home navigation: the first product link uses the unused
     // initial tab. Later links always preserve every existing Browser document.
     data.opened = true;
     open();
     message("");
-    native({action:first ? "navigate" : "new-tab", url:url.href, ...(context.paper_id ? {origin_paper_id:context.paper_id} : {})});
+    native({action:first ? "navigate" : "new-tab", url:url.href, workspace_return_id:returnID,
+      origin_library_item_id:Number(context.library_item_id || 0), ...(context.paper_id ? {origin_paper_id:context.paper_id} : {})});
     return "Browser";
   }
   function returnToWorkspace() {
@@ -720,7 +768,7 @@
   }
 
   global.gewuBrowserNativeEvent = event => {
-    if (["capture-metadata", "capture-pdf", "capture-backdrop"].includes(event.event)) { captureEvent(event); return; }
+    if (["capture-metadata", "capture-pdf", "capture-backdrop", "capture-progress"].includes(event.event)) { captureEvent(event); return; }
     if (event.event === "bookmark-source-cancel") {
       data.sourceSync = null; data.sourceSyncBusy = false;
       if (event.message) message(event.message, true);
@@ -759,6 +807,10 @@
       for (const id of data.tabChrome.keys()) if (!data.browserTabs.some(tab => tab.id === id)) data.tabChrome.delete(id);
       renderTabs();
     } else if (event.event === "state") {
+      if (Object.hasOwn(event, "workspace_return_id")) {
+        data.workspaceReturn = data.workspaceReturns.get(event.workspace_return_id) || null;
+        scheduleLayout();
+      }
       const switched = event.tab_id && event.tab_id !== data.browserTab;
       if (switched) {
         if (data.browserTab) data.tabChrome.set(data.browserTab, {favoritePath:data.favoritePath, favoritePage:data.favoritePage});

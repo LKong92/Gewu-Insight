@@ -58,3 +58,20 @@ Regression coverage includes repeated Scholar pagination/typography, later DOI
 and arXiv completion, concurrent writers, source conflicts, old-ID bulk operations,
 all Monitor relationships, file/default preservation, stale-plan/unknown-FK
 rollback, migration without a sweep and MCP scope/idempotency.
+
+## Browser capture review
+
+Browser review and final save use the same canonical identity resolver. Effective
+manual DOI/arXiv corrections override stale raw fields and stale registry claims.
+Shared arXiv normalization accepts standalone IDs, explicit arXiv labels/URLs and
+arXiv DOIs; a suffix inside another publisher DOI is not an arXiv identity.
+
+Open Website/arXiv links bind the source paper and selected occurrence to the tab;
+related popup tabs inherit them. Source context cannot override contradictory
+current evidence. Details can select an existing Gewu Key (including a known
+alias), then reviews the target and its active placement. Unknown Keys create
+nothing. Conflicting evidence requires explicit acknowledgement for this target;
+a new PDF invalidates that acknowledgement. Save rechecks effective identifiers
+and rejects an intervening correction. It preserves the existing bibliography,
+file classifications and manual Default. Review and cancel are read-only; this
+repair performs no historical merge or automatic data cleanup.

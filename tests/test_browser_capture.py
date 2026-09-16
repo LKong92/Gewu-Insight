@@ -65,6 +65,44 @@ class BrowserCaptureTests(unittest.TestCase):
     def count(self, table):
         return self.storage.conn.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]
 
+    def test_uploaded_original_is_parsed_once_and_metadata_is_recomputed(self):
+        from paper_monitor import pdf_utils
+        first = self.begin()
+        second = self.begin()
+        for capture, title in ((first, 'First original document'), (second, 'Second original document')):
+            content = self.pdf(title)
+            with patch.object(pdf_utils, 'PdfReader', wraps=pdf_utils.PdfReader) as parse, patch.object(ui, 'PdfReader', side_effect=AssertionError('reparsed PDF')):
+                self.service.upload(capture, content)
+            self.assertEqual(parse.call_count, 1)
+            self.assertEqual(capture.pdf_metadata_title, title)
+            self.assertEqual(capture.path.read_bytes(), content)
+        self.assertNotEqual(first.pdf_metadata_title, second.pdf_metadata_title)
+
+    def test_reused_reader_preserves_identifier_and_first_page_title(self):
+        from reportlab.pdfgen import canvas
+        from paper_monitor.pdf_utils import validated_pdf_reader
+        content = io.BytesIO()
+        writer = canvas.Canvas(content)
+        writer.setTitle('Quantum sensing using synthetic photons')
+        writer.setFont('Helvetica-Bold', 18)
+        writer.drawString(72, 740, 'Quantum sensing using synthetic photons')
+        writer.setFont('Helvetica', 12)
+        writer.drawString(72, 700, 'doi: 10.1234/fixture')
+        writer.showPage()
+        writer.setFont('Helvetica-Bold', 30)
+        writer.drawString(72, 740, 'Supplementary document for another study')
+        writer.save()
+        path = self.root / 'evidence.pdf'
+        path.write_bytes(content.getvalue())
+        expected = ui.extract_identifier_from_pdf_or_title(path, {}, title_lookup=lambda _: {})
+        first_page = {}
+        reader = validated_pdf_reader(content.getvalue())
+        titles = ui.pdf_layout_title_candidates(path, reader=reader, first_page_result=first_page)
+        metadata, texts = ui.pdf_identifier_page_texts(path, reader=reader)
+        self.assertEqual(ui.extract_identifier_from_pdf_or_title(path, {}, title_lookup=lambda _: {}, pdf_evidence=(metadata, texts, titles)), expected)
+        self.assertEqual(expected['identifier'], '10.1234/fixture')
+        self.assertEqual(first_page['titles'], ui.pdf_layout_title_candidates(path, page_limit=1))
+
     def test_review_cancel_never_creates_papers_placements_or_resources(self):
         capture = self.begin()
         review = self.review(capture)
@@ -224,15 +262,121 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
         self.assertEqual(self.count('library_items'), 1)
 
-    def test_open_website_origin_is_a_hint_not_automatic_attachment(self):
+    def test_open_website_origin_reuses_source_unless_page_identifies_another_article(self):
         origin = self.paper(url='https://example.org/source')
         capture = self.begin(doi='', origin_url=origin['url'])
         review = self.review(capture)
-        self.assertIsNone(review['paper'])
+        self.assertEqual(review['paper']['paper_id'], 'first')
+        self.assertTrue(review['paper']['existing'])
         self.assertEqual(review['origin']['gewu_key'], origin['storage_key'])
         self.assertEqual(self.review(capture, use_origin=True)['paper']['paper_id'], 'first')
         other = self.begin(doi='10.1234/second', origin_paper_id='first')
         self.assertNotEqual(self.review(other, use_origin=True)['paper']['paper_id'], 'first')
+
+    def corrected_paper(self):
+        paper = self.paper(doi='10.1109/iccv51701.2025.00828')
+        self.storage.conn.execute('UPDATE papers SET raw_json=? WHERE paper_id=?',
+            ('{"arxiv_id":"2025.00828","manual_preprint_identifier_override":true,"manual_preprint_identifier":"2503.19940"}', paper['paper_id']))
+        self.storage.conn.commit()
+        from paper_monitor import paper_identity
+        paper = self.storage.get_paper(paper['paper_id'])
+        paper_identity.register(self.storage, paper); self.storage.conn.commit()
+        return paper
+
+    def test_manual_arxiv_correction_reused_in_review_save_and_pdf_identity(self):
+        paper = self.corrected_paper()
+        folder = self.storage.ensure_library_folder(parent_id=1, name='AI')
+        item = self.storage.add_library_item(paper_id=paper['paper_id'], folder_id=folder['id'])
+        capture = self.service.begin(self.db, {'url':'https://arxiv.org/pdf/2503.19940v2','is_pdf':True})
+        self.upload(capture, {'kind':'arxiv','identifier':'2503.19940'}, source_url=capture.snapshot['url'])
+        review = self.review(capture)
+        self.assertEqual(review['paper']['gewu_key'], paper['storage_key'])
+        self.assertTrue(review['paper']['existing'])
+        self.assertEqual(review['destination']['item_id'], item['id'])
+        self.assertTrue(self.service.same_identity(self.storage, ('doi',paper['doi']), ('arxiv','2503.19940')))
+        self.assertIsNone(self.service.existing(self.storage, 'arxiv','2025.00828'))
+        result = self.save(capture, include_pdf=True)
+        self.assertEqual(result['gewu_key'], paper['storage_key']); self.assertEqual(self.count('papers'), 1)
+        self.assertEqual(result['folder_id'], folder['id'])
+        file = self.storage.list_paper_resources(paper['paper_id'])[0]
+        self.assertEqual(file['file_type'],'preprint')
+
+    def test_cleared_arxiv_cannot_match_stale_source_or_old_paper_id(self):
+        paper = self.corrected_paper()
+        self.storage.conn.execute("UPDATE papers SET raw_json=? WHERE paper_id=?", ('{"arxiv_id":"2503.19940","manual_preprint_identifier_override":true,"manual_preprint_identifier":""}', paper['paper_id']))
+        self.storage.conn.commit()
+        self.assertIsNone(self.service.existing(self.storage,'arxiv','2503.19940'))
+
+    def test_manual_target_key_moves_review_to_existing_location_without_metadata_edits(self):
+        target = self.paper(key='target',doi='10.1234/correct',title='A different target article')
+        folder = self.storage.ensure_library_folder(parent_id=1,name='Target folder')
+        self.storage.add_library_item(paper_id=target['paper_id'],folder_id=folder['id'])
+        capture = self.begin()
+        review = self.review(capture,target_key=target['storage_key'])
+        self.assertTrue(review['target_conflict']); self.assertFalse(review['can_save'])
+        self.assertEqual(review['destination']['folder_id'],folder['id'])
+        with self.assertRaises(ValueError): self.save(capture)
+        self.review(capture,target_key=target['storage_key'],confirm_target=True)
+        before = self.storage.get_paper('target')
+        result = self.save(capture)
+        self.assertEqual(result['gewu_key'], target['storage_key'])
+        after = self.storage.get_paper('target')
+        for field in ('title','doi','storage_key','preferred_resource_id','preferred_resource_manual'):
+            self.assertEqual(before.get(field),after.get(field),field)
+        import json
+        old_raw,new_raw=json.loads(before['raw_json']),json.loads(after['raw_json'])
+        old_raw.pop('_paper_monitor_sources',None);new_raw.pop('_paper_monitor_sources',None)
+        self.assertEqual(old_raw,new_raw)
+        self.assertEqual(self.count('papers'),1)
+
+    def test_invalid_key_revokes_previous_review_and_does_not_create_record(self):
+        target = self.paper()
+        capture = self.begin()
+        self.review(capture)
+        for key in ('gw_0000000000','bad key'):
+            with self.assertRaises(ValueError): self.review(capture,target_key=key)
+            with self.assertRaises(ValueError): self.save(capture)
+        self.assertEqual(self.count('papers'),1)
+        self.assertEqual(self.review(capture)['paper']['gewu_key'],target['storage_key'])
+
+    def test_manual_key_alias_resolves_to_current_key(self):
+        from paper_monitor import paper_identity
+        target = self.paper()
+        paper_identity.add_alias(self.storage, 'gw_abcdef0123', target['paper_id'])
+        self.storage.conn.commit()
+        capture = self.begin()
+        review = self.review(capture, target_key='gw_abcdef0123')
+        self.assertEqual(review['target_key'], target['storage_key'])
+        self.assertTrue(review['can_save'])
+        self.assertEqual(self.save(capture)['gewu_key'], target['storage_key'])
+
+    def test_embedded_ieee_pdf_resolves_identity_and_published_type(self):
+        target = self.corrected_paper()
+        url = 'https://ieeexplore.ieee.org/stamppdf/getPDF.jsp?arnumber=11443405'
+        capture = self.service.begin(self.db, {'url':'https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=11443405',
+            'pdf_urls':[url], 'loaded_pdf_urls':[url], 'metadata':{}})
+        self.assertIsNone(self.review(capture)['paper'])
+        self.upload(capture, {'kind':'doi','identifier':target['doi']}, source_url=url)
+        review = self.review(capture)
+        self.assertEqual(review['paper']['gewu_key'], target['storage_key'])
+        self.assertEqual(review['suggested_file_type'], 'published_version')
+        self.assertTrue(review['can_save'])
+
+    def test_target_identifier_changed_after_review_requires_fresh_review(self):
+        target = self.paper()
+        capture = self.begin(); self.review(capture)
+        self.storage.conn.execute('UPDATE papers SET doi=? WHERE paper_id=?',('10.1234/new',target['paper_id']))
+        self.storage.conn.commit()
+        with self.assertRaisesRegex(ValueError,'identifiers changed'): self.save(capture)
+
+    def test_arxiv_parser_rejects_publisher_doi_suffixes_and_arbitrary_urls(self):
+        from paper_monitor.text import normalize_arxiv_identifier
+        for value in ('10.1109/iccv51701.2025.00828','https://doi.org/10.1109/x.2025.00828','https://publisher.org/2503.19940','2025.00828','https://publisher.org/doi/10.1234/2503.19940'):
+            self.assertEqual(normalize_arxiv_identifier(value),'',value)
+        for value in ('2503.19940v2','arXiv:2503.19940','https://arxiv.org/pdf/2503.19940v2','https://doi.org/10.48550/arXiv.2503.19940'):
+            self.assertEqual(normalize_arxiv_identifier(value),'2503.19940')
+        self.assertEqual(normalize_arxiv_identifier('https://arxiv.org/abs/cond-mat/0101234v2'),'cond-mat/0101234')
+        self.assertEqual(ui.arxiv_identifier_for_paper({'doi':'10.1109/x.2025.00828','url':'https://doi.org/10.1109/x.2025.00828'}),'')
 
     def test_pdf_page_mismatch_and_wrong_manual_identifier_block_save(self):
         self.paper()

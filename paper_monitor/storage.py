@@ -19,6 +19,7 @@ from . import paper_identity
 from .text import (
     is_placeholder_publication_title,
     normalize_doi,
+    normalize_arxiv_identifier,
     normalize_publication_title,
     paper_is_from_zenodo,
 )
@@ -1045,6 +1046,9 @@ class Storage:
             raw = {}
         if not isinstance(raw, dict):
             raw = {}
+        if raw.get("manual_preprint_identifier_override") is True:
+            value = normalize_arxiv_identifier(raw.get("manual_preprint_identifier"))
+            return [value] if value else []
         preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
         versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
         preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
@@ -1062,11 +1066,7 @@ class Storage:
             candidates.append(paper_id[6:])
         normalized: list[str] = []
         for candidate in candidates:
-            value = str(candidate or "").strip()
-            value = re.sub(r"^arxiv:\s*", "", value, flags=re.IGNORECASE)
-            value = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/", "", value, flags=re.IGNORECASE)
-            value = re.sub(r"\.pdf(?:\?.*)?$", "", value, flags=re.IGNORECASE)
-            value = re.sub(r"v\d+$", "", value, flags=re.IGNORECASE)
+            value = normalize_arxiv_identifier(candidate)
             if value and value.casefold() not in {item.casefold() for item in normalized}:
                 normalized.append(value)
         return normalized

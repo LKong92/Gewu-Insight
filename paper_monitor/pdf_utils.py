@@ -34,18 +34,22 @@ def _reader_is_parseable(reader: PdfReader) -> bool:
     return True
 
 
+def validated_pdf_reader(content: bytes) -> PdfReader | None:
+    """Validate a complete PDF and retain its reader for subsequent extraction."""
+    if not content or not _has_pdf_envelope(
+        content[:PDF_HEADER_SCAN_BYTES], content[-PDF_TRAILER_SCAN_BYTES:],
+    ):
+        return None
+    try:
+        reader = PdfReader(BytesIO(content), strict=False)
+        return reader if _reader_is_parseable(reader) else None
+    except Exception:
+        return None
+
+
 def is_valid_pdf_bytes(content: bytes) -> bool:
     """Return whether bytes contain a complete, parseable PDF document."""
-
-    if not content or not _has_pdf_envelope(
-        content[:PDF_HEADER_SCAN_BYTES],
-        content[-PDF_TRAILER_SCAN_BYTES:],
-    ):
-        return False
-    try:
-        return _reader_is_parseable(PdfReader(BytesIO(content), strict=False))
-    except Exception:
-        return False
+    return validated_pdf_reader(content) is not None
 
 
 def is_valid_pdf_file(path: Path) -> bool:

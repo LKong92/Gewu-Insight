@@ -5,6 +5,7 @@ from html import unescape
 import json
 import re
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -12,6 +13,28 @@ from bs4 import BeautifulSoup
 def clean_text(value: Any) -> str:
     text = "" if value is None else str(value)
     return re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
+
+
+def normalize_arxiv_identifier(value: Any) -> str:
+    """Accept arXiv identifiers/evidence, never a number inside another DOI/URL."""
+    text = unquote(clean_text(value)).strip('<> ').rstrip('.,;')
+    if re.match(r'https?://', text, re.I):
+        url = urlsplit(text)
+        if url.hostname in {'arxiv.org', 'www.arxiv.org', 'export.arxiv.org'}:
+            text = re.sub(r'^/(?:abs|pdf|html)/', '', url.path, flags=re.I)
+        elif url.hostname in {'doi.org', 'dx.doi.org'}:
+            text = url.path.lstrip('/')
+        else:
+            return ''
+    text = re.sub(r'^(?:doi:\s*)?10\.48550/arxiv\.', '', text, flags=re.I)
+    # Explicit arXiv labels may occur in citation text; bare numbers must occupy
+    # the whole value. This excludes IEEE DOI suffixes such as 2025.00828.
+    marked = re.search(r'\barxiv\s*[:_]\s*([^\s<>]+)', text, re.I)
+    if marked:
+        text = marked.group(1).rstrip('.,;')
+    text = re.sub(r'\.pdf$', '', text, flags=re.I)
+    match = re.fullmatch(r'(\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?/\d{2}(?:0[1-9]|1[0-2])\d{3})(?:v\d+)?', text, re.I)
+    return match.group(1).lower() if match else ''
 
 
 def clean_markup_text(value: Any) -> str:

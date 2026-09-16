@@ -73,7 +73,9 @@ class MacosWindowBehaviorTests(unittest.TestCase):
             info = plistlib.load(handle)
 
         self.assertEqual(info["CFBundleIconFile"], expected_name)
-        self.assertEqual(info["CFBundleVersion"], expected_build)
+        from paper_monitor import __build__, __version__
+        self.assertEqual(info["CFBundleVersion"], str(__build__))
+        self.assertEqual(info["CFBundleShortVersionString"], __version__)
         self.assertTrue((resources / f"{expected_name}.icns").is_file())
         self.assertEqual(
             (resources / f"{expected_name}.png").read_bytes(),
@@ -85,7 +87,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         )
 
         build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()
-        self.assertIn('APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_BUILD_VERSION"', build_script)
+        self.assertIn('APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_CACHE_KEY"', build_script)
         self.assertIn('touch "$APP"', build_script)
 
     def test_native_about_panel_uses_bundle_identity_and_explicit_credits(self) -> None:
@@ -154,11 +156,12 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[LICENSE](LICENSE)", readme)
         self.assertNotIn("Licensed under the MIT License", readme)
 
-        self.assertTrue(readme.startswith("# Gewu Insight\n\n**Keep research objects visible"))
+        self.assertTrue(readme.startswith("# Gewu Insight\n"))
+        self.assertIn("**Keep research objects visible", readme)
         self.assertIn("## Platform support", readme)
         self.assertIn("the current native desktop release", readme)
-        self.assertIn("planned as an experimental desktop release", readme)
-        self.assertIn("not yet a supported distribution", readme)
+        self.assertIn("developed separately on the experimental Windows branch", readme)
+        self.assertIn("do not establish Windows feature parity", readme)
         self.assertIn("## Name and Chinese origin", readme)
         self.assertGreater(readme.index("格物洞见"), readme.index("## Name and Chinese origin"))
 

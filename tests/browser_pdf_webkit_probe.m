@@ -2,11 +2,12 @@
 // Only this test admits its loopback URLs; production URL guards are unchanged.
 #import "GewuBrowserNavigation.h"
 static NSString *fixtureOrigin;
-static BOOL fixtureURL(NSURL *u) { return GewuBrowserPublicURL(u) || [u.absoluteString hasPrefix:[fixtureOrigin stringByAppendingString:@"/"]]; }
+static BOOL fixtureURL(NSURL *u) { return GewuBrowserPublicURL(u) || [u.absoluteString hasPrefix:[fixtureOrigin stringByAppendingString:@"/"]] || ([u.host isEqual:@"localhost"] && [u.port isEqual:[NSURL URLWithString:fixtureOrigin].port]); }
 static BOOL fixtureBlob(NSURL *u, NSURL *s) { return GewuBrowserBlobURL(u,s) || ([s.absoluteString hasPrefix:fixtureOrigin] && [u.absoluteString hasPrefix:[@"blob:" stringByAppendingFormat:@"%@/",fixtureOrigin]]); }
 #define GewuBrowserPublicURL fixtureURL
 #define GewuBrowserBlobURL fixtureBlob
 #import "GewuBrowserController.m"
+#import "GewuBrowserCapture.m"
 #undef GewuBrowserPublicURL
 #undef GewuBrowserBlobURL
 
@@ -58,7 +59,9 @@ int main(int argc,const char **argv){@autoreleasepool{
  load(b,@"/binary"); // PDF becomes a data document with the same URL.
  awaitPDF(b,b.currentPage);check(b.received==3,"binary MIME PDF opens inline");
  load(b,@"/start");GewuBrowserTab *opener=b.selectedTab;
+ opener.originPaperID=@"source-paper";opener.originLibraryItemID=101;opener.workspaceReturnID=@"source-return";
  check(js(b.webView,@"document.getElementById('popup').click()"),"publisher popup link clicked");check(spin(^BOOL{return b.tabs.count==2;}),"new tab tracked");awaitPDF(b,b.currentPage);check(b.selectedTab!=opener,"PDF uses publisher-created tab");
+ check([b.selectedTab.originPaperID isEqual:@"source-paper"] && b.selectedTab.originLibraryItemID==101 && [b.selectedTab.workspaceReturnID isEqual:@"source-return"],"related PDF tab inherits paper, placement and return context");
  [b closeTab:b.selectedTab];check(b.selectedTab==opener,"closing PDF restores opener");
  check(js(b.webView,@"let raw=atob(fixtureBase64);let bytes=Uint8Array.from(raw,x=>x.charCodeAt(0));let u=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));let a=document.createElement('a');a.href=u;a.download='Generated.pdf';a.target='_blank';document.body.appendChild(a);a.click();"),"page creates blob PDF link");
  awaitPDF(b,b.currentPage);check([b.webView.URL.path isEqual:@"/start"],"blob PDF retains public creating page as source");
@@ -88,8 +91,57 @@ int main(int argc,const char **argv){@autoreleasepool{
  b.onEvent=^(NSDictionary *e){if([e[@"event"] isEqual:@"capture-pdf"]){uploaded=YES;uploadError=e[@"error"];}};
  [b captureDownload:@{@"snapshot_id":@"fixture",@"url":publicSource.absoluteString,@"token":@"fixture-ticket",@"upload_token":@"synthetic-capture-token-0123456789abcdef"}];
  check(spin(^BOOL{return uploaded;})&&!uploadError.length,"Save to Gewu uses displayed bytes without another publisher request");
- [b handleCommand:@{@"action":@"download"}];check([b.saveRequest[@"data"] isEqual:expected],"explicit Save Download offers the received PDF bytes");
+ [b handleCommand:@{@"action":@"download"}];
+ check(spin(^BOOL{return b.saveRequest!=nil;}),"Save Download opens its save request");
+ check([[NSData dataWithContentsOfURL:[b.saveRequest[@"file"] URL]] isEqual:expected],"explicit Save Download offers the received PDF bytes");
  NSInteger beforeInline=b.received;load(b,@"/inline");check(b.received==beforeInline,"ordinary inline PDF does not enter temporary download flow");
+ __block GewuBrowserPDFFile *loadedFile; __block NSString *loadedError; __block BOOL read=NO;
+ [b loadedPDFForPage:b.currentPage URL:b.webView.URL.absoluteString completion:^(GewuBrowserPDFFile *file,NSString *error){loadedFile=file;loadedError=error;read=YES;}];
+ check(spin(^BOOL{return read;}) && loadedFile && !loadedError,"WebKit exposes an already loaded no-store PDF");
+ check([[NSData dataWithContentsOfURL:loadedFile.URL] isEqual:expected],"loaded resource is byte-for-byte original PDF, not a viewer archive or generated PDF");
+ NSURL *reusedURL=loadedFile.URL;
+ read=NO; [b loadedPDFForPage:b.currentPage URL:b.webView.URL.absoluteString completion:^(GewuBrowserPDFFile *file,NSString *error){check([file.URL isEqual:reusedURL],"cancel/reopen reuses the same scoped copy");read=YES;}];
+ check(read,"repeat read reuses local copy immediately");
+ b.saveRequest=nil; [b handleCommand:@{@"action":@"download"}];
+ check([b.saveRequest[@"file"] URL]==reusedURL,"footer exports the loaded inline PDF");
+ b.saveRequest=nil;
+ [b _webView:b.webView saveDataToFile:expected suggestedFilename:@"Generated.pdf" mimeType:@"application/pdf" originatingURL:b.webView.URL];
+ check(spin(^BOOL{return b.saveRequest!=nil;}),"native PDF HUD callback reaches Save Download");
+ check([[NSData dataWithContentsOfURL:[b.saveRequest[@"file"] URL]] isEqual:expected],"native PDF HUD exports its original bytes");
+ b.saveRequest=nil;
+ GewuBrowserCapture *inlineCapture=[GewuBrowserCapture new];uploaded=NO;uploadError=nil;
+ [inlineCapture uploadPDFFile:loadedFile sourceURL:publicSource workspaceURL:workspace.URL uploadToken:@"synthetic-capture-token-0123456789abcdef" completion:^(NSString *error){uploaded=YES;uploadError=error;}];
+ check(spin(^BOOL{return uploaded;})&&!uploadError.length,"loaded original goes through capture upload and byte validation");
+ load(b,@"/inline");check(!b.currentPage.capturedPDF,"same URL navigation invalidates the previous document copy");
+ loadedFile=nil;
+ load(b,@"/wrapper");
+ __block NSDictionary *frameSnapshot;
+ b.onEvent=^(NSDictionary *e){if([e[@"event"] isEqual:@"capture-metadata"])frameSnapshot=e[@"snapshot"];else if([e[@"event"] isEqual:@"capture-pdf"]){uploaded=YES;uploadError=e[@"error"];}};
+ [b capturePage:@{@"request_id":@"embedded-review"}];
+ check(spin(^BOOL{return frameSnapshot!=nil;}) && [frameSnapshot[@"loaded_pdf_urls"] count]==1 && ![frameSnapshot[@"is_pdf"] boolValue],"HTML wrapper capture exposes its loaded PDF to Save to Gewu");
+ check([frameSnapshot[@"origin_paper_id"] isEqual:@"source-paper"] && [frameSnapshot[@"origin_library_item_id"] integerValue]==101,"capture keeps the original Library occurrence");
+ __block NSArray *embeddedFrames; __block BOOL foundFrames=NO;
+ GewuLoadedBrowserPDFFrames(b.webView,^(NSArray *frames){embeddedFrames=frames;foundFrames=YES;});
+ check(spin(^BOOL{return foundFrames;}) && embeddedFrames.count==1,"cross-origin embedded PDF discovered without a filename suffix");
+ NSDictionary *boundFrame=embeddedFrames[0];
+ read=NO;loadedError=nil;
+ [b loadedPDFForPage:b.currentPage frame:boundFrame completion:^(GewuBrowserPDFFile *file,NSString *error){loadedFile=file;loadedError=error;read=YES;}];
+ BOOL embeddedRead=spin(^BOOL{return read;});
+ if(!loadedFile)fprintf(stderr,"Embedded PDF error: %s\n",(loadedError?:@"callback pending").UTF8String);
+ check(embeddedRead && loadedFile && !loadedError,"loaded embedded PDF can be exported");
+ check([[NSData dataWithContentsOfURL:loadedFile.URL] isEqual:expected],"embedded bytes exactly match the original, not viewer HTML");
+ uploaded=NO;uploadError=nil;
+ [b captureDownload:@{@"snapshot_id":frameSnapshot[@"snapshot_id"],@"url":boundFrame[@"url"],@"token":@"embedded-ticket",@"upload_token":@"synthetic-capture-token-0123456789abcdef"}];
+ check(spin(^BOOL{return uploaded;})&&!uploadError.length,"Save to Gewu uploads loaded embedded PDF without a second GET");
+ b.saveRequest=nil;[b handleCommand:@{@"action":@"download"}];
+ check(spin(^BOOL{return b.saveRequest!=nil;}),"footer saves the embedded PDF");
+ check([[NSData dataWithContentsOfURL:[b.saveRequest[@"file"] URL]] isEqual:expected],"footer embedded export keeps original bytes");
+ check(js(b.webView,@"document.getElementById('pdf').src='/other'"),"child frame changes independently of top document");
+ __block BOOL stale=NO;
+ check(spin(^BOOL{__block BOOL checked=NO;GewuBrowserPDFFrameIsCurrent(b.webView,boundFrame,^(BOOL current){stale=!current;checked=YES;});spin(^BOOL{return checked;});return stale;}),"old embedded document reference is invalidated");
+ read=NO;loadedFile=nil;
+ [b loadedPDFForPage:b.currentPage frame:boundFrame completion:^(GewuBrowserPDFFile *file,NSString *error){loadedFile=file;loadedError=error;read=YES;}];
+ check(spin(^BOOL{return read;})&&!loadedFile&&loadedError.length,"cached embedded bytes cannot be reused after frame navigation");
  load(b,@"/start");check(js(b.webView,@"document.getElementById('slow').click()"),"download started before tab close");check(spin(^BOOL{return b.currentPage.openingPDF;}),"closing test download reports progress");
  [b closeTab:b.selectedTab];check(b.downloads.count==0,"closing source tab cancels its pending preview");
  [b invalidate];check(spin(^BOOL{for(NSURL *u in b.temporaryDirectories)if([NSFileManager.defaultManager fileExistsAtPath:u.path])return NO;return YES;}),"all preview temporary directories removed");

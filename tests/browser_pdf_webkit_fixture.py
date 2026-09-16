@@ -5,7 +5,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 import subprocess
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from reportlab.pdfgen import canvas
@@ -41,6 +43,11 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(PDF, 'application/octet-stream', True)
         elif self.path == '/inline':
             self.reply(PDF, 'application/pdf')
+        elif self.path == '/embedded':
+            self.reply(PDF, 'application/pdf')
+        elif self.path == '/wrapper':
+            body=(f'<!doctype html><title>Embedded PDF fixture</title><iframe id="pdf" src="http://localhost:{self.server.server_port}/embedded" width="750" height="550"></iframe>').encode()
+            self.reply(body, 'text/html')
         elif self.path.startswith('/attachment'):
             self.reply(PDF, 'application/pdf', True)
         else:
@@ -63,6 +70,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', mime)
         self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
         if attachment:
             self.send_header('Content-Disposition', 'attachment; filename="Generated.pdf"')
         self.end_headers()
@@ -77,10 +85,19 @@ class Handler(BaseHTTPRequestHandler):
 
 with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    result = subprocess.run([sys.argv[1], 'http://127.0.0.1:' + str(server.server_port)], timeout=150)
+    with tempfile.TemporaryDirectory(prefix='gewu-pdf-fixture-') as folder:
+        bundle = Path(folder) / 'Fixture.app' / 'Contents'
+        (bundle / 'MacOS').mkdir(parents=True)
+        (bundle / 'Resources').mkdir()
+        executable = bundle / 'MacOS' / 'Fixture'
+        shutil.copy2(sys.argv[1], executable)
+        shutil.copy2(Path(__file__).resolve().parents[1] / 'scripts' / 'GewuBrowserCaptureProbe.js', bundle / 'Resources')
+        result = subprocess.run([str(executable), 'http://127.0.0.1:' + str(server.server_port)], timeout=150)
     server.shutdown()
     if result.returncode:
         raise SystemExit(result.returncode)
 assert counts['POST /post'] == 1 and counts['GET /post'] == 0, counts
-assert counts['POST /api/browser-capture-file'] == 1, counts
-print('Fixture requests: POST performed exactly once; displayed PDF uploaded byte-for-byte; no live websites.')
+assert counts['POST /api/browser-capture-file'] == 3, counts
+assert counts['GET /inline'] == 2, counts  # Initial display and deliberate navigation only.
+assert counts['GET /embedded'] == 1, counts
+print('Fixture requests: inline and embedded PDFs reused without another GET; all three uploads match original bytes; no live websites.')

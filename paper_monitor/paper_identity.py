@@ -10,6 +10,7 @@ import re
 import unicodedata
 from urllib.parse import parse_qs, unquote, urlparse
 from .time_utils import now_iso
+from .text import normalize_arxiv_identifier
 
 
 def doi(value):
@@ -47,8 +48,8 @@ def identifiers(storage, paper):
         if doi(paper.get('doi')).startswith('10.48550/arxiv.'):
             values.append(doi(paper['doi']).split('arxiv.', 1)[1])
     for value in values:
-        value = re.sub(r'v\d+$', '', str(value).removesuffix('.pdf'), flags=re.I).casefold()
-        if re.fullmatch(r'(?:\d{4}\.\d{4,5}|[a-z.-]+/\d{7})', value):
+        value = normalize_arxiv_identifier(value)
+        if value:
             result.add(('arxiv', value))
     scholar = raw.get('google_scholar') or {}
     urls = [paper.get(k) for k in ('url', 'landing_url')]

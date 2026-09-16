@@ -5790,7 +5790,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             length = int(self.headers.get("Content-Length") or 0)
             if not 0 < length <= MAX_PDF_BYTES:
                 self.close_connection = True
-                self.send_error_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Choose a PDF up to 64 MB.")
+                self.send_error_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Choose a PDF up to 128 MB.")
                 return
             content = self.rfile.read(length)
             if len(content) != length:
@@ -10706,9 +10706,13 @@ def extract_identifier_from_pdf_or_title(
     paper: dict[str, Any],
     *,
     title_lookup: Callable[[str], dict[str, str]] | None = None,
+    pdf_evidence: tuple[str, list[str], list[str]] | None = None,
 ) -> dict[str, str]:
-    pdf_metadata_title, page_texts = pdf_identifier_page_texts(pdf_path)
-    layout_titles = pdf_layout_title_candidates(pdf_path)
+    if pdf_evidence is None:
+        pdf_metadata_title, page_texts = pdf_identifier_page_texts(pdf_path)
+        layout_titles = pdf_layout_title_candidates(pdf_path)
+    else:
+        pdf_metadata_title, page_texts, layout_titles = pdf_evidence
     title_candidates = article_title_candidates_for_identifier(
         paper,
         pdf_metadata_title,
@@ -10755,11 +10759,11 @@ def extract_identifier_from_pdf_or_title(
     return {"kind": "", "identifier": "", "source": "", "lookup_status": "not_attempted"}
 
 
-def pdf_identifier_page_texts(pdf_path: Path, *, page_limit: int = 5) -> tuple[str, list[str]]:
+def pdf_identifier_page_texts(pdf_path: Path, *, page_limit: int = 5, reader: PdfReader | None = None) -> tuple[str, list[str]]:
     metadata_title = ""
     page_texts: list[str] = []
     try:
-        reader = PdfReader(str(pdf_path))
+        reader = reader if reader is not None else PdfReader(str(pdf_path))
         info = reader.metadata or {}
         metadata_title = clean_text(getattr(info, "title", "") or info.get("/Title", ""))
         for page in reader.pages[:max(1, int(page_limit or 3))]:
@@ -10799,10 +10803,13 @@ def article_title_candidates_for_identifier(
     return filtered
 
 
-def pdf_layout_title_candidates(pdf_path: Path, *, page_limit: int = 3) -> list[str]:
+def pdf_layout_title_candidates(pdf_path: Path, *, page_limit: int = 3, reader: PdfReader | None = None, first_page_result: dict | None = None) -> list[str]:
     scored: list[tuple[float, str]] = []
+    first_page_scored: list[tuple[float, str]] = []
+    if first_page_result is not None:
+        first_page_result["titles"] = []
     try:
-        reader = PdfReader(str(pdf_path))
+        reader = reader if reader is not None else PdfReader(str(pdf_path))
     except Exception:
         return []
     for page_index, page in enumerate(reader.pages[:max(1, int(page_limit or 1))]):
@@ -10904,15 +10911,22 @@ def pdf_layout_title_candidates(pdf_path: Path, *, page_limit: int = 3) -> list[
                     - page_index * 1.5
                 )
             scored.append((score, candidate))
-    results: list[str] = []
-    seen: set[str] = set()
-    for _score, candidate in sorted(scored, key=lambda item: item[0], reverse=True):
-        key = normalized_title_key(candidate)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        results.append(candidate)
-    return results[:6]
+            if page_index == 0:
+                first_page_scored.append((score, candidate))
+    def ranked_titles(candidates: list[tuple[float, str]]) -> list[str]:
+        results: list[str] = []
+        seen: set[str] = set()
+        for _score, candidate in sorted(candidates, key=lambda item: item[0], reverse=True):
+            key = normalized_title_key(candidate)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            results.append(candidate)
+        return results[:6]
+
+    if first_page_result is not None:
+        first_page_result["titles"] = ranked_titles(first_page_scored)
+    return ranked_titles(scored)
 
 
 def normalize_pdf_layout_title(value: str) -> str:
@@ -16241,19 +16255,8 @@ def normalize_publication_doi(value: str) -> str:
 
 
 def normalize_arxiv_identifier(value: str) -> str:
-    text = clean_text(value)
-    if not text:
-        return ""
-    text = unquote(text).strip().strip("<>")
-    text = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf|html)/", "", text, flags=re.I)
-    text = re.sub(r"\.pdf(?:[?#].*)?$", "", text, flags=re.I)
-    text = re.sub(r"^arxiv\s*:\s*", "", text, flags=re.I)
-    text = text.strip().strip(".,;")
-    old_style = re.search(r"\b([a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?\b", text, flags=re.I)
-    if old_style:
-        return strip_arxiv_version(old_style.group(1)).lower()
-    new_style = re.search(r"\b(\d{4}\.\d{4,5})(?:v\d+)?\b", text, flags=re.I)
-    return strip_arxiv_version(new_style.group(1)).lower() if new_style else ""
+    from .text import normalize_arxiv_identifier as normalize
+    return normalize(value)
 
 
 def looks_like_arxiv_identifier(value: str) -> bool:
@@ -46510,7 +46513,7 @@ INDEX_HTML = """<!doctype html>
       }
       root?.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
         const url = event.currentTarget?.dataset?.preprintUrl || "";
-        openLibraryWebsiteURL(url);
+        openLibraryWebsiteURL(url, paper);
       });
       root?.querySelector('[data-action="download-arxiv-latest"]')?.addEventListener("click", (event) => {
         downloadArxivPreprintVersions(paper, "latest", event.currentTarget);
@@ -55147,7 +55150,9 @@ INDEX_HTML = """<!doctype html>
       try {
         if (state.websiteLinkBrowser === "system") return openSystemWebsite(url);
         if (!window.gewuBrowser?.openURL) throw new Error("Browser is not ready. Please retry.");
-        return window.gewuBrowser.openURL(url, {paper_id:paper?.paper_id || ""});
+        const selected = state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id) : null;
+        return window.gewuBrowser.openURL(url, {paper_id:paper?.paper_id || "",
+          library_item_id:selected?.paper_id === paper?.paper_id ? selected?.id || 0 : 0});
       } catch (error) {
         showMonitorStatusMessage(error.message || "Could not open website");
         return null;
@@ -58383,13 +58388,12 @@ INDEX_HTML = """<!doctype html>
       renderAutoMonitorStatus();
     }
 
-    function captureBrowserWorkspaceReturn() {
+    function captureBrowserWorkspaceReturn(context = {}) {
       const mode = state.mode;
       if (!["library", "report", "theme", "author"].includes(mode)) return null;
       const view = mode === "library" && state.libraryTab === "my-publications" ? "my-publications" : mode;
       const focus = document.activeElement;
-      // Snapshot only workspace viewport geometry, once per outbound link. Do
-      // not copy paper data, rebuild DOM, fetch records, or inspect web pages.
+      // Retain geometry and stable source IDs, never a stale copy of paper data.
       const selector = "#papers, .sidebar, .library-columns, .library-column-body, .library-table-body, "
         + ".library-detail, .library-resource-body, .library-tab-scroll, .library-search-results-body, "
         + ".my-publications-table-wrap, .my-publications-stat-list, .author-monitor-authors, "
@@ -58399,6 +58403,11 @@ INDEX_HTML = """<!doctype html>
         if (state.mode !== "browser") return;
         state.mode = mode;
         setPrimaryView(view, {preserveViewport:true});
+        if (mode === "library" && view !== "my-publications" && context.paper_id
+            && (state.librarySelection?.type !== "item" || Number(state.librarySelection.id) !== Number(context.library_item_id))) {
+          navigateToPaperInLibrary(context.paper_id, context.library_item_id || 0).catch(error => showMonitorStatusMessage(error.message));
+          return;
+        }
         if (focus?.isConnected) focus.focus({preventScroll:true});
         for (const {element, top, left} of scroll) {
           if (element.isConnected) { element.scrollTop = top; element.scrollLeft = left; }

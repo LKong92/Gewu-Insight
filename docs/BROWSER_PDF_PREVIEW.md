@@ -28,20 +28,47 @@ WebKit's download-transition cancellation is not reported as a navigation failur
 New popup data documents can temporarily lack a back/forward item; their bytes
 are bound to the document generation until a history item is available.
 
-Retained PDF bytes are associated with the actual history item/document, not just
-its URL. Save to Gewu uses its existing snapshot/candidate checks and one-purpose
-upload capability, sending the received bytes to the workspace without another
-publisher request. Saving/refreshing a cached PDF reuses those bytes. The ordinary
-Download / Share > Save Download action still explicitly asks for a destination.
-No browsing operation automatically creates Library items or changes Paper Files,
-classification, Default, canonical Keys or existing placement reuse rules.
+Retained preview bytes are associated with the actual history item/document, not
+just its URL. Save to Gewu and the footer Save Download action now also read
+ordinary inline PDFs from WebKit's loaded main resource. They never silently
+replay the PDF request. The optional `_getMainResourceDataWithCompletionHandler:`
+SPI is checked at runtime; unsupported, incomplete or timed-out extraction shows
+an explicit error. HTML viewer archives, generated/printed PDFs and private
+WebKit cache files are not substitutes for the original. The native PDF HUD's
+optional save-data callback feeds its supplied bytes into the same save dialog.
+Both download arrows use a native save sheet, initially in Downloads, with
+preparing/cancelled/saved/error feedback. Initial inline PDF streaming is unchanged.
 
-Preview transfers are capped at 128 MiB and 120 seconds, checked during transfer
-and after completion. The native reuse cache is capped at eight documents and
-256 MiB, pruning documents no longer in history and the oldest entries first.
-Closing Browser clears it. WebKit manages its own rendering/history memory. Save
-to Gewu retains its existing 64 MiB file limit. Evicted files may need retrieval
-again; the cache is not a permanent download or research-data store.
+Embedded PDF frames are discovered only on explicit capture/export. The bounded
+frame-tree probe reads MIME, URL and a document nonce in a retained isolated
+content world; it does not inspect frame text or forms. Optional WebKit frame
+symbols are resolved at runtime. Main-resource bytes come from the bound frame,
+including a cross-origin frame with no `.pdf` suffix, never an HTML web archive.
+The nonce is checked around extraction and on cached reuse; independent frame
+navigation invalidates old bytes even when the outer page and URL stay unchanged.
+Ambiguous same-URL frames are not selected automatically. Multiple loaded PDFs
+require choosing one in Details. Unsupported extraction stays explicit.
+
+A scoped disk copy survives capture cancellation and repeated review while its
+source document remains open. Navigation, including the same URL loading a new
+document, invalidates that copy. Copies are bounded to eight current documents
+and 256 MiB, and removed on eviction/tab disposal when the last transfer releases
+them. WebKit retains control of its own rendering/history memory. Save to Gewu
+uploads the original through the existing one-purpose loopback capability and
+parses its metadata afresh using one validated PDF reader; PDF title/DOI evidence
+rules continue to protect automatic attachment. An explicit existing-Key selection
+can acknowledge conflicting evidence without overwriting the target bibliography. No browsing operation automatically
+creates Library items or changes classification, Default, Keys or placements.
+
+Preview attachment transfers retain their 128 MiB / 120-second limits and their
+separate eight-document, 256 MiB memory cache. Capture and loaded-original export
+now accept up to 128 MiB as well. Loaded-resource extraction has a 30-second
+bound. Only an explicit Details action (Get PDF on an article page, or Download
+PDF Again on an inline PDF) starts a capture network download. That download
+stops after 90 seconds without byte progress or 15 minutes total, and its timer
+ends before local parsing begins. Loopback delivery/parsing has separate
+180-second request / 300-second resource limits. Status distinguishes reading
+the loaded file, explicit network transfer and reading PDF information.
 
 Safari's per-site Allow dialog is Safari's Downloads preference, not a publisher
 verification mechanism. Browser preview does not add an imitation of that dialog.
@@ -59,8 +86,24 @@ attachments, binary MIME, popup and blob paths, single POST submission, retained
 bytes on reload and Save to Gewu, progress, focus retention, stale-navigation
 cancellation, tab-close cleanup and a false-PDF response. Its upload fixture
 compares bytes and checks that the POST download was never replayed as a GET.
+The inline fixture uses Cache-Control: no-store, verifies exact original bytes,
+reuses the same copy on retry, covers both export routes, and counts requests to
+prove no extra GET is made. The native lifecycle probe rejects HTML wrappers and
+late same-URL document results; UI checks cover explicit redownload permission,
+progress and cancellation. The HUD delegate is exercised with generated data;
+after the authorized original-App restart, the footer arrow was also clicked on
+an already loaded arXiv PDF and opened Save Download at Downloads. The HUD
+on-screen click and full capture-panel smoke were not repeated because the user
+continued operating the App; the fixture results above cover their code paths.
 
 These checks establish the application-side behavior, not universal publisher
 compatibility. The supplied PNAS URL returned 403 to a separate unauthenticated
 header-only request during investigation. No authenticated PNAS, Science, Wiley
 or ACS download is claimed as verified by the synthetic tests.
+
+September 16 embedded-frame regression verification: the real WebKit fixture
+passes 75 checks, including production capture snapshot, source/placement
+inheritance, cross-origin frame read, exact original upload, footer export and
+stale-frame rejection. Request counters show one initial embedded PDF GET and no
+additional GET for capture/export. The fixture bundles the actual metadata probe
+and uses a nonpersistent profile; no live Library save or publisher login is used.

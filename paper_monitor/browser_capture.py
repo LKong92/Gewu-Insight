@@ -16,22 +16,26 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .browser_store import browser_url, history_url
-from .pdf_utils import is_valid_pdf_bytes
+from .pdf_utils import validated_pdf_reader
 from .text import clean_text, make_paper_id, normalize_doi
+from .text import normalize_arxiv_identifier
+from . import paper_identity
 from .storage import PAPER_FILE_TYPES, AUTOMATIC_DEFAULT_FILE_TYPE_RANK, inferred_paper_file_source, legacy_role_projection
 
-MAX_PDF_BYTES = 64 * 1024 * 1024
+MAX_PDF_BYTES = 128 * 1024 * 1024
 CAPTURE_TTL = 20 * 60
 FILE_TYPES = set(PAPER_FILE_TYPES) - {"invalid_file"}
 
 
 def identifier(value: str) -> tuple[str, str]:
     text = unquote(clean_text(str(value or "")))[:8192]
+    arxiv = normalize_arxiv_identifier(text)
+    if arxiv:
+        return "arxiv", arxiv
     doi = re.search(r"10\.\d{4,9}/[^\s<>\"?#]+", text, re.I)
     if doi:
         return "doi", normalize_doi(doi.group().rstrip(".,;"))
-    arxiv = re.search(r"(?:arxiv[:_]|arxiv\.org/(?:abs|pdf)/)?((?:\d{4}\.\d{4,5}|[a-z-]+/\d{7}))(?:v\d+)?(?:\.pdf)?(?:$|[?#\s])", text, re.I)
-    return ("arxiv", arxiv.group(1).lower()) if arxiv else ("", "")
+    return "", ""
 
 
 def persistent_url(value: str) -> str:
@@ -59,6 +63,8 @@ def normalize_snapshot(payload: dict) -> dict:
     if payload.get("is_pdf") is True and url not in candidates:
         candidates.insert(0, url)
     return {"url": url, "metadata": cleaned, "pdf_urls": candidates[:8], "is_pdf": payload.get("is_pdf") is True,
+            "loaded_pdf_urls": [u for u in payload.get("loaded_pdf_urls", []) if u in candidates][:8]
+                if isinstance(payload.get("loaded_pdf_urls"), list) else [],
             "origin_library_item_id": int(payload.get("origin_library_item_id") or 0),
             "origin_paper_id": clean_text(str(payload.get("origin_paper_id") or ""))[:512],
             "tab_id": clean_text(str(payload.get("tab_id") or ""))[:100],
@@ -86,6 +92,8 @@ class Capture:
     conflict: str = ""
     result: dict | None = None
     resolved: dict = field(default_factory=dict)
+    reviewed_identifiers: set | None = None
+    target_key: str = ""
 
     @property
     def path(self) -> Path:
@@ -138,8 +146,9 @@ class BrowserCaptureService:
             if capture.result:
                 raise ValueError("This capture was already saved.")
             if not content or len(content) > MAX_PDF_BYTES:
-                raise ValueError("Choose a PDF up to 64 MB.")
-            if not is_valid_pdf_bytes(content):
+                raise ValueError("Choose a PDF up to 128 MB.")
+            reader = validated_pdf_reader(content)
+            if reader is None:
                 raise ValueError("The downloaded file is not a readable PDF. It may be a sign-in page.")
             # Native WebKit supplies the requested candidate, not a URL guessed
             # from the open page. A local file has no asserted download origin.
@@ -151,10 +160,14 @@ class BrowserCaptureService:
                 capture.pdf_name += ".pdf"
             # Examine title-page evidence only. No reference-list DOI guessing or
             # unbounded network title search during file transfer.
-            found = ui.extract_identifier_from_pdf_or_title(capture.path, {}, title_lookup=lambda _: {})
+            first_page = {}
+            layouts = ui.pdf_layout_title_candidates(capture.path, reader=reader, first_page_result=first_page)
+            metadata_title, all_pages = ui.pdf_identifier_page_texts(capture.path, reader=reader)
+            found = ui.extract_identifier_from_pdf_or_title(capture.path, {}, title_lookup=lambda _: {},
+                pdf_evidence=(metadata_title, all_pages, layouts))
             capture.pdf_identifier = (found.get("kind", ""), found.get("identifier", ""))
-            titles = ui.pdf_layout_title_candidates(capture.path, page_limit=1)
-            metadata_title, pages = ui.pdf_identifier_page_texts(capture.path, page_limit=1)
+            titles = first_page.get("titles", layouts)
+            pages = all_pages[:1]
             capture.pdf_metadata_title = metadata_title[:1000]
             capture.pdf_heading = clean_text(pages[0] if pages else "")[:350]
             capture.pdf_source_url = source_url
@@ -222,6 +235,7 @@ class BrowserCaptureService:
             or (host == "link.aps.org" and path == "/pdf/" + doi)
             or (host == "iopscience.iop.org" and path == "/article/" + doi + "/pdf")
             or (host == "link.springer.com" and path == "/content/pdf/" + doi + ".pdf")
+            or (host == "ieeexplore.ieee.org" and path in {"/stamp/stamp.jsp", "/stamppdf/getpdf.jsp"})
         )
         if main:
             return "published_version", "Publisher article PDF; the PDF DOI matches."
@@ -229,11 +243,9 @@ class BrowserCaptureService:
 
     @staticmethod
     def existing(storage, kind, value, title=""):
-        if kind == "doi" and value:
-            rows = storage.conn.execute("SELECT * FROM papers WHERE lower(doi)=? LIMIT 2", (value.lower(),)).fetchall()
-        elif kind == "arxiv" and value:
-            rows = storage.conn.execute("SELECT * FROM papers WHERE paper_id=? OR raw_json LIKE ? LIMIT 100", ("arxiv_" + value, "%" + value + "%")).fetchall()
-            rows = [r for r in rows if value in storage._paper_arxiv_identifiers(dict(r))]
+        if kind in {"doi", "arxiv"} and value:
+            query = {"doi": value} if kind == "doi" else {"raw": {"arxiv_id": value}}
+            rows = paper_identity.find(storage, query)
         elif title:
             rows = storage.conn.execute("SELECT * FROM papers WHERE lower(title)=lower(?) LIMIT 2", (title,)).fetchall()
         else:
@@ -261,6 +273,10 @@ class BrowserCaptureService:
     def review(self, capture: Capture, storage, payload: dict) -> dict:
         from . import ui_server as ui
         with capture.lock:
+            # Failed/invalid reviews must not leave an earlier writable target.
+            capture.paper = None
+            capture.reviewed_identifiers = None
+            capture.target_key = ""
             meta = capture.snapshot["metadata"]
             explicit = clean_text(str(payload.get("identifier") or ""))[:512]
             page_id = identifier(meta["doi"] or meta["arxiv"] or capture.snapshot["url"])
@@ -270,7 +286,7 @@ class BrowserCaptureService:
                 page_id = ("", "")
             detected = capture.pdf_identifier if capture.pdf_identifier[1] else page_id
             kind, value = identifier(explicit) if explicit else detected
-            title = capture.pdf_title if capture.snapshot["is_pdf"] else meta["title"]
+            title = capture.pdf_title if capture.pdf_ready else meta["title"]
             origin = storage.get_paper(capture.snapshot["origin_paper_id"]) if capture.snapshot["origin_paper_id"] else None
             if not origin and capture.snapshot["origin_url"]:
                 rows = storage.conn.execute("SELECT * FROM papers WHERE url=? OR landing_url=? LIMIT 2", (capture.snapshot["origin_url"], capture.snapshot["origin_url"])).fetchall()
@@ -283,14 +299,14 @@ class BrowserCaptureService:
                 capture.conflict = "The entered identifier differs from the current article or PDF. Save the matching file instead."
             if capture.pdf_ready and capture.pdf_identifier[1] and page_id[1] and not self.same_identity(storage, capture.pdf_identifier, page_id):
                 capture.conflict = "The PDF identifier differs from the article page. Review the PDF as a separate article."
-            existing = self.existing(storage, kind, value)
+            existing = self.existing(storage, kind, value) if not payload.get("target_key") else None
             candidate = None
             warning = ""
             if existing:
                 candidate = existing
                 if title and not ui.title_match_is_confident(title, existing.get("title") or ""):
                     warning = "The extracted title differs from the existing article. Check the title and identifier before saving."
-            elif value:
+            elif value and not payload.get("target_key"):
                 cache_key = kind + ":" + value
                 if cache_key not in capture.resolved and payload.get("resolve", True):
                     try:
@@ -300,8 +316,10 @@ class BrowserCaptureService:
                 candidate = capture.resolved.get(cache_key)
                 if candidate:
                     candidate = dict(candidate)
-                    canonical = self.existing(storage, "doi", normalize_doi(candidate.get("doi"))) if candidate.get("doi") else None
-                    existing = canonical or storage.get_paper(candidate["paper_id"])
+                    matches = paper_identity.find(storage, candidate)
+                    if len(matches) > 1:
+                        raise ValueError("More than one existing article matches. Resolve the duplicate records in Library first.")
+                    existing = matches[0] if matches else None
                     if existing:
                         if storage.paper_identity_conflict_reasons(existing, candidate):
                             capture.conflict = "The discovered metadata conflicts with an existing article. Resolve its identity in Library first."
@@ -313,12 +331,18 @@ class BrowserCaptureService:
                     warning = ("Using metadata supplied by this article page. Identify can check the DOI online."
                                if payload.get("resolve") is False else
                                "Online metadata lookup was unavailable. Review the information supplied by this article page.")
-            if not candidate and origin and payload.get("use_origin") is True:
-                origin_ids = {identifier(origin.get("doi") or ""), *(('arxiv', x) for x in storage._paper_arxiv_identifiers(origin))}
-                if detected[1] and detected not in origin_ids:
-                    capture.conflict = "This PDF belongs to a different article from the Open Website source."
-                else:
+            if origin and not payload.get("target_key"):
+                origin_ids = paper_identity.identifiers(storage, origin)
+                evidence = {item for item in (page_id, detected, (kind, value)) if item[1]}
+                other_article = any(item not in origin_ids and not self.same_identity(storage, item, next(iter(origin_ids), ("", ""))) for item in evidence)
+                if not other_article and (not candidate or candidate["paper_id"] == origin["paper_id"]):
                     candidate = existing = origin
+                    if not evidence:
+                        warning = "Using the article that opened this tab. Check the target before saving."
+                        if title and not ui.title_match_is_confident(title, origin.get("title") or ""):
+                            capture.conflict = "The page/PDF title differs from the source article. Enter its Gewu Key to review an explicit attachment."
+                elif payload.get("use_origin") is True:
+                    capture.conflict = "This page or PDF identifies a different article. Enter the source Gewu Key to review an explicit attachment."
             if not candidate and payload.get("manual") is True:
                 manual_title = clean_text(str(payload.get("title") or ""))[:1000]
                 if len(manual_title) < 5:
@@ -332,7 +356,27 @@ class BrowserCaptureService:
                     if kind == "arxiv":
                         candidate["paper_id"] = "arxiv_" + value
                         candidate["raw"]["arxiv_id"] = value
+            target_conflict = ""
+            target_key = clean_text(str(payload.get("target_key") or "")).lower()
+            if target_key:
+                if not re.fullmatch(r"gw_[0-9a-f]{10}", target_key):
+                    raise ValueError("Enter an existing Gewu Key, such as gw_0123456789.")
+                target = storage.paper_for_key(target_key)
+                if not target:
+                    raise ValueError("Gewu Key not found. Check the key or return to automatic identification.")
+                target_ids = paper_identity.identifiers(storage, target)
+                evidence = {item for item in (page_id, detected, (kind, value)) if item[1]}
+                mismatched = any(item not in target_ids for item in evidence)
+                mismatched = mismatched or bool(title and not ui.title_match_is_confident(title, target.get("title") or ""))
+                if mismatched:
+                    target_conflict = "The page/PDF evidence differs from this target. Confirm that this file belongs to the selected article. Its DOI and metadata will not be changed."
+                capture.conflict = target_conflict if payload.get("confirm_target") is not True else ""
+                candidate = existing = target
+                capture.target_key = target["storage_key"]
+                warning = "Target selected manually. Existing article metadata will be preserved."
             capture.paper = dict(candidate) if candidate else None
+            if existing:
+                capture.reviewed_identifiers = paper_identity.identifiers(storage, existing)
             if capture.paper and not existing:
                 source_url = persistent_url(capture.snapshot["url"])
                 source_doi = identifier(source_url)
@@ -352,6 +396,7 @@ class BrowserCaptureService:
             return {"token": capture.token, "upload_token": capture.upload_token, "snapshot": capture.snapshot, "paper": summary,
                     "identifier": value, "suggested_title": title, "pdf_ready": capture.pdf_ready, "pdf_name": capture.pdf_name,
                     "origin": {"title": origin["title"], "gewu_key": origin.get("storage_key")} if origin else None,
+                    "target_key": capture.target_key, "target_conflict": target_conflict,
                     "conflict": capture.conflict, "warning": warning, "folders": folders, "destination": destination,
                     "suggested_file_type": suggested_type, "file_type_reason": type_reason,
                     "can_save": bool(summary) and not capture.conflict}
@@ -407,8 +452,12 @@ class BrowserCaptureService:
             paper = dict(capture.paper)
             # Recheck canonical identity immediately before writing: another
             # capture may have saved it while this review panel was open.
-            matched = self.existing(storage, "doi", normalize_doi(paper.get("doi"))) if paper.get("doi") else None
-            matched = matched or storage.get_paper(paper["paper_id"])
+            matches = paper_identity.find(storage, paper)
+            if len(matches) > 1:
+                raise ValueError("More than one article matches. Review the target again.")
+            matched = matches[0] if matches else None
+            if capture.reviewed_identifiers is not None and (not matched or paper_identity.identifiers(storage, matched) != capture.reviewed_identifiers):
+                raise ValueError("The target identifiers changed while this panel was open. Review the article again.")
             if matched:
                 if storage.paper_identity_conflict_reasons(matched, paper):
                     raise ValueError("This article now conflicts with an existing record. Review again.")
