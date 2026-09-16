@@ -243,7 +243,7 @@
       if (!element) {
         element = document.createElement('div'); element.dataset.browserTab = tab.id;
         element.setAttribute('role','tab');
-        element.innerHTML = '<button class="browser-tab-close" title="Close Tab (⌘W)">×</button><span class="browser-tab-icon" aria-hidden="true"></span><span class="browser-tab-title"></span>';
+        element.innerHTML = '<button class="browser-tab-close" title="Close Tab (⌘W)">×</button><span class="browser-tab-content"><span class="browser-tab-icon" aria-hidden="true"></span><span class="browser-tab-title"></span></span>';
       }
       element.className = 'browser-web-tab' + (selected ? ' selected' : '');
       element.tabIndex = selected ? 0 : -1; element.setAttribute('aria-selected', String(selected));

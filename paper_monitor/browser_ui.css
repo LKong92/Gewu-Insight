@@ -22,11 +22,12 @@
 .browser-tabs { display: flex; flex: 0 0 30px; min-height: 30px; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; background: #e8e8ea; padding: 0; gap: 0; border-bottom: 1px solid #d2d4d7; }
 .browser-tabs::-webkit-scrollbar { display: none; }
 .browser-tabs, .browser-tabs * { -webkit-user-select: none; user-select: none; }
-.browser-web-tab { display: flex; align-items: center; justify-content: center; gap: 7px; flex: 1 0 112px; min-width: 112px; padding: 0 12px 0 7px; margin: 0; border: 0; border-right: 1px solid #d2d4d7; border-radius: 0; color: #687281; user-select: none; cursor: default; }
+.browser-web-tab { display: grid; grid-template-columns: 18px minmax(0, 1fr) 18px; align-items: center; gap: 7px; flex: 1 0 112px; min-width: 112px; padding: 0 7px; margin: 0; border: 0; border-right: 1px solid #d2d4d7; border-radius: 0; color: #687281; user-select: none; cursor: default; }
 .browser-web-tab:last-child { border-right: 0; }
 .browser-web-tab:hover { background: #efeff1; }
 .browser-web-tab.selected { background: #fff; color: #293c52; box-shadow: none; }
-.browser-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; flex: 1; text-align: center; }
+.browser-tab-content { display: flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; overflow: hidden; }
+.browser-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; flex: 0 1 auto; min-width: 0; }
 .browser-tab-icon { display: grid; place-items: center; width: 15px; height: 15px; flex: 0 0 15px; }
 #gewuBrowser .browser-tab-icon svg, .browser-tab-icon img { width: 14px; height: 14px; object-fit: contain; }
 #gewuBrowser .browser-tab-close { flex: 0 0 18px; width: 18px; height: 18px; line-height: 16px; font-size: 17px; opacity: 0; padding: 0; }
