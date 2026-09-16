@@ -687,7 +687,8 @@ class UserGuideTests(unittest.TestCase):
         imports = soup.find("article", id="import-files").get_text(" ", strip=True)
         for phrase in [
             "Add a paper by DOI, arXiv ID, URL, or title",
-            "Review and confirm the resolved match",
+            "Press Return or click Add Paper once",
+            "Review the added paper in Details",
             "reuses the canonical paper",
             "does not automatically download a PDF",
         ]:
@@ -746,6 +747,8 @@ class UserGuideTests(unittest.TestCase):
                 "/api/startup-brand-art",
                 "/user-guide-assets/library-paper-files.png",
                 "/user-guide-assets/space-workspace.png",
+                "/user-guide-assets/library-table.png",
+                "/user-guide-assets/shortcut-path.png",
                 "/user-guide-assets/my-publications.png",
                 "/user-guide-assets/journal-monitor.png",
                 "/user-guide-assets/subject-monitor.png",
@@ -781,7 +784,7 @@ class UserGuideTests(unittest.TestCase):
         )
 
         screenshot_figures = soup.select("figure.guide-screenshot")
-        self.assertEqual(len(screenshot_figures), 33)
+        self.assertEqual(len(screenshot_figures), 35)
         self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:

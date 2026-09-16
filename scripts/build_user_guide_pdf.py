@@ -31,6 +31,8 @@ IMAGE_ROUTES = {
     "/api/startup-brand-art": ROOT / "assets" / "branding" / "GewuSealGlyphs.png",
     "/user-guide-assets/library-paper-files.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-paper-files.png",
     "/user-guide-assets/space-workspace.png": ROOT / "assets" / "user-guide" / "screenshots" / "space-workspace.png",
+    "/user-guide-assets/library-table.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-table.png",
+    "/user-guide-assets/shortcut-path.png": ROOT / "assets" / "user-guide" / "screenshots" / "shortcut-path.png",
     "/user-guide-assets/my-publications.png": ROOT / "assets" / "user-guide" / "screenshots" / "my-publications.png",
     "/user-guide-assets/journal-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "journal-monitor.png",
     "/user-guide-assets/subject-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-monitor.png",
@@ -547,7 +549,7 @@ def latex_preamble(version: str, build: str) -> str:
   {{\end{{list}}}}
 
 \renewenvironment{{quote}}
-  {{\begin{{tcolorbox}}[enhanced,breakable,colback=GewuPale,colframe=GewuPale,boxrule=0pt,
+  {{\Needspace{{5\baselineskip}}\begin{{tcolorbox}}[enhanced,breakable,colback=GewuPale,colframe=GewuPale,boxrule=0pt,
     borderline west={{1.6pt}}{{0pt}}{{GewuBlue}},arc=1.2mm,left=2.5mm,right=2.5mm,top=1.7mm,bottom=1.7mm,
     before skip=4pt,after skip=5pt,fontupper=\color{{GewuInk}}\small]}}
   {{\end{{tcolorbox}}}}

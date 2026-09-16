@@ -124,7 +124,7 @@
   {\end{list}}
 
 \renewenvironment{quote}
-  {\begin{tcolorbox}[enhanced,breakable,colback=GewuPale,colframe=GewuPale,boxrule=0pt,
+  {\Needspace{5\baselineskip}\begin{tcolorbox}[enhanced,breakable,colback=GewuPale,colframe=GewuPale,boxrule=0pt,
     borderline west={1.6pt}{0pt}{GewuBlue},arc=1.2mm,left=2.5mm,right=2.5mm,top=1.7mm,bottom=1.7mm,
     before skip=4pt,after skip=5pt,fontupper=\color{GewuInk}\small]}
   {\end{tcolorbox}}
@@ -184,7 +184,7 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
 
-Version 1.0.0 · Build 1 · September 13, 2026 · Research and writing baseline
+Version 1.0.0 · Build 1 · September 16, 2026 · Research and writing baseline
 
 \section{Why this workspace exists}\label{why-this-workspace-exists}
 
@@ -603,7 +603,7 @@ You already have & Start here & What Gewu Insight does first \\
 \bottomrule\noalign{}
 \endlastfoot
 A local PDF or another research file & Drag it into the target Library folder, or use the folder\textquotesingle s add command. & Preserves a visible file, creates a catalog record, and attempts to extract or resolve identity evidence. \\
-A DOI, arXiv identifier, supported URL, or title & Choose \textbf{Add Paper} in the target folder and enter the evidence. & Creates or reuses a paper record, resolves metadata, and offers a download when a supported file is available. \\
+A DOI, arXiv identifier, supported URL, or title & Choose \textbf{Add Paper} in the target folder and enter the evidence. & Creates or reuses the metadata record. Download or attach a PDF separately when needed. \\
 A useful result in Journal, Subject, or Author Monitor & Select the result and choose \textbf{Add to Library}. & Adds a Library placement for the cataloged paper while retaining its discovery provenance. \\
 \end{longtable}
 \GewuTableEnd
@@ -1112,7 +1112,7 @@ Folder Loader is a migration-oriented workflow. It imports a visible collection 
 
 An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. If no Default or main PDF exists, Browser Save establishes its first article PDF as a fallback Default even when its type is Unknown. This keeps the version classification intact.
 
-\textbf{Supplementary material}, \textbf{Peer review file}, \textbf{Other}, and \textbf{Invalid file} do not become the automatic default. Other Unknown attachments remain peers until selected manually. Any valid resource can still be selected manually; \textbf{Invalid file} is never eligible and remains visible only for audit and repair.
+Correction notices, supplements, peer review files, commentary, summaries, analyses, source data, source code, Other and Invalid file do not become the automatic default. Other Unknown attachments remain peers until selected manually. Any valid resource can still be selected manually; \textbf{Invalid file} is never eligible and remains visible only for audit and repair.
 
 \begin{quote}
 \textbf{Published files}
@@ -1391,7 +1391,7 @@ Library and Paper Files. This real paper has two already-classified files: Prepr
 
 \subsection{Use the breadcrumb}\label{use-the-breadcrumb}
 
-The breadcrumb at the bottom shows the active path. Select a segment to return to that location. The \textbf{List View / Table View} control at the lower right changes the representation of items without moving them.
+The breadcrumb at the bottom displays the full managed path. A shortcut shows the real ancestry from Library or its independent Space root, including folders above the shortcut target. Its alias does not replace that path. Hover over the path to read it in full when space is limited. The segments are informational; use the columns or Left Arrow to navigate to a parent. The \textbf{List View / Table View} control at the lower right changes the representation of items without moving them.
 
 \subsection{Folder Details}\label{folder-details}
 
@@ -1490,7 +1490,7 @@ Folders organize a root. Shortcuts provide another entrance to the Library. Spac
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/space-workspace.png}\end{center}
 
 \begin{GewuCaption}
-A Space. Spaces use the same paper identity and Paper Files model as the Library while keeping an independent organizational root.
+A Space with an open folder. AI remains the heading across its folder and content columns. Literature Project has its own heading beneath it. The Space heading stops at the Details divider; the right-hand Details pane keeps its full height.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -1548,6 +1548,24 @@ Add Space. Give the independent workspace a name, then choose Add. Cancel closes
 
 \end{minipage}\par\medskip
 
+\subsection{Use the Space or Shortcut heading}\label{use-the-space-or-shortcut-heading}
+
+The persistent heading identifies the source in both List View and Table View, even after you open a nested folder. It spans that source\textquotesingle s folder and content area, including Paper Files when visible, and stops before Paper Details. The nested folder keeps its own heading below it.
+
+Open the \textbf{\ldots{}} menu at the right of the heading, or Control-click the source tab, for \textbf{Rename} and source actions. Renaming a shortcut changes its navigation label, not the underlying folder. Spaces also offer \textbf{Move Space to Library} here. These commands replace the former toolbar of large buttons.
+
+To add a paper inside the current folder, Control-click blank space in that folder and choose \textbf{Add Paper}. Library, shortcuts and Spaces use the same inline input. \textbf{Add Paper} from the source heading menu targets that source\textquotesingle s root; check the destination before submitting.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/shortcut-path.png}\end{center}
+
+\begin{GewuCaption}
+A shortcut retains its full path. The footer starts at Library and includes the shortcut target and selected folder. The heading identifies the shortcut while Paper Details remains independent.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
 \subsection{Color folders and remove navigation entries}\label{color-folders-and-remove-navigation-entries}
 
 Control-click an ordinary folder and choose \textbf{Color} to change its folder color. Protected roots do not offer this command. On the source rail, \textbf{Remove Shortcut} removes only the shortcut, leaving its folder and papers intact. \textbf{Remove Empty Space} works only after both its managed contents and remaining files are empty; move the Space into Library if you want to keep its hierarchy.
@@ -1573,7 +1591,7 @@ Use this when a temporary or project Space should become part of the permanent L
 \item
   \textbf{Select the Space on the left rail.} Open the Space that you want to keep as a normal Library folder.
 \item
-  \textbf{Choose \textbf{Move Space to Library}.} The move sheet explains that the Space will become a folder with the same name.
+  \textbf{Open the heading's \textbf{\ldots{}} menu and choose \textbf{Move Space to Library}.} You can also Control-click the Space tab. The move sheet explains that the Space will become a folder with the same name.
 \item
   \textbf{Choose \textbf{Destination in My Library}.} Select the Library folder that should contain the moved Space.
 \item
@@ -1603,7 +1621,7 @@ Search locates items across the managed collection. List View emphasizes browsin
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/library-search.png}\end{center}
 
 \begin{GewuCaption}
-Search Library. The search field filters the current workspace. Select a result or use Show in Library to reveal its folder location.
+Search Library. Library search finds saved items across Library and Spaces. Select a result or use Show in Library to reveal its folder location.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -1632,11 +1650,33 @@ This is fuzzy text matching; it does not generate Chinese/English translations, 
 
 \subsection{Switch views}\label{switch-views}
 
-Choose \textbf{View \textgreater{} List View} or \textbf{View \textgreater{} Table View}. You can also use \texttt{{\symbolfont ⇧}}\texttt{{\symbolfont ⌘}}\texttt{V}. Table columns can be sorted or resized where available; changing the view does not rename, move, or rewrite files. Active Library search uses its result list and disables Table View. Clear the search to use Table View for the current folder again.
+Choose \textbf{View \textgreater{} List View} or \textbf{View \textgreater{} Table View}. You can also use \texttt{{\symbolfont ⇧}}\texttt{{\symbolfont ⌘}}\texttt{V}. Changing the view does not rename, move, or rewrite files. Active Library search uses its result list and disables Table View. Clear the search to use Table View for the current folder again.
 
-\subsection{Sort a folder}\label{sort-a-folder}
+In either view, Control-click the folder contents and choose \textbf{Sort by Name} or \textbf{Sort by Modified Time} for folder ordering. These commands clear any active table-column sort.
 
-Control-click the folder contents and choose \textbf{Sort by Name} or \textbf{Sort by Modified Time}. Sorting changes presentation, not the paper identity.
+\subsection{Sort by a table column}\label{sort-by-a-table-column}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Click \textbf{Title}, \textbf{Authors}, \textbf{Year}, or \textbf{Journal}.} The first click sorts ascending: displayed text alphabetically, Year numerically.
+\item
+  \textbf{Click again to reverse.} The header arrow shows the direction.
+\item
+  \textbf{Continue navigating.} Library, shortcuts and Spaces retain the chosen column and direction. Keyboard movement and range selection follow the visible order.
+\end{enumerate}
+
+Folders stay above papers, and missing metadata stays below known values in either direction. Sorting preserves the selected paper, its identity and its files.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/library-table.png}\end{center}
+
+\begin{GewuCaption}
+Table View sorting. The Year arrow shows descending order. The same headers work in Library and shortcuts. This existing paper\textquotesingle s Published version remains Default, with a separate Summary in Paper Files.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[library-layout]{Library Layout} · \hyperref[keyboard]{Keyboard Shortcuts}
@@ -1669,13 +1709,15 @@ A normal Library import creates a managed local copy and a database record. The 
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Open the destination folder.} The resolved paper will be placed in the active Library folder.
+  \textbf{Open the destination folder.} The resolved paper will be placed in that Library, Shortcut or Space folder.
 \item
   \textbf{Choose \textbf{Add Paper}.} Control-click blank space in the folder contents and choose the command to open the inline lookup field.
 \item
-  \textbf{Enter a DOI, arXiv identifier, supported article URL, or title.} A DOI or arXiv identifier is the strongest identity clue. A title search may return alternatives that need review.
+  \textbf{Enter a DOI, arXiv identifier, supported article URL, or title.} A DOI or arXiv identifier is the strongest identity clue.
 \item
-  \textbf{Review and confirm the resolved match.} Check the title, authors, journal, and year, then choose \textbf{Add Paper} again.
+  \textbf{Press Return or click \textbf{Add Paper} once.} The app resolves the query and adds the paper to the displayed destination. A failed lookup leaves an error in the inline form.
+\item
+  \textbf{Review the added paper in Details.} Check its title, authors, identifiers, journal and year, especially after using a title query.
 \end{enumerate}
 
 If the identity already exists, Gewu Insight reuses the canonical paper and adds the selected folder placement rather than creating an unrelated duplicate.
@@ -2052,7 +2094,7 @@ The default file is the preferred local representation of the paper. Choose it m
 
 \subsection{Automatic selection}\label{automatic-selection}
 
-The automatic order is \textbf{Corrected published version}, \textbf{Published version}, \textbf{Accepted manuscript}, then \textbf{Preprint}. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.
+The automatic order is \textbf{Corrected published version}, \textbf{Published version}, \textbf{Accepted manuscript}, then \textbf{Preprint}. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Perspective, News and Views, Summary, Analysis, Source Data, Source Code, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.
 
 \subsection{Automatic and manual eligibility}\label{automatic-and-manual-eligibility}
 
@@ -2089,8 +2131,14 @@ In Library, File type stays visible on each card. Click the size footer to revea
 \item
   \textbf{Correction notice}, \textbf{Supplementary material}, and \textbf{Peer review file}
 \item
+  \textbf{Perspective}, \textbf{News and Views}, \textbf{Summary}, and \textbf{Analysis}
+\item
+  \textbf{Source Data} and \textbf{Source Code}
+\item
   \textbf{Other}, \textbf{Unknown}, and \textbf{Invalid file}
 \end{itemize}
+
+Use Perspective or News and Views for related commentary, Summary or Analysis for reading notes and interpretation, and Source Data or Source Code for the accompanying research material. These labels describe this file\textquotesingle s role; they do not change the parent paper\textquotesingle s publication type or Gewu Key. They are not automatically promoted to Default. File extension alone does not determine the role.
 
 Annotation state is selected independently as \textbf{Annotated}, \textbf{Unannotated}, or \textbf{Unknown}. Source is independently recorded as \textbf{Publisher}, \textbf{Preprint server}, \textbf{Institutional repository}, \textbf{User import}, \textbf{Other}, or \textbf{Unknown}. Manual type and annotation choices survive later fingerprint rescans.
 
@@ -2128,11 +2176,11 @@ Import first, classify afterward. This keeps the add operation simple and lets y
 
 \subsection{Attachment types}\label{attachment-types}
 
-The same ten file types apply to every row. File extension and MIME type remain separate technical facts, so an image, note, dataset, or code archive can use \textbf{Other} without being mistaken for a PDF version.
+The same \hyperref[versions-current]{file-type choices} apply to every row and to Browser capture. Use \textbf{Summary} or \textbf{Analysis} for notes, \textbf{Source Data} for research data, and \textbf{Source Code} for code; use \textbf{Other} when none fits. File extension and MIME type remain separate from this classification. Existing files keep their saved labels until you change them.
 
 \subsection{Add by drag and drop}\label{add-by-drag-and-drop}
 
-Drag a Finder file over the expanded Paper Files area, wait for the drop target to respond, then release. The file is copied into the selected paper's associated bundle and appears in Paper Files.
+Drag one or more Finder files anywhere in the visible Paper Files column: over its heading, an existing card, or the empty gray area. No card needs to be expanded. Wait for the whole-column drop highlight, confirm the selected destination paper, then release. The files are copied into that paper's associated bundle and appear in Paper Files. The same behavior applies in Library, shortcuts and Spaces.
 
 \begin{quote}
 \textbf{Important}
@@ -2239,7 +2287,7 @@ If a data, image, presentation, or other file was imported as its own Library it
 \item
   \textbf{Release the pointer.} Gewu Insight validates the move, adopts the file into the paper bundle, and removes its independent Library position.
 \item
-  \textbf{Classify the attachment.} Choose \textbf{Supplementary material} for an actual paper supplement, or \textbf{Other} for a general image, dataset, code file, slide deck, or note. Expand the size footer to set Annotation and Source separately. See \hyperref[versions-current]{the complete current file-type list}.
+  \textbf{Classify the attachment.} Choose \textbf{Supplementary material} for an actual paper supplement, \textbf{Source Data} for data, \textbf{Source Code} for code, \textbf{Summary} or \textbf{Analysis} for notes, or \textbf{Other} when none fits. Expand the size footer to set Annotation and Source separately. See \hyperref[versions-current]{the complete current file-type list}.
 \end{enumerate}
 
 \begin{GewuResult}
@@ -2896,6 +2944,12 @@ Automatic DOI and abstract completion uses other metadata services, independentl
 
 Scholar requests remain serialized, with 4--8 seconds between requests, 12--24 seconds between profile pages and 45--90 seconds between automatic author checks. Every request checks the shared workspace cooldown again before sending, including My Publications imports. Access restrictions pause Scholar for 24 hours; manual actions and restarts do not bypass or reset that pause. This is Gewu\textquotesingle s protective waiting period, not a promised unblock time from Google.
 
+\subsection{Recover after a network interruption}\label{recover-after-a-network-interruption}
+
+A temporary connection failure shows \textbf{Google Scholar temporarily unavailable} in the bottom bar. Hover over it for the author, error and retry details. Cached publications remain available. After the connection returns, keep the App running: failed transport requests have a paced automatic retry queue, including before the normal 10:00 daily check. The message clears after a successful retry, not immediately when Wi-Fi reconnects.
+
+This retry queue is separate from a Scholar access restriction. A displayed access cooldown still takes precedence; repeatedly refreshing or restarting does not bypass it. You can use \textbf{Refresh This Author} for a deliberate retry when the status permits.
+
 \subsection{Refresh one author or find missing identifiers}\label{refresh-one-author-or-find-missing-identifiers}
 
 Control-click the author and choose \textbf{Refresh This Author} to update that person\textquotesingle s publications. \textbf{Find Missing Identifiers} checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose \textbf{Find Missing Identifier}; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from \textbf{Get DOI}, which uses an available local PDF.
@@ -2961,7 +3015,7 @@ Browser is the sixth main tab, after Author Monitor. By default, website links a
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
 
 \begin{GewuCaption}
-Browser in use. Captured from the original App displaying a fully loaded Nature Physics PDF. The left bookmark sidebar, webpage tab, left-side close button, and Save to Gewu are visible. This is a live interface capture, not a generated demonstration.
+Browser in use. Captured from the original App displaying a fully loaded Nature Physics PDF. The left bookmark sidebar, centered webpage icon and title, left-side close button, and Save to Gewu are visible. This is a live interface capture, not a generated demonstration.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -2995,7 +3049,7 @@ When you search or follow a link from Home, Home remains visible while the desti
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/browser-home.png}\end{center}
 
 \begin{GewuCaption}
-Browser Home. The original App displays the user\textquotesingle s real Favorites with the bookmark sidebar collapsed. Home is local; use the address field or a bookmark to open a website.
+Browser Home. The original App displays the user\textquotesingle s real Favorites with the bookmark sidebar collapsed. Home and Nature occupy separate tabs with each icon beside its centered title. Home is local; use the address field or a bookmark to open a website.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -3082,7 +3136,7 @@ Use {{\symbolfont ↑}}/{{\symbolfont ↓}}, then Enter to open a result, or cli
 
 Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. In a publisher\textquotesingle s HTML viewer, click its PDF download link: Browser receives the PDF using its current website session and opens it in that tab, including supported page-generated files. \textbf{Opening PDF\ldots{}} shows progress. Switching tabs does not interrupt it or let completion take focus; leaving the source page or closing its tab cancels that pending preview. Website sign-in and consent pages remain visible.
 
-Preview uses temporary browser storage, not your Downloads folder or Library. PDF attachment previews accept up to 128 MB and two minutes per transfer. Save to Gewu and the bottom-right \textbf{Save Download} arrow reuse a complete loaded PDF; they do not silently download it again. The PDF viewer's own download arrow also opens a native save dialog, initially in Downloads. Original-file copies are temporary and bounded; navigating to another document or closing its tab releases them. To import a PDF, use \textbf{Save to Gewu} below or \hyperref[import-files]{import a saved file}. Library PDFs still open in macOS Preview.
+Preview uses temporary browser storage, not your Downloads folder or Library. PDF attachment previews accept up to 128 MB and two minutes per transfer. Save to Gewu and the bottom-right \textbf{Save Download} arrow reuse a complete loaded PDF; they do not silently download it again. Both the bottom-right arrow and the PDF viewer's own download arrow open a native save dialog, initially in Downloads. Confirm the filename and destination to write the file; Cancel leaves it unsaved. Original-file copies are temporary and bounded; navigating to another document or closing its tab releases them. To import a PDF, use \textbf{Save to Gewu} below or \hyperref[import-files]{import a saved file}. Library PDFs still open in macOS Preview.
 
 \subsection{System networking and Clash rules}\label{system-networking-and-clash-rules}
 
@@ -3106,9 +3160,23 @@ WebKit follows macOS networking without changing proxies/Clash. When system prox
 
 Opening Details, identifying or cancelling imports nothing. Save reuses an existing active Library or Space placement, preferring the selected occurrence of that same paper. Attaching a PDF does not add a root-level entry. To add another location, explicitly choose and confirm its folder. Papers with no active placement use the folder saved in \hyperref[add-to-library-settings]{Setting \textgreater{} Add to Library}, initially \textbf{Library / unsorted}, unless you confirm another folder. An unavailable saved default falls back to unsorted. Review creates no placement; the destination is checked again on Save. Paper Files refreshes immediately. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. \textbf{Show in Library} selects the saved occurrence. Browser keeps the webpage.
 
-\textbf{Use the original paper or correct the target.} A tab opened with Open Website or the arXiv arrow remembers its source paper and Library occurrence, including related PDF tabs. Save to Gewu uses that existing paper when the current evidence agrees or provides no conflicting identifier. Manually corrected DOI/arXiv values take precedence over old automatic matches. If the page identifies another work, the source is not forced onto it.
+\subsection{Use the original paper or correct the target}\label{use-the-original-paper-or-correct-the-target}
 
-To correct a match, enter an existing \textbf{Gewu Key} in Details and press Enter or \textbf{Use Key}. \textbf{Target updated} confirms the selection; check the displayed title, Key and Add to Library path. An unknown Key produces an error and creates nothing. Choose \textbf{Automatic} to return to detection. If the page or PDF conflicts with your selected target, explicitly confirm that the file belongs to it before saving. Selecting a target attaches the file without replacing that paper's DOI, metadata or manual Default.
+A tab opened with Open Website or the arXiv arrow remembers its source paper and Library occurrence, including related PDF tabs. Save to Gewu uses that existing paper when the current evidence agrees or provides no conflicting identifier. Manually corrected DOI/arXiv values take precedence over old automatic matches. If the page identifies another work, the source is not forced onto it.
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Enter the correct existing \textbf{Gewu Key} in Details.} Press Return or choose \textbf{Use Key}.
+\item
+  \textbf{Wait for \textbf{Target updated}.} Check the displayed title, Key, existing-article status and \textbf{Add to Library} path. The review switches to that paper\textquotesingle s active location when available. An unknown Key produces an error and creates nothing.
+\item
+  \textbf{Review any conflicting evidence.} If the page or PDF identifies another work, explicitly confirm that this file belongs to the selected target before saving. Changing the identifier afterward requires another review.
+\item
+  \textbf{Check the PDF and File type, then save.} Selecting a target attaches the file without replacing that paper\textquotesingle s DOI, metadata or manual Default. Choose \textbf{Automatic} to return to automatic identity detection.
+\end{enumerate}
+
+\textbf{What Article only means.} No PDF is currently included in the review. Article identification and PDF attachment are separate: identifying a DOI can find the existing paper without attaching a file. Expand Details and inspect the PDF controls. A loaded complete PDF can be reused through \textbf{Use Loaded PDF}; otherwise open the site\textquotesingle s actual PDF or choose a local file. This status alone does not mean the publisher has no PDF.
 
 \textbf{If PDF retrieval fails:} retry after opening the site\textquotesingle s PDF, choose a downloaded local PDF, or save the article alone. Errors stay visible; missing or conflicting identity opens Details. If storage fails after saving the article, retry reuses its record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site\textquotesingle s login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu\textquotesingle s built-in Browser; a Safari extension is not included.
 
@@ -3127,7 +3195,7 @@ Save to Gewu: compact review. After the article and PDF have been identified, th
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/save-gewu-details.png}\end{center}
 
 \begin{GewuCaption}
-Save to Gewu: Details. Expanded Details identifies this existing Nature Physics article by its Gewu Key and DOI. The PDF is Ready and classified as Published version before saving.
+Save to Gewu: Details. Expanded Details identifies this existing Nature Physics article by its Gewu Key and DOI. Use Key and Automatic control the target; Use Loaded PDF reuses the original file. The PDF is Ready and classified as Published version before saving.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -4125,7 +4193,7 @@ Publishers can rate-limit shared VPN addresses or automated-looking traffic. Gew
 \item
   \textbf{Stop repeated refreshes.} Additional requests can extend a temporary block.
 \item
-  \textbf{Try your direct connection.} If the page works with VPN off, the VPN exit IP is likely the blocked client.
+  \textbf{Try your direct connection.} If the page works with VPN off, investigate the VPN route, quota or exit address before treating it as a product or certificate failure.
 \item
   \textbf{Use \textbf{Open Website} or an external browser.} Complete any normal institutional login or publisher interaction yourself.
 \item
@@ -4139,6 +4207,10 @@ Figure and article-page retrieval is queued behind discovery work and uses cachi
 \section{Browser and your system network}\label{browser-and-your-system-network}
 
 The Browser tab uses native WebKit requests and does not proxy pages through the Python server. System proxy or TUN capture can send its traffic into Clash; only then do the active rules determine DIRECT or proxy routing. A DIRECT rule uses your current physical network, which must itself provide institutional access. Gewu Insight neither changes these rules nor guarantees a particular route; use Clash connection records to verify the actual route. See \hyperref[browser]{Browse, Bookmark, and Revisit Websites} for downloads, sign-in limits, and the separate browser profile.
+
+\section{Secure-connection failures and VPN interruptions}\label{secure-connection-failures-and-vpn-interruptions}
+
+A secure-connection error such as \texttt{NSURLErrorDomain\ -1200} means WebKit could not complete a secure connection; it does not by itself establish that the site\textquotesingle s certificate has expired. Check the network, VPN quota or route, and the Mac\textquotesingle s date and time. After restoring the connection, reload the page once and retry the failed download if needed. A change of VPN node can restore the route without any change to Library data. Certificate verification stays enabled.
 
 \section{Service rate limits}\label{service-rate-limits}
 
@@ -4204,7 +4276,7 @@ Monitor & Current automatic schedule \\
 \endlastfoot
 Journal Monitor & Daily work becomes due from 09:00 in the Mac\textquotesingle s local time zone; stored completion and pending retry state determine what still needs work. \\
 Subject Monitor & Daily work becomes due from 09:00 local time; incomplete sources have their own bounded retry state. \\
-Author Monitor & Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick. \\
+Author Monitor & Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick. Failed transport checks use a separate paced retry queue, including before 10:00; access cooldowns still apply. \\
 arXiv & Uses its separate announcement-ready schedule and buffer, not the journal\textquotesingle s 09:00 rule. Read the displayed update/countdown state. \\
 \end{longtable}
 \GewuTableEnd

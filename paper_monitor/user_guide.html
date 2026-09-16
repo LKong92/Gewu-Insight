@@ -661,7 +661,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Version 1.0.0 · Build 1 · September 13, 2026 · Research and writing baseline</p>
+          <p class="guide-revision">Version 1.0.0 · Build 1 · September 16, 2026 · Research and writing baseline</p>
 
 <h2>Why this workspace exists</h2>
           <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
@@ -864,7 +864,7 @@
           <table class="plain-table">
             <tr><th>You already have</th><th>Start here</th><th>What Gewu Insight does first</th></tr>
             <tr><td>A local PDF or another research file</td><td>Drag it into the target Library folder, or use the folder's add command.</td><td>Preserves a visible file, creates a catalog record, and attempts to extract or resolve identity evidence.</td></tr>
-            <tr><td>A DOI, arXiv identifier, supported URL, or title</td><td>Choose <span class="ui">Add Paper</span> in the target folder and enter the evidence.</td><td>Creates or reuses a paper record, resolves metadata, and offers a download when a supported file is available.</td></tr>
+            <tr><td>A DOI, arXiv identifier, supported URL, or title</td><td>Choose <span class="ui">Add Paper</span> in the target folder and enter the evidence.</td><td>Creates or reuses the metadata record. Download or attach a PDF separately when needed.</td></tr>
             <tr><td>A useful result in Journal, Subject, or Author Monitor</td><td>Select the result and choose <span class="ui">Add to Library</span>.</td><td>Adds a Library placement for the cataloged paper while retaining its discovery provenance.</td></tr>
           </table>
 
@@ -1137,7 +1137,7 @@
           <h2>How the default file is resolved</h2>
           <p>An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. If no Default or main PDF exists, Browser Save establishes its first article PDF as a fallback Default even when its type is Unknown. This keeps the version classification intact.</p>
 
-          <p><span class="ui">Supplementary material</span>, <span class="ui">Peer review file</span>, <span class="ui">Other</span>, and <span class="ui">Invalid file</span> do not become the automatic default. Other Unknown attachments remain peers until selected manually. Any valid resource can still be selected manually; <span class="ui">Invalid file</span> is never eligible and remains visible only for audit and repair.</p>
+          <p>Correction notices, supplements, peer review files, commentary, summaries, analyses, source data, source code, Other and Invalid file do not become the automatic default. Other Unknown attachments remain peers until selected manually. Any valid resource can still be selected manually; <span class="ui">Invalid file</span> is never eligible and remains visible only for audit and repair.</p>
 
           <div class="note"><span class="callout-title">Published files</span>The user-facing type is <strong>Published version</strong>. A later formal correction can be classified as <strong>Corrected published version</strong>; the correction notice itself remains a separate peer.</div>
 
@@ -1301,7 +1301,7 @@
           </ol>
 
           <h2>Use the breadcrumb</h2>
-          <p>The breadcrumb at the bottom shows the active path. Select a segment to return to that location. The <span class="ui">List View / Table View</span> control at the lower right changes the representation of items without moving them.</p>
+          <p>The breadcrumb at the bottom displays the full managed path. A shortcut shows the real ancestry from Library or its independent Space root, including folders above the shortcut target. Its alias does not replace that path. Hover over the path to read it in full when space is limited. The segments are informational; use the columns or Left Arrow to navigate to a parent. The <span class="ui">List View / Table View</span> control at the lower right changes the representation of items without moving them.</p>
 
           <h2>Folder Details</h2>
           <p>When you select a folder, the right side shows its name, type, and the number of child folders and items. This is informational; it is not another folder level.</p>
@@ -1363,8 +1363,8 @@
           <p class="lead">Folders organize a root. Shortcuts provide another entrance to the Library. Spaces keep an independent root for a project or research context.</p>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/space-workspace.png" alt="A Space with folders, papers, Paper Files, and Paper Details">
-            <figcaption><strong>A Space.</strong> Spaces use the same paper identity and Paper Files model as the Library while keeping an independent organizational root.</figcaption>
+            <img src="/user-guide-assets/space-workspace.png" alt="AI Space with its persistent heading above the columns, Literature Project below, and full-height Details on the right">
+            <figcaption><strong>A Space with an open folder.</strong> AI remains the heading across its folder and content columns. Literature Project has its own heading beneath it. The Space heading stops at the Details divider; the right-hand Details pane keeps its full height.</figcaption>
           </figure>
 
           <h2>Choose the right structure</h2>
@@ -1394,6 +1394,15 @@
             <figcaption><strong>Add Space.</strong> Give the independent workspace a name, then choose Add. Cancel closes this form without creating a Space.</figcaption>
           </figure>
 
+          <h2>Use the Space or Shortcut heading</h2>
+          <p>The persistent heading identifies the source in both List View and Table View, even after you open a nested folder. It spans that source's folder and content area, including Paper Files when visible, and stops before Paper Details. The nested folder keeps its own heading below it.</p>
+          <p>Open the <span class="ui">…</span> menu at the right of the heading, or Control-click the source tab, for <span class="ui">Rename</span> and source actions. Renaming a shortcut changes its navigation label, not the underlying folder. Spaces also offer <span class="ui">Move Space to Library</span> here. These commands replace the former toolbar of large buttons.</p>
+          <p>To add a paper inside the current folder, Control-click blank space in that folder and choose <span class="ui">Add Paper</span>. Library, shortcuts and Spaces use the same inline input. <span class="ui">Add Paper</span> from the source heading menu targets that source's root; check the destination before submitting.</p>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/shortcut-path.png" alt="Shortcut view with the full Library, 1.Topo. SC, and Majorana path in the footer" loading="lazy">
+            <figcaption><strong>A shortcut retains its full path.</strong> The footer starts at Library and includes the shortcut target and selected folder. The heading identifies the shortcut while Paper Details remains independent.</figcaption>
+          </figure>
+
           <h2>Color folders and remove navigation entries</h2>
           <p>Control-click an ordinary folder and choose <span class="ui">Color</span> to change its folder color. Protected roots do not offer this command. On the source rail, <span class="ui">Remove Shortcut</span> removes only the shortcut, leaving its folder and papers intact. <span class="ui">Remove Empty Space</span> works only after both its managed contents and remaining files are empty; move the Space into Library if you want to keep its hierarchy.</p>
 
@@ -1411,7 +1420,7 @@
           <p>Use this when a temporary or project Space should become part of the permanent Library hierarchy.</p>
           <ol class="steps">
             <li><strong>Select the Space on the left rail.</strong> Open the Space that you want to keep as a normal Library folder.</li>
-            <li><strong>Choose <span class="ui">Move Space to Library</span>.</strong> The move sheet explains that the Space will become a folder with the same name.</li>
+            <li><strong>Open the heading’s <span class="ui">…</span> menu and choose <span class="ui">Move Space to Library</span>.</strong> You can also Control-click the Space tab. The move sheet explains that the Space will become a folder with the same name.</li>
             <li><strong>Choose <span class="ui">Destination in My Library</span>.</strong> Select the Library folder that should contain the moved Space.</li>
             <li><strong>Confirm the move.</strong> The complete Space hierarchy, including its files and subfolders, moves together.</li>
           </ol>
@@ -1429,7 +1438,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/library-search.png" alt="Search Library in the original Gewu Insight App" loading="lazy">
-            <figcaption><strong>Search Library.</strong> The search field filters the current workspace. Select a result or use Show in Library to reveal its folder location.</figcaption>
+            <figcaption><strong>Search Library.</strong> Library search finds saved items across Library and Spaces. Select a result or use Show in Library to reveal its folder location.</figcaption>
           </figure>
 
           <h2>Search the collection</h2>
@@ -1446,10 +1455,20 @@
           <p>This is fuzzy text matching; it does not generate Chinese/English translations, acronym expansions or concept-level synonyms. Subject Monitor discovery uses separate, literal keywords. Library searches do not change those keywords or request online discovery.</p>
 
           <h2>Switch views</h2>
-          <p>Choose <span class="ui">View &gt; List View</span> or <span class="ui">View &gt; Table View</span>. You can also use <kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd>. Table columns can be sorted or resized where available; changing the view does not rename, move, or rewrite files. Active Library search uses its result list and disables Table View. Clear the search to use Table View for the current folder again.</p>
+          <p>Choose <span class="ui">View &gt; List View</span> or <span class="ui">View &gt; Table View</span>. You can also use <kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd>. Changing the view does not rename, move, or rewrite files. Active Library search uses its result list and disables Table View. Clear the search to use Table View for the current folder again.</p>
+          <p>In either view, Control-click the folder contents and choose <span class="ui">Sort by Name</span> or <span class="ui">Sort by Modified Time</span> for folder ordering. These commands clear any active table-column sort.</p>
 
-          <h2>Sort a folder</h2>
-          <p>Control-click the folder contents and choose <span class="ui">Sort by Name</span> or <span class="ui">Sort by Modified Time</span>. Sorting changes presentation, not the paper identity.</p>
+          <h2>Sort by a table column</h2>
+          <ol class="steps">
+            <li><strong>Click <span class="ui">Title</span>, <span class="ui">Authors</span>, <span class="ui">Year</span>, or <span class="ui">Journal</span>.</strong> The first click sorts ascending: displayed text alphabetically, Year numerically.</li>
+            <li><strong>Click again to reverse.</strong> The header arrow shows the direction.</li>
+            <li><strong>Continue navigating.</strong> Library, shortcuts and Spaces retain the chosen column and direction. Keyboard movement and range selection follow the visible order.</li>
+          </ol>
+          <p>Folders stay above papers, and missing metadata stays below known values in either direction. Sorting preserves the selected paper, its identity and its files.</p>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/library-table.png" alt="Interferometry Space Table View sorted by Year descending with Published version and Summary in Paper Files" loading="lazy">
+            <figcaption><strong>Table View sorting.</strong> The Year arrow shows descending order. The same headers work in Library and shortcuts. This existing paper's Published version remains Default, with a separate Summary in Paper Files.</figcaption>
+          </figure>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
@@ -1469,10 +1488,11 @@
 
           <h2>Add a paper by DOI, arXiv ID, URL, or title</h2>
           <ol class="steps">
-            <li><strong>Open the destination folder.</strong> The resolved paper will be placed in the active Library folder.</li>
+            <li><strong>Open the destination folder.</strong> The resolved paper will be placed in that Library, Shortcut or Space folder.</li>
             <li><strong>Choose <span class="ui">Add Paper</span>.</strong> Control-click blank space in the folder contents and choose the command to open the inline lookup field.</li>
-            <li><strong>Enter a DOI, arXiv identifier, supported article URL, or title.</strong> A DOI or arXiv identifier is the strongest identity clue. A title search may return alternatives that need review.</li>
-            <li><strong>Review and confirm the resolved match.</strong> Check the title, authors, journal, and year, then choose <span class="ui">Add Paper</span> again.</li>
+            <li><strong>Enter a DOI, arXiv identifier, supported article URL, or title.</strong> A DOI or arXiv identifier is the strongest identity clue.</li>
+            <li><strong>Press Return or click <span class="ui">Add Paper</span> once.</strong> The app resolves the query and adds the paper to the displayed destination. A failed lookup leaves an error in the inline form.</li>
+            <li><strong>Review the added paper in Details.</strong> Check its title, authors, identifiers, journal and year, especially after using a title query.</li>
           </ol>
           <p>If the identity already exists, Gewu Insight reuses the canonical paper and adds the selected folder placement rather than creating an unrelated duplicate.</p>
 
@@ -1700,7 +1720,7 @@
           <p class="lead">The default file is the preferred local representation of the paper. Choose it manually or let Gewu Insight select it. Default appears first in the file list; Up and Down follow the visible order.</p>
 
           <h2>Automatic selection</h2>
-          <p>The automatic order is <span class="ui">Corrected published version</span>, <span class="ui">Published version</span>, <span class="ui">Accepted manuscript</span>, then <span class="ui">Preprint</span>. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.</p>
+          <p>The automatic order is <span class="ui">Corrected published version</span>, <span class="ui">Published version</span>, <span class="ui">Accepted manuscript</span>, then <span class="ui">Preprint</span>. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Perspective, News and Views, Summary, Analysis, Source Data, Source Code, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.</p>
 
           <h2>Automatic and manual eligibility</h2>
           <p>The four publication types above take priority in automatic selection, ahead of the first Browser PDF fallback. You may manually choose any existing file except one classified as <span class="ui">Invalid file</span>. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose <span class="ui">Use Automatic Selection</span>. Newly arriving files remain peer rows and do not erase or silently reclassify older files.</p>
@@ -1721,8 +1741,12 @@
           <ul>
             <li><span class="ui">Preprint</span>, <span class="ui">Accepted manuscript</span>, <span class="ui">Published version</span>, and <span class="ui">Corrected published version</span></li>
             <li><span class="ui">Correction notice</span>, <span class="ui">Supplementary material</span>, and <span class="ui">Peer review file</span></li>
+            <li><span class="ui">Perspective</span>, <span class="ui">News and Views</span>, <span class="ui">Summary</span>, and <span class="ui">Analysis</span></li>
+            <li><span class="ui">Source Data</span> and <span class="ui">Source Code</span></li>
             <li><span class="ui">Other</span>, <span class="ui">Unknown</span>, and <span class="ui">Invalid file</span></li>
           </ul>
+
+          <p>Use Perspective or News and Views for related commentary, Summary or Analysis for reading notes and interpretation, and Source Data or Source Code for the accompanying research material. These labels describe this file's role; they do not change the parent paper's publication type or Gewu Key. They are not automatically promoted to Default. File extension alone does not determine the role.</p>
 
           <p>Annotation state is selected independently as <span class="ui">Annotated</span>, <span class="ui">Unannotated</span>, or <span class="ui">Unknown</span>. Source is independently recorded as <span class="ui">Publisher</span>, <span class="ui">Preprint server</span>, <span class="ui">Institutional repository</span>, <span class="ui">User import</span>, <span class="ui">Other</span>, or <span class="ui">Unknown</span>. Manual type and annotation choices survive later fingerprint rescans.</p>
 
@@ -1747,10 +1771,10 @@
           </ol>
 
           <h2>Attachment types</h2>
-          <p>The same ten file types apply to every row. File extension and MIME type remain separate technical facts, so an image, note, dataset, or code archive can use <span class="ui">Other</span> without being mistaken for a PDF version.</p>
+          <p>The same <a href="#versions-current">file-type choices</a> apply to every row and to Browser capture. Use <span class="ui">Summary</span> or <span class="ui">Analysis</span> for notes, <span class="ui">Source Data</span> for research data, and <span class="ui">Source Code</span> for code; use <span class="ui">Other</span> when none fits. File extension and MIME type remain separate from this classification. Existing files keep their saved labels until you change them.</p>
 
           <h2>Add by drag and drop</h2>
-          <p>Drag a Finder file over the expanded Paper Files area, wait for the drop target to respond, then release. The file is copied into the selected paper’s associated bundle and appears in Paper Files.</p>
+          <p>Drag one or more Finder files anywhere in the visible Paper Files column: over its heading, an existing card, or the empty gray area. No card needs to be expanded. Wait for the whole-column drop highlight, confirm the selected destination paper, then release. The files are copied into that paper’s associated bundle and appear in Paper Files. The same behavior applies in Library, shortcuts and Spaces.</p>
 
           <div class="important"><span class="callout-title">Important</span>Invalid or unreadable PDFs are rejected at file ingress. Existing migrated records that can be proven invalid remain visible as <span class="ui">Invalid file</span> for audit and repair, but cannot become a default.</div>
 
@@ -1816,7 +1840,7 @@
             <li><strong>Begin dragging the standalone item.</strong> The main paper remains the active destination while you drag.</li>
             <li><strong>Move the pointer into the Paper Files drop zone.</strong> Wait for the drop feedback that identifies the target paper.</li>
             <li><strong>Release the pointer.</strong> Gewu Insight validates the move, adopts the file into the paper bundle, and removes its independent Library position.</li>
-            <li><strong>Classify the attachment.</strong> Choose <span class="ui">Supplementary material</span> for an actual paper supplement, or <span class="ui">Other</span> for a general image, dataset, code file, slide deck, or note. Expand the size footer to set Annotation and Source separately. See <a href="#versions-current">the complete current file-type list</a>.</li>
+            <li><strong>Classify the attachment.</strong> Choose <span class="ui">Supplementary material</span> for an actual paper supplement, <span class="ui">Source Data</span> for data, <span class="ui">Source Code</span> for code, <span class="ui">Summary</span> or <span class="ui">Analysis</span> for notes, or <span class="ui">Other</span> when none fits. Expand the size footer to set Annotation and Source separately. See <a href="#versions-current">the complete current file-type list</a>.</li>
           </ol>
 
           <p class="result">The physical file and database link now belong to the destination paper; the former standalone entry is gone.</p>
@@ -2219,6 +2243,10 @@
           <p>Automatic DOI and abstract completion uses other metadata services, independently of Scholar profile checks. It rotates between authors and reuses shared paper identities: up to 20 papers per batch and 80 per local day, yielding between papers after about two minutes and resting at least five minutes between batches. Recent attempts wait seven days before automatic retry. Progress reservations and rest times survive restarting; explicit identifier commands remain available separately.</p>
           <p>Scholar requests remain serialized, with 4–8 seconds between requests, 12–24 seconds between profile pages and 45–90 seconds between automatic author checks. Every request checks the shared workspace cooldown again before sending, including My Publications imports. Access restrictions pause Scholar for 24 hours; manual actions and restarts do not bypass or reset that pause. This is Gewu's protective waiting period, not a promised unblock time from Google.</p>
 
+          <h2>Recover after a network interruption</h2>
+          <p>A temporary connection failure shows <span class="ui">Google Scholar temporarily unavailable</span> in the bottom bar. Hover over it for the author, error and retry details. Cached publications remain available. After the connection returns, keep the App running: failed transport requests have a paced automatic retry queue, including before the normal 10:00 daily check. The message clears after a successful retry, not immediately when Wi-Fi reconnects.</p>
+          <p>This retry queue is separate from a Scholar access restriction. A displayed access cooldown still takes precedence; repeatedly refreshing or restarting does not bypass it. You can use <span class="ui">Refresh This Author</span> for a deliberate retry when the status permits.</p>
+
           <h2>Refresh one author or find missing identifiers</h2>
           <p>Control-click the author and choose <span class="ui">Refresh This Author</span> to update that person's publications. <span class="ui">Find Missing Identifiers</span> checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose <span class="ui">Find Missing Identifier</span>; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from <span class="ui">Get DOI</span>, which uses an available local PDF.</p>
 
@@ -2258,8 +2286,8 @@
           <h1>Browse, Bookmark, and Revisit Websites</h1>
           <p class="lead">Browser is the sixth main tab, after Author Monitor. By default, website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages. This includes Open Website and Google Scholar links. Choose <a href="#website-link-settings">Setting &gt; Website Links</a> to use the system default browser instead.</p>
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/browser.png" alt="Real Gewu Browser displaying Nature research articles, actual Nature bookmarks and website icons, and the compact B menu">
-            <figcaption><strong>Browser in use.</strong> Captured from the original App displaying a fully loaded Nature Physics PDF. The left bookmark sidebar, webpage tab, left-side close button, and Save to Gewu are visible. This is a live interface capture, not a generated demonstration.</figcaption>
+            <img src="/user-guide-assets/browser.png" alt="Real Gewu Browser showing a Nature Physics PDF, the bookmark sidebar and the centered webpage icon and title">
+            <figcaption><strong>Browser in use.</strong> Captured from the original App displaying a fully loaded Nature Physics PDF. The left bookmark sidebar, centered webpage icon and title, left-side close button, and Save to Gewu are visible. This is a live interface capture, not a generated demonstration.</figcaption>
           </figure>
 
           <h2>Search and navigate</h2>
@@ -2277,7 +2305,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/browser-home.png" alt="Browser Home in the original Gewu Insight App" loading="lazy">
-            <figcaption><strong>Browser Home.</strong> The original App displays the user's real Favorites with the bookmark sidebar collapsed. Home is local; use the address field or a bookmark to open a website.</figcaption>
+            <figcaption><strong>Browser Home.</strong> The original App displays the user's real Favorites with the bookmark sidebar collapsed. Home and Nature occupy separate tabs with each icon beside its centered title. Home is local; use the address field or a bookmark to open a website.</figcaption>
           </figure>
 
           <h2>Use multiple webpage tabs</h2>
@@ -2329,7 +2357,7 @@
 
           <h2>Read PDFs and save downloads</h2>
           <p>Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. In a publisher's HTML viewer, click its PDF download link: Browser receives the PDF using its current website session and opens it in that tab, including supported page-generated files. <span class="ui">Opening PDF…</span> shows progress. Switching tabs does not interrupt it or let completion take focus; leaving the source page or closing its tab cancels that pending preview. Website sign-in and consent pages remain visible.</p>
-          <p>Preview uses temporary browser storage, not your Downloads folder or Library. PDF attachment previews accept up to 128 MB and two minutes per transfer. Save to Gewu and the bottom-right <span class="ui">Save Download</span> arrow reuse a complete loaded PDF; they do not silently download it again. The PDF viewer’s own download arrow also opens a native save dialog, initially in Downloads. Original-file copies are temporary and bounded; navigating to another document or closing its tab releases them. To import a PDF, use <span class="ui">Save to Gewu</span> below or <a href="#import-files">import a saved file</a>. Library PDFs still open in macOS Preview.</p>
+          <p>Preview uses temporary browser storage, not your Downloads folder or Library. PDF attachment previews accept up to 128 MB and two minutes per transfer. Save to Gewu and the bottom-right <span class="ui">Save Download</span> arrow reuse a complete loaded PDF; they do not silently download it again. Both the bottom-right arrow and the PDF viewer’s own download arrow open a native save dialog, initially in Downloads. Confirm the filename and destination to write the file; Cancel leaves it unsaved. Original-file copies are temporary and bounded; navigating to another document or closing its tab releases them. To import a PDF, use <span class="ui">Save to Gewu</span> below or <a href="#import-files">import a saved file</a>. Library PDFs still open in macOS Preview.</p>
 
           <h2>System networking and Clash rules</h2>
           <p>WebKit follows macOS networking without changing proxies/Clash. When system proxy or TUN routes traffic to Clash, its rules choose DIRECT/proxy. <span class="ui">System network</span> is policy, not proof of routing. DIRECT needs a school-recognized exit or institutional login. PDF/login/CDN domains match separately; browser-specific extensions/process rules are not inherited. Verify Clash connections; see <a href="#network-access">Publisher and Network Access</a>.</p>
@@ -2343,8 +2371,15 @@
             <li><strong>Choose the destination.</strong> Click the folder button under <span class="ui">Add to Library</span>. The same column picker used by Journal and Subject Monitor shows <span class="ui">My Library</span> and Spaces on the left, then subfolders in successive columns. Check the full path and click <span class="ui">Confirm</span> to select the destination. Choose the file type, then click <span class="ui">Save to Library</span> to import. Recognized publisher article PDFs suggest <span class="ui">Published version</span>. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest <span class="ui">Preprint</span>, regardless of the article’s journal metadata. Review the suggestion; uncertain files remain <span class="ui">Unknown</span>. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF’s actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.</li>
           </ol>
           <p>Opening Details, identifying or cancelling imports nothing. Save reuses an existing active Library or Space placement, preferring the selected occurrence of that same paper. Attaching a PDF does not add a root-level entry. To add another location, explicitly choose and confirm its folder. Papers with no active placement use the folder saved in <a href="#add-to-library-settings">Setting &gt; Add to Library</a>, initially <span class="ui">Library / unsorted</span>, unless you confirm another folder. An unavailable saved default falls back to unsorted. Review creates no placement; the destination is checked again on Save. Paper Files refreshes immediately. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. <span class="ui">Show in Library</span> selects the saved occurrence. Browser keeps the webpage.</p>
-          <p><strong>Use the original paper or correct the target.</strong> A tab opened with Open Website or the arXiv arrow remembers its source paper and Library occurrence, including related PDF tabs. Save to Gewu uses that existing paper when the current evidence agrees or provides no conflicting identifier. Manually corrected DOI/arXiv values take precedence over old automatic matches. If the page identifies another work, the source is not forced onto it.</p>
-          <p>To correct a match, enter an existing <span class="ui">Gewu Key</span> in Details and press Enter or <span class="ui">Use Key</span>. <span class="ui">Target updated</span> confirms the selection; check the displayed title, Key and Add to Library path. An unknown Key produces an error and creates nothing. Choose <span class="ui">Automatic</span> to return to detection. If the page or PDF conflicts with your selected target, explicitly confirm that the file belongs to it before saving. Selecting a target attaches the file without replacing that paper’s DOI, metadata or manual Default.</p>
+          <h2>Use the original paper or correct the target</h2>
+          <p> A tab opened with Open Website or the arXiv arrow remembers its source paper and Library occurrence, including related PDF tabs. Save to Gewu uses that existing paper when the current evidence agrees or provides no conflicting identifier. Manually corrected DOI/arXiv values take precedence over old automatic matches. If the page identifies another work, the source is not forced onto it.</p>
+          <ol class="steps">
+            <li><strong>Enter the correct existing <span class="ui">Gewu Key</span> in Details.</strong> Press Return or choose <span class="ui">Use Key</span>.</li>
+            <li><strong>Wait for <span class="ui">Target updated</span>.</strong> Check the displayed title, Key, existing-article status and <span class="ui">Add to Library</span> path. The review switches to that paper's active location when available. An unknown Key produces an error and creates nothing.</li>
+            <li><strong>Review any conflicting evidence.</strong> If the page or PDF identifies another work, explicitly confirm that this file belongs to the selected target before saving. Changing the identifier afterward requires another review.</li>
+            <li><strong>Check the PDF and File type, then save.</strong> Selecting a target attaches the file without replacing that paper's DOI, metadata or manual Default. Choose <span class="ui">Automatic</span> to return to automatic identity detection.</li>
+          </ol>
+          <p><strong>What Article only means.</strong> No PDF is currently included in the review. Article identification and PDF attachment are separate: identifying a DOI can find the existing paper without attaching a file. Expand Details and inspect the PDF controls. A loaded complete PDF can be reused through <span class="ui">Use Loaded PDF</span>; otherwise open the site's actual PDF or choose a local file. This status alone does not mean the publisher has no PDF.</p>
           <p><strong>If PDF retrieval fails:</strong> retry after opening the site's PDF, choose a downloaded local PDF, or save the article alone. Errors stay visible; missing or conflicting identity opens Details. If storage fails after saving the article, retry reuses its record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site's login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu's built-in Browser; a Safari extension is not included.</p>
 
           <figure class="guide-screenshot">
@@ -2354,7 +2389,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/save-gewu-details.png" alt="Save to Gewu: Details in the original Gewu Insight App" loading="lazy">
-            <figcaption><strong>Save to Gewu: Details.</strong> Expanded Details identifies this existing Nature Physics article by its Gewu Key and DOI. The PDF is Ready and classified as Published version before saving.</figcaption>
+            <figcaption><strong>Save to Gewu: Details.</strong> Expanded Details identifies this existing Nature Physics article by its Gewu Key and DOI. Use Key and Automatic control the target; Use Loaded PDF reuses the original file. The PDF is Ready and classified as Published version before saving.</figcaption>
           </figure>
 
           <figure class="guide-screenshot">
@@ -2885,7 +2920,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <h2>If a publisher page is blocked</h2>
           <ol class="steps">
             <li><strong>Stop repeated refreshes.</strong> Additional requests can extend a temporary block.</li>
-            <li><strong>Try your direct connection.</strong> If the page works with VPN off, the VPN exit IP is likely the blocked client.</li>
+            <li><strong>Try your direct connection.</strong> If the page works with VPN off, investigate the VPN route, quota or exit address before treating it as a product or certificate failure.</li>
             <li><strong>Use <span class="ui">Open Website</span> or an external browser.</strong> Complete any normal institutional login or publisher interaction yourself.</li>
             <li><strong>Download only when authorized.</strong> Add a legitimately obtained PDF with <span class="ui">Add File</span>.</li>
           </ol>
@@ -2895,6 +2930,9 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <h2>Browser and your system network</h2>
           <p>The Browser tab uses native WebKit requests and does not proxy pages through the Python server. System proxy or TUN capture can send its traffic into Clash; only then do the active rules determine DIRECT or proxy routing. A DIRECT rule uses your current physical network, which must itself provide institutional access. Gewu Insight neither changes these rules nor guarantees a particular route; use Clash connection records to verify the actual route. See <a href="#browser">Browse, Bookmark, and Revisit Websites</a> for downloads, sign-in limits, and the separate browser profile.</p>
+
+          <h2>Secure-connection failures and VPN interruptions</h2>
+          <p>A secure-connection error such as <code>NSURLErrorDomain -1200</code> means WebKit could not complete a secure connection; it does not by itself establish that the site's certificate has expired. Check the network, VPN quota or route, and the Mac's date and time. After restoring the connection, reload the page once and retry the failed download if needed. A change of VPN node can restore the route without any change to Library data. Certificate verification stays enabled.</p>
 
           <h2>Service rate limits</h2>
           <p>Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, cooldowns, or exponential backoff. Let the bottom status area settle before starting the same action again.</p>
@@ -2936,7 +2974,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
             <tr><th>Monitor</th><th>Current automatic schedule</th></tr>
             <tr><td>Journal Monitor</td><td>Daily work becomes due from 09:00 in the Mac's local time zone; stored completion and pending retry state determine what still needs work.</td></tr>
             <tr><td>Subject Monitor</td><td>Daily work becomes due from 09:00 local time; incomplete sources have their own bounded retry state.</td></tr>
-            <tr><td>Author Monitor</td><td>Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick.</td></tr>
+            <tr><td>Author Monitor</td><td>Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick. Failed transport checks use a separate paced retry queue, including before 10:00; access cooldowns still apply.</td></tr>
             <tr><td>arXiv</td><td>Uses its separate announcement-ready schedule and buffer, not the journal's 09:00 rule. Read the displayed update/countdown state.</td></tr>
           </table>
           <p>These are local scheduler rules, not guarantees of remote source completion or a hosted monitoring service. Manual Refresh remains available for the selected scope; repeated broad refreshes can worsen a source's rate limit.</p>
