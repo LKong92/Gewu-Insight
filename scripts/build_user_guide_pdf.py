@@ -509,9 +509,11 @@ def latex_preamble(version: str, build: str) -> str:
 \pretocmd{{\subsubsection}}{{\Needspace{{3\baselineskip}}}}{{}}{{}}
 % Product Identity is one continuous reading sequence. Suppress only the
 % chapter's forced break locally; normal page overflow, numbering, TOC entries
-% and labels are still handled by KOMA-Script. Other parts remain unchanged.
+% and labels are still handled by KOMA-Script. Reserve room for a two-line
+% chapter title plus a following subsection so neither title is orphaned.
+% Other parts remain unchanged.
 \newcommand{{\GewuIdentityChapter}}[1]{{%
-  \par\Needspace{{9\baselineskip}}%
+  \par\Needspace{{13\baselineskip}}%
   \let\GewuSavedClearPage\clearpage
   \let\GewuSavedClearDoublePage\cleardoublepage
   \let\clearpage\relax

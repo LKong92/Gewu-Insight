@@ -18,6 +18,14 @@ boundaries, stable IDs and pagination are documented. Other topics and captures
 retain the completed audit above. Runtime references for this follow-up are
 `ai_folders.py`, `ai_service.py`, `ai_store.py` and `mcp_server.py`.
 
+The name-and-mission follow-up places the user-approved English interpretation
+at the start of Product Identity and aligns the short Welcome explanation.
+It emphasizes experimental phenomena, physical pictures, intuition and
+insightful guesses, then connects that outlook to revisiting papers, comparing
+results and preserving research notes. The final English sentence is followed
+by the approved Chinese sentence in parentheses. All screenshots and artwork
+are retained; this follow-up makes no runtime or research-data change.
+
 Primary implementation references: `paper_monitor/ui_server.py`,
 `paper_monitor/storage.py`, `paper_monitor/metadata_refresh.py`,
 `paper_monitor/library_destination.py`, `paper_monitor/file_placement.py`,
@@ -65,7 +73,7 @@ instruction was checked and did not need a substantive rewrite.
 
 | Topic | Review result |
 |---|---|
-| [Welcome](../paper_monitor/user_guide.html#welcome) | Update the manual revision date; retain 1.0.0 / Build 1. |
+| [Welcome](../paper_monitor/user_guide.html#welcome) | Align the short name explanation with the physics-based research outlook and link to Product Identity; retain 1.0.0 / Build 1. |
 | [Guided Tour](../paper_monitor/user_guide.html#guided-tour) | Retain six-tab visual grammar, selection, pane sizing, search and separate Help window. |
 | [Your First Session](../paper_monitor/user_guide.html#first-session) | Correct Add Paper metadata-only behavior; retain the research-to-writing route. |
 | [System Architecture at a Glance](../paper_monitor/user_guide.html#system-overview) | Verify six workspaces, shared record, independent files and provider boundary. |
@@ -108,7 +116,7 @@ instruction was checked and did not need a substantive rewrite.
 | [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Verify rename templates, naming scope and explicit preferences. |
 | [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Align Default physical promotion and shared active-reference ownership with filesystem/SQLite behavior. |
 | [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Retain local/private data boundary and external provider/AI client responsibility. |
-| [Visual Identity and Cultural Elements](../paper_monitor/user_guide.html#visual-identity) | Preserve glyph provenance, cultural explanation and continuous Product Identity PDF chapters. |
+| [Visual Identity and Cultural Elements](../paper_monitor/user_guide.html#visual-identity) | Add the approved name meaning and software-mission connection, ending with the exact English/parenthesized Chinese sentence. Preserve glyph provenance, artwork and continuous Product Identity PDF chapters. |
 | [Keyboard Shortcuts](../paper_monitor/user_guide.html#keyboard) | Verify contextual shortcuts for workspace, Browser, Quick Look and editing. |
 | [Publisher and Network Access](../paper_monitor/user_guide.html#network-access) | Distinguish transport/VPN/secure-connection failures from publisher restrictions; retain access protections. |
 | [Startup, Monitor Cache, and Text Size](../paper_monitor/user_guide.html#startup) | Add transport retries before the ordinary 10:00 author schedule; retain private-session recovery and paused-job behavior. |
@@ -126,23 +134,29 @@ numbering and continuous flow in the builder.
 
 ## Validation
 
-- All 27 Guide/audit tests and six PDF structure checks pass after the MCP
-  follow-up. Python compilation and `git diff --check` pass. The existing
+- All 27 Guide/audit tests and six PDF structure checks pass after the
+  name-and-mission follow-up. Python compilation and `git diff --check` pass. The existing
   49-topic anchors and 35-image inventory are preserved.
 - The regenerated PDF has 111 pages. The original audit reviewed every page;
   the MCP follow-up renders and reviews pages 86–111, including the changed
-  AI Access pages and the later pages whose numbering moved. Changed directory
-  instructions and figures were also inspected at 144 dpi.
-- All 342 internal PDF links resolve. Product Identity chapters 4-1 and 4-2
-  share page 99; chapters 4-3 and 4-4 continue on pages 100–101 without forced
-  chapter breaks.
+  AI Access pages and the later pages whose numbering moved. The name-and-mission
+  follow-up renders the full PDF and compares page bodies: only contents pages
+  3/5, Welcome pages 8–10 and Identity pages 99–101 change. These pages were
+  visually reviewed, with final Identity pages inspected at 120 dpi. The builder
+  now reserves space for a chapter title and its following subsection to avoid
+  an orphaned heading while preserving continuous chapter flow.
+- All 343 internal PDF links resolve, including the new Welcome-to-Identity
+  link. Product Identity chapter 4-1 is on page 99, 4-2 on page 100, and 4-3
+  and 4-4 share page 101, without forced chapter breaks.
 - The source PDF and `Gewu Insight.app/Contents/Resources/Gewu Insight User
   Guide.pdf` match byte-for-byte. The documentation package passes strict App
   signature verification. Executable program code and 1.0.0 / Build 1 identity
   are unchanged by the documentation packaging.
 - The real in-app AI Access topic displays both new tools and directory-grant
   instructions. Help → User Guide → Print Guide opens the verified App resource
-  in macOS Preview, showing page 1 of 111 and Version 1.0.0 (Build 1).
+  in macOS Preview. The final name-and-mission text and bilingual ending are
+  also verified in the live Guide and on page 99 of the bundled 111-page PDF;
+  the version remains 1.0.0 (Build 1).
 - MCP feature validation passed 1,053 product tests, 44 scoped MCP checks and
   the temporary-data AI Access UI probe. The user-authorized restart activated
   adapter 1.2.0. Read-only acceptance through the existing configured connection
@@ -155,7 +169,8 @@ numbering and continuous flow in the builder.
 
 The earlier audit evidence is local under `/private/tmp/gewu-guide-sync-qa/`;
 the MCP follow-up, native captures, live acceptance and App backup are under
-`/private/tmp/gewu-mcp-folders-qa/`. No collection import, deletion,
+`/private/tmp/gewu-mcp-folders-qa/`. Name-and-mission PDF checks and the
+pre-update App backup are under `/private/tmp/gewu-identity-guide-qa/`. No collection import, deletion,
 classification, token replacement or grant change was performed for this
 verification. The existing connection was already enabled for directory
 browsing when live acceptance ran.

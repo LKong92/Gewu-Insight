@@ -111,7 +111,7 @@ def test_identity_chapter_break_suppression_is_local_and_keeps_chapter_semantics
     preamble = _builder_module().latex_preamble("0.1", "test")
     start = preamble.index(r"\newcommand{\GewuIdentityChapter}")
     command = preamble[start:preamble.index(r"\raggedbottom", start)]
-    assert r"\Needspace{9\baselineskip}" in command
+    assert r"\Needspace{13\baselineskip}" in command
     assert command.index(r"\let\GewuSavedClearPage\clearpage") < command.index(r"\let\clearpage\relax")
     assert command.index(r"\let\GewuSavedClearDoublePage\cleardoublepage") < command.index(r"\let\cleardoublepage\relax")
     assert command.index(r"\chapter{#1}") < command.index(r"\let\clearpage\GewuSavedClearPage")

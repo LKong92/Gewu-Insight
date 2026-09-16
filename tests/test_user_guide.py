@@ -264,7 +264,7 @@ class UserGuideTests(unittest.TestCase):
             "格物致知",
             "格物 · Gewu",
             "洞见 · Insight",
-            "Keep research objects visible, evidence traceable, and insight cumulative.",
+            "Investigate nature through experimental phenomena; seek insight through physical pictures and intuition.",
             "Five design commitments",
             "Local-first does not mean offline-only",
             "Cross-platform core, platform-specific integration",

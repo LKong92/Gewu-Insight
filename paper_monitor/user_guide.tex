@@ -84,9 +84,11 @@
 \pretocmd{\subsubsection}{\Needspace{3\baselineskip}}{}{}
 % Product Identity is one continuous reading sequence. Suppress only the
 % chapter's forced break locally; normal page overflow, numbering, TOC entries
-% and labels are still handled by KOMA-Script. Other parts remain unchanged.
+% and labels are still handled by KOMA-Script. Reserve room for a two-line
+% chapter title plus a following subsection so neither title is orphaned.
+% Other parts remain unchanged.
 \newcommand{\GewuIdentityChapter}[1]{%
-  \par\Needspace{9\baselineskip}%
+  \par\Needspace{13\baselineskip}%
   \let\GewuSavedClearPage\clearpage
   \let\GewuSavedClearDoublePage\cleardoublepage
   \let\clearpage\relax
@@ -194,7 +196,7 @@ Gewu Insight is designed to keep those fragments connected. It treats discovery,
 
 \section{Why the name 格物洞见}\label{why-the-name-ux683cux7269ux6d1eux89c1}
 
-The name recalls the Chinese idea of \textbf{格物致知}: approaching things closely enough to understand their underlying order. In this practical research setting, \emph{gewu}---the investigation of things---means continuously examining the research object, its sources, authors, versions, files, relationships, and changing state.
+The name draws on the Chinese idea of \textbf{格物致知} and expresses a way of doing research shaped by physics: begin with real-world phenomena and experimental observations, and seek to understand what lies behind them.
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -206,18 +208,20 @@ Element & Role \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-{\textbf{格物 · Gewu}} & {Stay close to the research object. Keep the paper, identifiers, versions, sources, files, and relationships inspectable instead of reducing them to an untraceable card or summary.} \\
-{\textbf{洞见 · Insight}} & {Let understanding emerge from connected evidence, repeated reading, comparison, and the researcher\textquotesingle s judgment. Insight is accumulated; it is not a conclusion the app claims to manufacture.} \\
+{\textbf{格物 · Gewu}} & {Investigate things as they occur in the real world. Let concrete phenomena, experimental observations, and questions from nature give research its starting point.} \\
+{\textbf{洞见 · Insight}} & {Seek the patterns and mechanisms behind phenomena through physical pictures, intuition, imagination, and insightful guesses. Mathematics is a tool for developing that understanding.} \\
 \end{longtable}
 \GewuTableEnd
 }
 
 \begin{GewuCaption}
-The Chinese name is part of the product idea, not a decorative translation of the English name.
+The name expresses the research outlook that this workspace supports.
 \end{GewuCaption}
 
+Gewu Insight keeps papers, versions, supporting files, and research notes connected so you can return to experimental results, compare physical pictures, and pursue emerging ideas. Read the full explanation in \hyperref[visual-identity]{Visual Identity and Cultural Elements}.
+
 \begin{quote}
-Keep research objects visible, evidence traceable, and insight cumulative.{让研究对象保持可见，让证据保持可追，让洞见能够积累。}
+Investigate nature through experimental phenomena; seek insight through physical pictures and intuition.{（从实验现象中格物，以物理图像和直觉求洞见。）}
 \end{quote}
 
 \section{Five design commitments}\label{five-design-commitments}
@@ -4073,8 +4077,22 @@ Optional service credentials belong only in Open Source Settings or approved env
 \GewuIdentityChapter{Visual Identity and Cultural Elements}\label{visual-identity}
 
 \begin{GewuLead}
-Gewu Insight uses three related marks---the calligraphic Chinese name, the app icon, and a seal-script watermark---to connect a contemporary research workspace with the longer Chinese tradition of examining things in order to form insight.
+The name Gewu Insight (格物洞见) expresses a way of doing research shaped by the practice of physics: begin with the real world, and seek to see what lies behind its phenomena.
 \end{GewuLead}
+
+\emph{Gewu} (格物) means investigating things. Here, it emphasizes starting from concrete phenomena, experimental observations, and questions that nature presents to us. Research should remain in contact with the world it seeks to understand. Abstract ideas and theories gain their purpose from that contact; they should not become castles in the air, sustained only by further abstraction.
+
+\emph{Insight} (洞见) means seeing through phenomena to the patterns and mechanisms beneath them. It values physical pictures, intuition, imagination, and the ability to make an insightful guess---to recognize what may be happening before every step has been expressed in equations. A useful physical picture can reveal which features matter, suggest a mechanism, and open a direction that formal derivation alone might not make apparent. Mathematics serves as a tool for thinking, expression, and calculation. Absolute formal rigor, axiomatic completeness, and mathematical elegance are not ends in themselves, nor should they constrain the search for physical understanding.
+
+This outlook also shapes the purpose of the software. Research literature brings us into contact with other researchers' experiments, observations, interpretations, and ideas. Gewu Insight keeps these materials connected: a paper retains its identity across versions, its figures and supporting files remain accessible, and related work and research notes can be organized together and revisited over time.
+
+These functions support the everyday work from which insight can emerge: returning to an experimental result, comparing competing physical pictures, noticing an unexpected connection, or recording a conjecture worth pursuing. The researcher brings the questions, intuition, and judgment; the workspace helps keep the material close at hand and the developing line of thought connected to its sources.
+
+\begin{quote}
+Investigate nature through experimental phenomena; seek insight through physical pictures and intuition.{（从实验现象中格物，以物理图像和直觉求洞见。）}
+\end{quote}
+
+The calligraphic Chinese name, the app icon, and the seal-script watermark give this research outlook a visual identity.
 
 The marks do not decorate every surface. Each has a different job: the icon identifies the application, the calligraphic name gives the product a human signature, and the quiet seal-script pattern belongs to transitional or otherwise empty space.
 
