@@ -23,6 +23,7 @@ ACTIVE_FOLDERS = '''WITH RECURSIVE active_folders(id,path) AS (
  SELECT id,name FROM library_folders WHERE parent_id IS NULL AND COALESCE(trashed_at,'')=''
  UNION ALL SELECT f.id,a.path || ' / ' || f.name FROM library_folders f
  JOIN active_folders a ON f.parent_id=a.id WHERE COALESCE(f.trashed_at,'')=''
+ AND NOT (f.parent_id=1 AND f.name='Recycle')
 ) '''
 
 
@@ -55,8 +56,8 @@ def selection_sql(grant):
       WHERE i.paper_id=p.paper_id AND COALESCE(i.trashed_at,'')='')'''
     if kind == 'saved':
         return '(' + location + ' OR EXISTS (SELECT 1 FROM my_publications m WHERE m.paper_id=p.paper_id))', []
-    # A moved, trashed, or deleted folder no longer grants access. Matching is
-    # by folder identity, never by a user-controlled display path.
+    # The grant follows its anchor's identity. Descendants moved outside that
+    # anchor, or trashed/deleted folders, no longer grant access.
     return '''EXISTS (WITH RECURSIVE descendants(id) AS (
       SELECT id FROM active_folders WHERE id=? UNION ALL
       SELECT f.id FROM library_folders f JOIN descendants d ON f.parent_id=d.id
@@ -257,6 +258,9 @@ def execute(storage, authorization, operation, args):
         require_scope(grant, 'papers:read')
         if operation == 'search_papers':
             result = search(storage, grant, args)
+        elif operation in ('list_folders', 'list_folder_papers'):
+            from .ai_folders import list_collection
+            result = list_collection(storage, grant, operation, args)
         elif operation in ('get_paper', 'read_paper', 'save_analysis', 'download_file'):
             paper = paper_for_key(storage, grant, key)
             if operation == 'get_paper':
@@ -284,6 +288,9 @@ def execute(storage, authorization, operation, args):
         # A revoke, disable or collection move during a long extraction takes
         # effect before any content is returned to the client.
         fresh = authenticate(storage, authorization)
+        if operation in ('list_folders', 'list_folder_papers'):
+            from .ai_folders import verify_result
+            verify_result(storage, fresh, result)
         if key:
             paper_for_key(storage, fresh, key)
         audit(storage, grant, operation, key)

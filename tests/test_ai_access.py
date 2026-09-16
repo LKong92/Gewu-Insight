@@ -306,6 +306,58 @@ class AIAccessTests(unittest.TestCase):
         self.addCleanup(client.close)
         return client
 
+    def test_directory_tools_require_explicit_workspace_opt_in_and_work_over_stdio(self):
+        from paper_monitor.mcp_server import TOOLS
+        self.assertEqual(self.call('list_folders')[0], 403)
+        payload = {'action': 'folder_access', 'connection_id': self.connection, 'allowed': True}
+        self.assertEqual(self.request('/api/settings/ai-access', payload, token=self.token)[0], 401)
+        before = dict(self.storage.conn.execute('SELECT * FROM ai_connections WHERE id=?', (self.connection,)).fetchone())
+        status, settings, _ = self.request('/api/settings/ai-access', payload, workspace=True)
+        self.assertEqual(status, 200)
+        self.assertNotIn('token', settings)
+        self.assertNotIn('mcp_config', settings)
+        current = dict(self.storage.conn.execute('SELECT * FROM ai_connections WHERE id=?', (self.connection,)).fetchone())
+        self.assertEqual(current['token_hash'], before['token_hash'])
+        self.assertEqual(current['selection_json'], before['selection_json'])
+        messages = [
+            {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'},
+            {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'},
+            {'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'list_folders', 'arguments': {}}},
+            {'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {'name': 'list_folder_papers', 'arguments': {'folder_id': 1, 'recursive': True, 'limit': 1}}},
+            {'jsonrpc': '2.0', 'id': 5, 'method': 'tools/call', 'params': {'name': 'get_paper', 'arguments': {'gewu_key': self.key}}},
+        ]
+        script = Path(__file__).resolve().parents[1] / 'scripts' / 'gewu_mcp.py'
+        proc = subprocess.run([sys.executable, str(script)], input='\n'.join(json.dumps(m) for m in messages) + '\n',
+            text=True, capture_output=True, timeout=30,
+            env={**os.environ, 'GEWU_API_URL': f'http://127.0.0.1:{self.server.server_port}', 'GEWU_API_TOKEN': self.token})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        results = [json.loads(line)['result'] for line in proc.stdout.splitlines()]
+        self.assertEqual(len(results[1]['tools']), len(TOOLS))
+        self.assertEqual(results[0]['serverInfo']['version'], '1.2.0')
+        for result in results[2:]:
+            self.assertFalse(result['isError'])
+        roots = json.loads(results[2]['content'][0]['text'])
+        self.assertEqual([f['folder_id'] for f in roots['folders']], [1])
+        entries = json.loads(results[3]['content'][0]['text'])['memberships']
+        self.assertEqual([e['gewu_key'] for e in entries], [self.key])
+        self.assertNotIn(self.other_key, proc.stdout)
+        self.assertNotIn(self.token, proc.stdout + proc.stderr)
+        payload['allowed'] = False
+        self.assertEqual(self.request('/api/settings/ai-access', payload, workspace=True)[0], 200)
+        self.assertEqual(self.call('list_folder_papers', {'folder_id': 1})[0], 403)
+        self.assertEqual(self.call('get_paper', {'gewu_key': self.key})[0], 200)
+
+    def test_directory_admin_rejects_invalid_permissions_and_openapi_is_current(self):
+        for allowed in ('true', 1, None):
+            self.assertEqual(self.request('/api/settings/ai-access', {'action': 'folder_access',
+                'connection_id': self.connection, 'allowed': allowed}, workspace=True)[0], 400)
+        self.assertEqual(self.request('/api/settings/ai-access', {'action': 'folder_access',
+            'connection_id': 999999, 'allowed': True}, workspace=True)[0], 404)
+        status, schema, _ = self.request('/api/v1/openapi.json', token=self.token)
+        self.assertEqual(status, 200)
+        for name in ('list_folders', 'list_folder_papers'):
+            self.assertIn('/api/v1/tools/' + name, schema['paths'])
+
     def test_original_delivery_is_read_only_complete_and_client_readable(self):
         client = self.file_client()
         before_paper = self.storage.get_paper('one')

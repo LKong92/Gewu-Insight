@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .ai_service import WRITE_LOCK, execute, integer
-from .ai_store import APIError, authenticate, create_connection, fail, settings_snapshot, utc_now
+from .ai_store import APIError, authenticate, create_connection, fail, set_folder_access, settings_snapshot, utc_now
 from .storage import Storage
 
 
@@ -54,6 +54,9 @@ def handle_admin(handler):
                     storage.conn.commit()
                     if not cursor.rowcount:
                         fail(404, 'connection_unavailable', 'This connection is already revoked or unavailable.')
+                elif action == 'folder_access':
+                    connection_id = integer(payload.get('connection_id'), 0, 1, 2**63 - 1)
+                    set_folder_access(storage, connection_id, payload.get('allowed'))
                 else:
                     fail(400, 'invalid_action', 'Choose a supported AI Access action.')
         handler.send_json({**settings_snapshot(storage), **created})

@@ -6,7 +6,7 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
-SCOPES = ('papers:read', 'files:read', 'analysis:write')
+SCOPES = ('papers:read', 'folders:read', 'files:read', 'analysis:write')
 
 
 def utc_now():
@@ -114,6 +114,23 @@ def authenticate(storage, authorization):
     if not enabled(storage):
         fail(403, 'disabled', 'AI access is disabled in Gewu Insight.')
     return grant_payload(row)
+
+
+def set_folder_access(storage, connection_id, allowed):
+    """Workspace-only opt-in; keep the existing token, collection and other scopes."""
+    if type(allowed) is not bool:
+        fail(400, 'invalid_permission', 'Choose whether to allow directory browsing.')
+    row = storage.conn.execute('SELECT * FROM ai_connections WHERE id=?', (connection_id,)).fetchone()
+    if not row or row['revoked_at'] or (row['expires_at'] and row['expires_at'] <= utc_now()):
+        fail(404, 'connection_unavailable', 'This connection is expired, revoked or unavailable.')
+    scopes = set(json.loads(row['scopes_json']))
+    if allowed:
+        scopes.add('folders:read')
+    else:
+        scopes.discard('folders:read')
+    storage.conn.execute('UPDATE ai_connections SET scopes_json=? WHERE id=?',
+                         (json.dumps(sorted(scopes)), connection_id))
+    storage.conn.commit()
 
 
 def audit(storage, grant, operation, key='', outcome='ok'):

@@ -2603,7 +2603,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/ai-access.png" alt="AI Access in the original Gewu Insight App" loading="lazy">
-            <figcaption><strong>AI Access.</strong> The enable switch, existing connections and Recent Activity share a compact settings panel. Expand New Connection to choose a scope and permissions.</figcaption>
+            <figcaption><strong>AI Access.</strong> Existing connections have a separate Allow directory browsing switch. Enable it only for the intended connection; its token and other permissions stay unchanged. Expand New Connection to choose a collection and permissions.</figcaption>
           </figure>
 
           <p><span class="ui">Setting &gt; AI Access</span> is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.</p>
@@ -2631,27 +2631,29 @@
             <tr><td>AI client &rarr; MCP adapter &rarr; Gewu API</td><td>The adapter sends the connection token to the API. MCP does not grant additional access.</td></tr>
             <tr><td>AI client or script &rarr; Gewu API</td><td>The caller supplies the same kind of token directly. Skipping MCP does not skip API authorization.</td></tr>
           </table>
-          <p>For either route, the API checks that AI access is enabled, the token is valid, unexpired and unrevoked, the requested paper is in the connection's collection, and the operation is permitted. Metadata access alone does not authorize file reading or analysis writing. The native App uses a separate private workspace session for normal human use; an AI token cannot call those internal UI endpoints.</p>
+          <p>For either route, the API checks that AI access is enabled, the token is valid, unexpired and unrevoked, the requested paper is in the connection's collection, and the operation is permitted. Metadata access alone does not authorize directory browsing, file reading or analysis writing. The native App uses a separate private workspace session for normal human use; an AI token cannot call those internal UI endpoints.</p>
           <div class="note"><span class="callout-title">Interface authorization and local file permissions</span>AI Access controls requests through Gewu's interfaces. It does not encrypt or isolate SQLite and document files from software that already has operating-system permission to read them. Such software can read the disk without contacting MCP or the API; administrator privileges are not necessarily required. Turning off AI Access or revoking a token stops access through that grant, but does not revoke independent filesystem permissions. This broader local access is outside the AI Access permission boundary.</div>
           <h2>Create a connection</h2>
           <ol>
             <li>Keep Gewu Insight running and enable <span class="ui">AI access</span>.</li>
             <li>Expand <span class="ui">New Connection</span> and enter a name you will recognize.</li>
             <li>Choose Library, Spaces and My Publications; one folder and its subfolders using the usual folder picker; or specific Gewu Keys. A folder connection follows current membership.</li>
-            <li>Article metadata and file names are readable by default. Separately allow file contents and/or adding new Markdown analyses when your task needs them.</li>
+            <li>Article metadata and file names are readable by default. Separately allow directory browsing, file contents and/or adding new Markdown analyses when your task needs them.</li>
             <li>Choose an expiry, then <span class="ui">Create Connection</span>. The default is 30 days.</li>
             <li>Use <span class="ui">Copy MCP Configuration</span> to obtain the local adapter path, Python executable, port and token. Enter these in your AI client's MCP settings using its required format. See the Codex example below.</li>
           </ol>
           <div class="note"><span class="callout-title">Keep the connection private</span>The token is shown only after creation. Store it in client configuration, not in a chat message or shared document. If it is lost, revoke that connection and create another. An AI client may send authorized content to its model provider.</div>
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/ai-new-connection.png" alt="New AI connection in the original Gewu Insight App" loading="lazy">
-            <figcaption><strong>New AI connection.</strong> Set the connection name, accessible papers, file-reading permission, analysis-writing permission and expiry before Create Connection. This example leaves optional permissions unchecked.</figcaption>
+            <figcaption><strong>New AI connection.</strong> Set the connection name, accessible papers, directory-browsing permission, file-reading permission, analysis-writing permission and expiry before Create Connection. This example leaves optional permissions unchecked.</figcaption>
           </figure>
 
           <h2>What an authorized AI can do</h2>
           <table class="plain-table">
             <tr><th>Tool</th><th>Result</th></tr>
             <tr><td><code>search_papers</code></td><td>Search authorized titles, DOI, Gewu Keys and abstracts, with pagination.</td></tr>
+            <tr><td><code>list_folders</code></td><td>List authorized Library and Space roots, or a folder's direct children, with stable IDs, logical paths and filtered counts. Requires directory-browsing permission.</td></tr>
+            <tr><td><code>list_folder_papers</code></td><td>List each authorized paper placement and its Gewu Key in a directory, directly or recursively. Includes pagination and minimal metadata. Requires directory-browsing permission.</td></tr>
             <tr><td><code>get_paper</code></td><td>Get the article metadata, file inventory and Default file ID for a Gewu Key.</td></tr>
             <tr><td><code>get_paper_file</code></td><td>Get an original PDF or registered attachment as a read-only temporary copy on the local AI client's machine, with paper metadata, file ID and actual SHA-256. Requires file-reading permission.</td></tr>
             <tr><td><code>read_paper</code></td><td>Extract PDF text by page or read text/Markdown chunks. Use <code>get_paper_file</code> for the original file when text extraction is insufficient.</td></tr>
@@ -2660,6 +2662,24 @@
           <p>For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper's file panel.</p>
           <p>Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot edit, overwrite or delete any existing Paper Files, including earlier AI analyses, delete papers, change folders or alter the Default.</p>
           <p>New analyses are registered as Markdown notes: <strong>File type: Other</strong>, <strong>Annotation: Unannotated</strong>, and <strong>Source: Other</strong> with <strong>AI analysis</strong> and the connection name as source detail. File size, content hash, creation time and analysis provenance are recorded. These categories are assigned by Gewu; the AI cannot relabel its note as a published paper.</p>
+          <h2>Browse a directory and its papers</h2>
+          <p>Directory browsing is a separate, read-only permission. For a new connection, select <span class="ui">Browse authorized directories and paper memberships</span>. For an existing connection, select <span class="ui">Allow directory browsing</span> beside its name. This adds <code>folders:read</code> without replacing the token, changing the paper collection or granting file reading or analysis writing. Existing connections are not expanded automatically. Reconnect the AI client's MCP connection to discover the two new tools.</p>
+          <p>These directories are the logical folders in Library and Spaces, not disk paths. A Space uses a stable <code>folder_id</code> just like any folder. Shortcuts lead to the original target; they do not duplicate its membership. My Publications-only papers remain available through search and <code>get_paper</code>. Recycle and trashed folders or items are excluded.</p>
+          <table class="plain-table">
+            <tr><th>Selected collection</th><th>Visible directories and memberships</th></tr>
+            <tr><td>Library, Spaces and My Publications</td><td>All active Library and Space folders, including empty ones, and their active paper placements.</td></tr>
+            <tr><td>One folder and its subfolders</td><td>Only that folder and its active descendants. The displayed path starts there; parents, siblings and outside placements stay hidden.</td></tr>
+            <tr><td>Specific Gewu Keys</td><td>Only folders containing those papers and the parent paths needed to reach them. Enabling directory browsing allows these folder names to be read; unrelated branches and their counts stay hidden.</td></tr>
+          </table>
+          <p>For example, ask the AI to list the papers in your AI Space and preserve their folder classifications:</p>
+          <ol>
+            <li>Call <code>list_folders</code> without a parent to discover visible roots. Follow <code>next_cursor</code> until it is <code>null</code>, and identify AI by its name, kind and path.</li>
+            <li>Use AI's returned <code>folder_id</code> as <code>parent_id</code> in <code>list_folders</code> to inspect its children. Repeat as needed to map the folder hierarchy.</li>
+            <li>Call <code>list_folder_papers</code> with that <code>folder_id</code>. By default it returns direct members; set <code>recursive</code> to <code>true</code> to include descendants. Follow every page. Each page defaults to 50 entries, with a maximum of 100.</li>
+            <li>Keep the returned <code>membership_id</code>, <code>folder_id</code> and <code>gewu_key</code> together. One paper can have several placements; use the Gewu Key to avoid reading it repeatedly while retaining its classifications. Call <code>get_paper</code> for the selected key before reading files.</li>
+          </ol>
+          <p>Names can repeat, so use folder IDs and the returned ID/name path segments instead of treating a display path as a unique identifier. Each call states its directory explicitly; navigating in another task does not change a shared current directory.</p>
+          <div class="note"><span class="callout-title">Keep a multi-page collection walk consistent</span>Pass the first returned <code>revision</code> with subsequent directory calls. A visible rename, move, deletion or membership change returns <code>collection_changed</code>; discard the incomplete walk and start again without the old cursor or revision. Folder IDs survive renames and moves, while deleted and recreated folders get new IDs. A folder grant follows its root ID, but descendants moved outside it lose access. Ordinary metadata refreshes do not interrupt membership pagination; bibliography fields remain current, not a historical snapshot.</div>
           <h2>Give the original PDF to the AI client</h2>
           <p>Use <code>get_paper_file</code> with the Gewu Key and a file ID from <code>get_paper</code>, or <code>default</code>. When no Default exists, choose an explicit file ID. Gewu checks the connection and transfers the original bytes. The client receives a read-only temporary copy, title, authors, DOI, file classification and actual SHA-256. Its own tools can read the PDF, inspect pages and figures, or run OCR. Gewu does not render pages, run OCR, upload the file to a model or fetch a replacement from the DOI.</p>
           <p>The delivered copy is separate from Paper Files and never syncs changes back. Write any rendered pages or other intermediate results separately. Copies last until the MCP process exits normally; finish reading before restarting the connection. A file is limited to 64 MiB, with up to 256 MiB or 64 distinct copies per MCP session. Repeat delivery of the same file version reuses its temporary destination. A client needs access to the same local filesystem as its STDIO adapter; a returned path is not automatically a cloud PDF attachment. If the client cannot access it, report the limitation rather than reading the source Library directly.</p>

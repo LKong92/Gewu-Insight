@@ -54,7 +54,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"
@@ -134,7 +134,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"
@@ -207,7 +207,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"
@@ -308,7 +308,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"
@@ -377,6 +377,190 @@
         }
       }
     },
+    "/api/v1/tools/list_folders": {
+      "post": {
+        "summary": "List authorized logical Library/Space roots (omit parent_id), or direct child folders of parent_id. Returns stable folder_id, kind, visible parent_id, disambiguating path segments, logical_path and authorized direct counts. Requires folders:read. Folder grants start at their granted root; specific-key grants expose only paths to those papers. No Recycle or filesystem access. Paginated in folder ID order; follow next_cursor until null.",
+        "operationId": "list_folders",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed directory collection, source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 50
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "description": "Opaque next_cursor from this same listing; omit on the first page."
+                  },
+                  "revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Optional visible-collection revision from either directory tool. Pass on every call for a consistent walk; restart on collection_changed."
+                  },
+                  "parent_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "description": "Stable folder_id from list_folders. Omit/null lists visible roots."
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/list_folder_papers": {
+      "post": {
+        "summary": "Enumerate authorized paper memberships in folder_id, a Library/Space root or folder ID from list_folders. Direct children by default; recursive=true includes visible descendants. Returns membership_id, folder_id, canonical gewu_key and minimal metadata. Multiple placements remain separate: deduplicate processing by Gewu Key when desired. Requires folders:read. Paginated in membership ID order; no shared current directory. Moves/deletions invalidate a continued listing with collection_changed.",
+        "operationId": "list_folder_papers",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed directory collection, source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 50
+                  },
+                  "cursor": {
+                    "type": "string",
+                    "maxLength": 1024,
+                    "description": "Opaque next_cursor from this same listing; omit on the first page."
+                  },
+                  "revision": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Optional visible-collection revision from either directory tool. Pass on every call for a consistent walk; restart on collection_changed."
+                  },
+                  "folder_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "recursive": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "folder_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/papers": {
       "get": {
         "summary": "Search authorized papers by title, DOI, Gewu Key or abstract. Paginated; an empty query lists the collection.",
@@ -410,7 +594,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"
@@ -490,7 +674,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"
@@ -554,7 +738,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"
@@ -662,7 +846,7 @@
             "description": "Resource outside grant or unavailable"
           },
           "409": {
-            "description": "Changed source version or conflicting request ID"
+            "description": "Changed directory collection, source version or conflicting request ID"
           },
           "410": {
             "description": "Previously saved analysis removed"

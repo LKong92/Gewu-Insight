@@ -12,6 +12,12 @@ replaced and two new illustrations added; the other 28 images were retained afte
 review. The screenshot inventory records actual capture dates and the limits.
 No Settings page was recaptured merely because the edition date changed.
 
+The subsequent MCP directory feature adds a focused AI Access follow-up: its two
+changed Settings captures, permission controls, both directory tools, grant
+boundaries, stable IDs and pagination are documented. Other topics and captures
+retain the completed audit above. Runtime references for this follow-up are
+`ai_folders.py`, `ai_service.py`, `ai_store.py` and `mcp_server.py`.
+
 Primary implementation references: `paper_monitor/ui_server.py`,
 `paper_monitor/storage.py`, `paper_monitor/metadata_refresh.py`,
 `paper_monitor/library_destination.py`, `paper_monitor/file_placement.py`,
@@ -98,7 +104,7 @@ instruction was checked and did not need a substantive rewrite.
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Use the current hybrid PDF-and-Markdown label; distinguish explicit all-native mode. |
 | [Default Add to Library Folder](../paper_monitor/user_guide.html#add-to-library-settings) | Verify choose/save, initial unsorted, overrides, stable folder ID and fallback. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Verify internal/system browser routing and Save Details preference. |
-| [AI Access](../paper_monitor/user_guide.html#ai-access) | Clarify revoked connection removal and scrolling activity; retain scoped read-only delivery and append-only analysis. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Document opt-in directory browsing, current/existing connection controls, all seven tools, folder-to-Gewu-Key traversal, collection visibility and revision-bound pagination. Retain scoped file delivery and append-only analysis; replace the two changed Settings illustrations. |
 | [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Verify rename templates, naming scope and explicit preferences. |
 | [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Align Default physical promotion and shared active-reference ownership with filesystem/SQLite behavior. |
 | [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Retain local/private data boundary and external provider/AI client responsibility. |
@@ -120,27 +126,36 @@ numbering and continuous flow in the builder.
 
 ## Validation
 
-- All 27 Guide/audit tests and six existing PDF structure checks pass. Python
-  compilation and `git diff --check` pass. The existing tests were aligned with
-  the current single-submit Add Paper flow, edition date and 35-image inventory.
-- The regenerated PDF has 109 pages. All pages were rendered and visually
-  reviewed; changed Space, Shortcut, classification and Browser pages were also
-  inspected at 144 dpi. The builder reserves enough room to keep a callout title
-  with its opening text. The table-sorting section no longer leaves a nearly
-  empty continuation page.
-- All 49 topics and 35 screenshot figures are present. All 342 internal PDF
-  links resolve. Product Identity chapters 4-1 and 4-2 share page 97; chapters
-  4-3 and 4-4 continue on pages 98–99 without forced chapter breaks.
-- The final source PDF and `Gewu Insight.app/Contents/Resources/Gewu Insight
-  User Guide.pdf` match byte-for-byte. The installed universal App passes strict
-  signature verification; its executable program code and 1.0.0 / Build 1
-  identity are unchanged. The existing App was repackaged with documentation
-  only; no restart or background-job interruption was performed.
-- The real in-app Guide displayed the September 16 revision and the new sorting
-  topic/image. After screen unlock, Help → User Guide → Print Guide opened
-  the bundled PDF in macOS Preview at the verified App resource path, displaying
-  page 1 of 109 and Version 1.0.0 (Build 1).
+- All 27 Guide/audit tests and six PDF structure checks pass after the MCP
+  follow-up. Python compilation and `git diff --check` pass. The existing
+  49-topic anchors and 35-image inventory are preserved.
+- The regenerated PDF has 111 pages. The original audit reviewed every page;
+  the MCP follow-up renders and reviews pages 86–111, including the changed
+  AI Access pages and the later pages whose numbering moved. Changed directory
+  instructions and figures were also inspected at 144 dpi.
+- All 342 internal PDF links resolve. Product Identity chapters 4-1 and 4-2
+  share page 99; chapters 4-3 and 4-4 continue on pages 100–101 without forced
+  chapter breaks.
+- The source PDF and `Gewu Insight.app/Contents/Resources/Gewu Insight User
+  Guide.pdf` match byte-for-byte. The documentation package passes strict App
+  signature verification. Executable program code and 1.0.0 / Build 1 identity
+  are unchanged by the documentation packaging.
+- The real in-app AI Access topic displays both new tools and directory-grant
+  instructions. Help → User Guide → Print Guide opens the verified App resource
+  in macOS Preview, showing page 1 of 111 and Version 1.0.0 (Build 1).
+- MCP feature validation passed 1,053 product tests, 44 scoped MCP checks and
+  the temporary-data AI Access UI probe. The user-authorized restart activated
+  adapter 1.2.0. Read-only acceptance through the existing configured connection
+  found seven tools and seven visible roots; traversing the AI Space found its
+  one subfolder and 34 placements with 34 unique Gewu Keys. Direct/recursive
+  results agreed, and `get_paper` verified one returned key. The current Codex
+  tool catalog also exposes both new directory tools; connector calls pass.
+  Executable comparison after stripping signatures from temporary copies
+  confirms that documentation packaging changed signatures only, not code.
 
-Evidence and pre-install App backup are local under
-`/private/tmp/gewu-guide-sync-qa/`. No collection import, deletion,
-classification, credential or grant change is part of this audit.
+The earlier audit evidence is local under `/private/tmp/gewu-guide-sync-qa/`;
+the MCP follow-up, native captures, live acceptance and App backup are under
+`/private/tmp/gewu-mcp-folders-qa/`. No collection import, deletion,
+classification, token replacement or grant change was performed for this
+verification. The existing connection was already enabled for directory
+browsing when live acceptance ran.

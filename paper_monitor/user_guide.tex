@@ -3604,7 +3604,7 @@ Give an AI client access to selected papers through their stable Gewu Keys, with
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/ai-access.png}\end{center}
 
 \begin{GewuCaption}
-AI Access. The enable switch, existing connections and Recent Activity share a compact settings panel. Expand New Connection to choose a scope and permissions.
+AI Access. Existing connections have a separate Allow directory browsing switch. Enable it only for the intended connection; its token and other permissions stay unchanged. Expand New Connection to choose a collection and permissions.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -3674,7 +3674,7 @@ AI client or script {\symbolfont →} Gewu API & The caller supplies the same ki
 \GewuTableEnd
 }
 
-For either route, the API checks that AI access is enabled, the token is valid, unexpired and unrevoked, the requested paper is in the connection\textquotesingle s collection, and the operation is permitted. Metadata access alone does not authorize file reading or analysis writing. The native App uses a separate private workspace session for normal human use; an AI token cannot call those internal UI endpoints.
+For either route, the API checks that AI access is enabled, the token is valid, unexpired and unrevoked, the requested paper is in the connection\textquotesingle s collection, and the operation is permitted. Metadata access alone does not authorize directory browsing, file reading or analysis writing. The native App uses a separate private workspace session for normal human use; an AI token cannot call those internal UI endpoints.
 
 \begin{quote}
 \textbf{Interface authorization and local file permissions}
@@ -3693,7 +3693,7 @@ AI Access controls requests through Gewu\textquotesingle s interfaces. It does n
 \item
   Choose Library, Spaces and My Publications; one folder and its subfolders using the usual folder picker; or specific Gewu Keys. A folder connection follows current membership.
 \item
-  Article metadata and file names are readable by default. Separately allow file contents and/or adding new Markdown analyses when your task needs them.
+  Article metadata and file names are readable by default. Separately allow directory browsing, file contents and/or adding new Markdown analyses when your task needs them.
 \item
   Choose an expiry, then \textbf{Create Connection}. The default is 30 days.
 \item
@@ -3711,7 +3711,7 @@ The token is shown only after creation. Store it in client configuration, not in
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/ai-new-connection.png}\end{center}
 
 \begin{GewuCaption}
-New AI connection. Set the connection name, accessible papers, file-reading permission, analysis-writing permission and expiry before Create Connection. This example leaves optional permissions unchecked.
+New AI connection. Set the connection name, accessible papers, directory-browsing permission, file-reading permission, analysis-writing permission and expiry before Create Connection. This example leaves optional permissions unchecked.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -3729,6 +3729,8 @@ Tool & Result \\
 \bottomrule\noalign{}
 \endlastfoot
 \texttt{search\_papers} & Search authorized titles, DOI, Gewu Keys and abstracts, with pagination. \\
+\texttt{list\_folders} & List authorized Library and Space roots, or a folder\textquotesingle s direct children, with stable IDs, logical paths and filtered counts. Requires directory-browsing permission. \\
+\texttt{list\_folder\_papers} & List each authorized paper placement and its Gewu Key in a directory, directly or recursively. Includes pagination and minimal metadata. Requires directory-browsing permission. \\
 \texttt{get\_paper} & Get the article metadata, file inventory and Default file ID for a Gewu Key. \\
 \texttt{get\_paper\_file} & Get an original PDF or registered attachment as a read-only temporary copy on the local AI client\textquotesingle s machine, with paper metadata, file ID and actual SHA-256. Requires file-reading permission. \\
 \texttt{read\_paper} & Extract PDF text by page or read text/Markdown chunks. Use \texttt{get\_paper\_file} for the original file when text extraction is insufficient. \\
@@ -3742,6 +3744,51 @@ For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a 
 Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot edit, overwrite or delete any existing Paper Files, including earlier AI analyses, delete papers, change folders or alter the Default.
 
 New analyses are registered as Markdown notes: \textbf{File type: Other}, \textbf{Annotation: Unannotated}, and \textbf{Source: Other} with \textbf{AI analysis} and the connection name as source detail. File size, content hash, creation time and analysis provenance are recorded. These categories are assigned by Gewu; the AI cannot relabel its note as a published paper.
+
+\subsection{Browse a directory and its papers}\label{browse-a-directory-and-its-papers}
+
+Directory browsing is a separate, read-only permission. For a new connection, select \textbf{Browse authorized directories and paper memberships}. For an existing connection, select \textbf{Allow directory browsing} beside its name. This adds \texttt{folders:read} without replacing the token, changing the paper collection or granting file reading or analysis writing. Existing connections are not expanded automatically. Reconnect the AI client\textquotesingle s MCP connection to discover the two new tools.
+
+These directories are the logical folders in Library and Spaces, not disk paths. A Space uses a stable \texttt{folder\_id} just like any folder. Shortcuts lead to the original target; they do not duplicate its membership. My Publications-only papers remain available through search and \texttt{get\_paper}. Recycle and trashed folders or items are excluded.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Selected collection & Visible directories and memberships \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Library, Spaces and My Publications & All active Library and Space folders, including empty ones, and their active paper placements. \\
+One folder and its subfolders & Only that folder and its active descendants. The displayed path starts there; parents, siblings and outside placements stay hidden. \\
+Specific Gewu Keys & Only folders containing those papers and the parent paths needed to reach them. Enabling directory browsing allows these folder names to be read; unrelated branches and their counts stay hidden. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+For example, ask the AI to list the papers in your AI Space and preserve their folder classifications:
+
+\begin{enumerate}
+\tightlist
+\item
+  Call \texttt{list\_folders} without a parent to discover visible roots. Follow \texttt{next\_cursor} until it is \texttt{null}, and identify AI by its name, kind and path.
+\item
+  Use AI\textquotesingle s returned \texttt{folder\_id} as \texttt{parent\_id} in \texttt{list\_folders} to inspect its children. Repeat as needed to map the folder hierarchy.
+\item
+  Call \texttt{list\_folder\_papers} with that \texttt{folder\_id}. By default it returns direct members; set \texttt{recursive} to \texttt{true} to include descendants. Follow every page. Each page defaults to 50 entries, with a maximum of 100.
+\item
+  Keep the returned \texttt{membership\_id}, \texttt{folder\_id} and \texttt{gewu\_key} together. One paper can have several placements; use the Gewu Key to avoid reading it repeatedly while retaining its classifications. Call \texttt{get\_paper} for the selected key before reading files.
+\end{enumerate}
+
+Names can repeat, so use folder IDs and the returned ID/name path segments instead of treating a display path as a unique identifier. Each call states its directory explicitly; navigating in another task does not change a shared current directory.
+
+\begin{quote}
+\textbf{Keep a multi-page collection walk consistent}
+
+Pass the first returned \texttt{revision} with subsequent directory calls. A visible rename, move, deletion or membership change returns \texttt{collection\_changed}; discard the incomplete walk and start again without the old cursor or revision. Folder IDs survive renames and moves, while deleted and recreated folders get new IDs. A folder grant follows its root ID, but descendants moved outside it lose access. Ordinary metadata refreshes do not interrupt membership pagination; bibliography fields remain current, not a historical snapshot.
+\end{quote}
 
 \subsection{Give the original PDF to the AI client}\label{give-the-original-pdf-to-the-ai-client}
 

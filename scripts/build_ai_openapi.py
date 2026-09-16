@@ -14,7 +14,7 @@ def operation(tool, body=True, parameters=None):
               'responses': {'200': {'description': 'Authorized result', 'content': {'application/json': {'schema': {'type': 'object'}}}},
                             '400': {'description': 'Invalid arguments'}, '401': {'description': 'Invalid, expired or revoked token'},
                             '403': {'description': 'AI access disabled or permission missing'}, '404': {'description': 'Resource outside grant or unavailable'},
-                            '409': {'description': 'Changed source version or conflicting request ID'}, '410': {'description': 'Previously saved analysis removed'},
+                            '409': {'description': 'Changed directory collection, source version or conflicting request ID'}, '410': {'description': 'Previously saved analysis removed'},
                             '413': {'description': 'Size limit exceeded'}, '422': {'description': 'PDF text unavailable'},
                             '429': {'description': 'Read capacity busy; retry shortly'}, '503': {'description': 'Temporary failure; retry saves with the same request ID'}}}
     if body:

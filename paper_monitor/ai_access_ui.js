@@ -55,10 +55,19 @@
       const selection = connection.selection;
       const range = selection.kind === 'saved' ? 'Library, Spaces and My Publications' : selection.kind === 'papers' ? `${selection.keys.length} selected papers` :
         data.folders.find(f => f.id === selection.folder_id)?.path || 'Unavailable folder';
-      const permissions = ['Metadata', ...(connection.scopes.includes('files:read') ? ['File contents'] : []), ...(connection.scopes.includes('analysis:write') ? ['Add analyses'] : [])];
+      const permissions = ['Metadata', ...(connection.scopes.includes('folders:read') ? ['Directory browsing'] : []), ...(connection.scopes.includes('files:read') ? ['File contents'] : []), ...(connection.scopes.includes('analysis:write') ? ['Add analyses'] : [])];
       appendText(text, 'p', range + ' · ' + permissions.join(', '), 'ai-muted');
       const expired = Date.parse(connection.expires_at) <= Date.now();
       appendText(text, 'small', expired ? 'Expired' : `Expires ${new Date(connection.expires_at).toLocaleDateString()}`);
+      const folderLabel = appendText(text, 'label', '', 'ai-folder-access');
+      const folderToggle = document.createElement('input');
+      folderToggle.type = 'checkbox';
+      folderToggle.checked = connection.scopes.includes('folders:read');
+      folderToggle.setAttribute('aria-label', `Allow directory browsing for ${connection.name}`);
+      folderLabel.appendChild(folderToggle);
+      appendText(folderLabel, 'span', 'Allow directory browsing');
+      folderToggle.addEventListener('change', () => mutate({action: 'folder_access', connection_id: connection.id, allowed: folderToggle.checked},
+        folderToggle.checked ? 'Directory browsing allowed. Reconnect your AI client to refresh its tools.' : 'Directory browsing disabled.'));
       const revoke = appendText(row, 'button', 'Revoke', 'smallbtn');
       revoke.type = 'button';
       revoke.addEventListener('click', () => mutate({action: 'revoke', connection_id: connection.id}, 'Connection revoked.'));
@@ -118,6 +127,7 @@
           <div id="aiFolderControl" class="library-add-control" hidden><button id="aiChooseFolder" data-action="add-library" class="smallbtn" type="button" aria-haspopup="dialog">Choose Folder ▸</button><div class="library-add-menu" data-role="library-add-menu" aria-hidden="true"></div></div>
           <label id="aiKeysLabel" hidden>Gewu Keys<textarea id="aiKeys" rows="3" placeholder="gw_0123456789, gw_abcdef0123"></textarea></label>
           <fieldset><legend>Permissions</legend><p>Read article metadata and file names</p>
+            <label><input id="aiReadFolders" type="checkbox"> Browse authorized directories and paper memberships</label>
             <label><input id="aiReadFiles" type="checkbox"> Read PDF, attachment and note contents</label>
             <label><input id="aiWriteAnalysis" type="checkbox"> Add new Markdown analyses to Paper Files</label>
             <p class="ai-muted">Existing files, Default choices, metadata and folders cannot be changed or deleted through this connection.</p></fieldset>
@@ -130,7 +140,7 @@
           <details><summary>Configuration</summary><textarea id="aiMcpConfig" readonly rows="9" aria-label="MCP connection configuration"></textarea></details>
         </div>
         <p id="aiAccessStatus" class="citation-settings-status" role="status" aria-live="polite"></p>
-        <h3>Connections</h3><div id="aiConnections"></div>
+        <h3>Connections</h3><p class="ai-muted">Directory browsing reveals folder names and paper placements within the selected collection. For specific Gewu Keys, only their containing folders and necessary parent paths are visible. Existing tokens and other permissions stay unchanged.</p><div id="aiConnections"></div>
         <section class="ai-activity-section" aria-labelledby="aiActivityTitle">
           <h3 id="aiActivityTitle">Recent Activity</h3>
           <p class="ai-muted" id="aiActivityHint">Latest requests first · up to 50 shown</p>
@@ -164,6 +174,7 @@
       const selection = kind === 'folder' ? {kind, folder_id: selectedFolder} : kind === 'papers' ? {kind, keys: byId('aiKeys').value.split(/[\s,;]+/).filter(Boolean)} : {kind};
       if (kind === 'folder' && !selectedFolder) { status('Choose a folder first.', true); return; }
       const scopes = ['papers:read'];
+      if (byId('aiReadFolders').checked) scopes.push('folders:read');
       if (byId('aiReadFiles').checked) scopes.push('files:read');
       if (byId('aiWriteAnalysis').checked) scopes.push('analysis:write');
       mutate({action: 'create', name: byId('aiName').value, selection, scopes, expires_days: Number(byId('aiExpiry').value)}, 'Connection created. Copy its configuration before closing this window.');

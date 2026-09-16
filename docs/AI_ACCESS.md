@@ -53,8 +53,8 @@ permissions. This broader local access is outside the AI Access boundary.
 3. Choose all saved Library/Space/My Publications papers, one folder and its
    descendants, or specific Gewu Keys. Folder grants follow current membership;
    removing a paper from that collection removes access through that grant.
-4. Metadata and file names are readable by default. Separately enable reading
-   file contents and/or adding Markdown analyses when needed.
+4. Metadata and file names are readable by default. Separately enable directory
+   browsing, reading file contents and/or adding Markdown analyses when needed.
 5. Choose an expiry and create the connection. Copy **MCP Configuration** into
    the AI client's local MCP configuration. The generated configuration includes
    the correct Python executable, adapter path, local port, and connection token.
@@ -65,6 +65,13 @@ not chat messages, source control, or shared notes. If lost, revoke the connecti
 and create another. **Revoke** invalidates one connection; disabling AI access
 pauses all connections. Re-enabling resumes unexpired, unrevoked connections.
 Default expiry is 30 days; 7, 90 and 365 days are also available.
+
+Directory browsing is opt-in (`folders:read`). Existing connections retain their
+current scopes after an update. In **Connections**, enable **Allow directory
+browsing** for the intended connection; this preserves its token, expiry,
+selected collection and other permissions. Disable it there to revoke directory
+access immediately. Reconnect the MCP client to refresh its discovered tools.
+The API cannot enable this permission with an AI token.
 
 The adapter is `scripts/gewu_mcp.py`, requires Python 3.9 or later, and reads
 `GEWU_API_URL` (default `http://127.0.0.1:8765`) and `GEWU_API_TOKEN` from its
@@ -171,6 +178,8 @@ must also replace the old token in Codex's settings.
 | Tool | Purpose | Required permission |
 | --- | --- | --- |
 | `search_papers` | Search title, DOI, Gewu Key or abstract; paginate saved papers | `papers:read` |
+| `list_folders` | List visible Library/Space roots or direct child folders, with stable IDs and logical paths | `folders:read` |
+| `list_folder_papers` | List direct or recursive paper memberships, keeping every authorized placement and Gewu Key | `folders:read` |
 | `get_paper` | Retrieve metadata, registered files and the Default file ID | `papers:read` |
 | `get_paper_file` | Deliver an original file and metadata to a read-only temporary copy on the local STDIO client host | `files:read` |
 | `read_paper` | Extract a page range from a PDF or read a text/Markdown chunk | `files:read` |
@@ -180,6 +189,79 @@ All connections include `papers:read`. File-based analysis provenance also
 requires `files:read`. Tool discovery shows only permitted tools. Out-of-scope
 paper keys and file IDs return an unavailable response without revealing data.
 Search uses local metadata, not a semantic index or an external service.
+
+## Directory browsing and paper membership
+
+Directories here are the logical Library and Space folders used by Gewu. They
+are not operating-system paths. Every call supplies its own `parent_id` or
+`folder_id`; there is no shared current directory and no `cd`, filesystem,
+SQL, move, rename or delete operation. A Space root uses the same `folder_id`
+namespace, with `kind: "space"`; the Library root has `kind: "library"`.
+Shortcuts do not create duplicate roots or memberships: browse their actual
+target folder. My Publications-only records remain available through
+`search_papers` and `get_paper`; this version does not invent a folder for them.
+
+Visibility follows the connection's existing selection:
+
+- **Library, Spaces and My Publications:** all active Library/Space folders,
+  including empty folders, and their active paper memberships.
+- **One folder:** the granted folder and its active descendants, including
+  empty descendants. Its parent is returned as `null` and paths start at the
+  granted folder. Names, IDs and memberships above or outside that root are
+  omitted, even when an authorized paper also has an outside placement.
+- **Specific Gewu Keys:** only folders containing those papers and the parent
+  paths necessary to reach them. Other empty folders, siblings and papers are
+  hidden. Counts include only authorized children/memberships. Enabling this
+  permission explicitly allows these containing-folder and ancestor names.
+
+Recycle, trashed items, trashed folders and their descendants are excluded.
+Unknown and unauthorized folder IDs both return `folder_unavailable` (404).
+No global directory counts, raw filesystem paths or hidden-change timestamps
+are returned. File reading and append-only analysis permissions are unchanged.
+
+**Walk a Space such as AI:**
+
+1. Call `list_folders({"limit":100})`, following `next_cursor` until `null`.
+   Find the intended root by its name, `kind`, stable `folder_id` and `path`.
+2. Call `list_folders({"parent_id":42,"revision":"<returned revision>"})`
+   to read its direct subfolders; repeat for deeper folders when classification
+   structure matters. Use the returned ID, not the illustrative `42`.
+3. Call `list_folder_papers({"folder_id":42,"recursive":true,"limit":100,
+   "revision":"<returned revision>"})` to enumerate all visible placements in
+   that subtree. Omit `recursive` for direct members only. Follow every cursor.
+4. Preserve `membership_id` and `folder_id` to retain classifications; deduplicate
+   reading/analysis by `gewu_key`. Call `get_paper` with one returned key to inspect
+   the paper and its registered files.
+
+Both tools return `revision` and `next_cursor`. The default page size is 50,
+maximum 100, with no fixed number-of-pages cap. `list_folders` returns `folders`
+in folder-ID order; each has `folder_id`, `name`, `kind`, visible `parent_id`,
+`path` (ID/name segments), `logical_path`, `path_is_relative_to_grant`,
+`child_folder_count` and `direct_paper_count`. Use ID segments to disambiguate
+repeated names or names containing `/`; `logical_path` is a display label.
+
+`list_folder_papers` returns the requested `folder`, `recursive` and
+`memberships` in membership-ID order. Each entry contains `membership_id`,
+`folder_id`, canonical `gewu_key` and `paper` with key, title, DOI, arXiv ID,
+journal and publication date. Two placements of one paper are two entries.
+An empty authorized folder returns an empty array, not an error.
+
+Folder IDs survive renames and moves within this database; deleted/recreated
+folders get new IDs. Membership IDs identify placements, while a Gewu Key
+identifies the paper. A grant anchored to a folder follows that folder's stable
+ID; moving a child out of the granted subtree removes that child's visibility.
+Merges return the canonical Gewu Key; grants using retained aliases still work.
+Do not reuse IDs/cursors across independent Gewu databases or connections.
+
+For a consistent multi-call enumeration, pass the first `revision` on every
+subsequent call. Cursors bind the operation, parent/folder, recursive option,
+connection and visible-collection revision. A visible rename, move, deletion,
+membership or canonical-key change returns `collection_changed` (409): discard
+the partial walk and restart without a cursor or revision. Invisible changes do
+not alter the revision. Paper metadata refreshes do not invalidate membership
+pagination; this is not a historical snapshot of bibliography fields. With no
+explicit revision, independent first-page calls each use the current collection.
+Permissions and visible membership are checked again before returning a result.
 
 A typical workflow is search → get the exact Gewu Key → get the original PDF
 with `get_paper_file` → read it using the client's own tools → save the analysis
