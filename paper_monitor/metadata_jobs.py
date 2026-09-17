@@ -31,6 +31,21 @@ def _save(storage, job):
     storage.set_setting(PREFIX + job['job_id'], json.dumps(job, ensure_ascii=False))
 
 
+def _finish_stopped(storage, job):
+    """End the queue without undoing completed paper updates or its history."""
+    if job['status'] != 'stopped':
+        job.update(status='stopped', stage='stopped', finished_at=stamp(), current_paper='',
+                   message='Stopped. Completed results are kept; the remaining queue has ended.')
+        job['result'] = {'job_type': 'metadata_refresh', 'status': 'stopped',
+                         'metadata_mode': job['metadata_mode'], 'scope_label': job['scope_label'],
+                         'total_candidates': job['total'], 'processed': job['current'],
+                         'metadata_refreshed': job['changed_count'], 'skip_days': job['skip_days'],
+                         **job['counts']}
+        job['logs'] = (job['logs'] + [{'time': stamp(), 'level': 'info', 'message': job['message']}])[-200:]
+        _save(storage, job)
+    storage.set_setting('metadata_candidates:' + job['job_id'], '[]')
+
+
 def initialize(storage):
     db = str(Path(storage.db_path).resolve())
     with _LOCK:
@@ -39,7 +54,9 @@ def initialize(storage):
         rows = storage.conn.execute('SELECT value FROM app_settings WHERE key LIKE ?', (PREFIX + '%',)).fetchall()
         for row in rows:
             job = json.loads(row[0])
-            if job['status'] in {'queued', 'running', 'pausing'}:
+            if job['status'] in {'stopping', 'stopped'}:
+                _finish_stopped(storage, job)
+            elif job['status'] in {'queued', 'running', 'pausing'}:
                 job.update(status='paused', stage='paused', current_paper='',
                            message='Paused after restart. Continue from the saved checkpoint.')
                 _save(storage, job)
@@ -98,7 +115,7 @@ def create(storage, *, mode='full', skip_days=3, folder_id=None, job_id=None,
     with _LOCK:
         # Repeated clicks on the same scope attach to the existing job.
         for previous in listing(storage):
-            if paper_ids is None and previous.get('origin') != 'import' and previous['folder_id'] == folder_id and previous['metadata_mode'] == mode and previous['status'] in {'queued', 'running', 'pausing'}:
+            if paper_ids is None and previous.get('origin') != 'import' and previous['folder_id'] == folder_id and previous['metadata_mode'] == mode and previous['status'] in {'queued', 'running', 'pausing', 'stopping'}:
                 return previous
         job_id = job_id or uuid.uuid4().hex[:12]
         job = {'job_id': job_id, 'job_type': 'metadata_refresh', 'metadata_mode': mode,
@@ -137,8 +154,16 @@ def control(storage, job_id, action):
             job['stage'] = job['status']
         elif action == 'resume' and job['status'] in {'paused', 'failed'}:
             job.update(status='queued', stage='queued', error='')
+        elif action == 'resume' and job['status'] == 'stopped':
+            raise ValueError('Stopped tasks cannot be continued. Start a new refresh.')
+        elif action == 'stop' and job['status'] in {'queued', 'running', 'pausing', 'paused', 'failed'}:
+            if job['status'] in {'running', 'pausing'}:
+                job.update(status='stopping', stage='stopping',
+                           message='Stopping after the current paper. Completed results will be kept.')
+            else:
+                _finish_stopped(storage, job)
         else:
-            if action not in {'pause', 'resume'}:
+            if action not in {'pause', 'resume', 'stop'}:
                 raise ValueError('Unknown refresh control')
         _save(storage, job)
     return job
@@ -158,9 +183,14 @@ def run_job(storage, job_id, progress=None):
                 progress(job)
             with _LOCK:
                 job = _read(storage, job_id)
+                if job['status'] == 'stopping':
+                    _finish_stopped(storage, job)
+                    return
                 if job['status'] == 'pausing':
                     job.update(status='paused', stage='paused', current_paper='')
                     _save(storage, job)
+                    return
+                if job['status'] != 'running':
                     return
                 paper_id = storage.resolve_paper_id(ids[index])
                 paper = storage.get_paper(paper_id)
@@ -182,7 +212,7 @@ def run_job(storage, job_id, progress=None):
                 except Exception as exc:
                     status, message = 'failed', str(exc)
             with _LOCK:
-                job = _read(storage, job_id)  # Preserve a pause requested during I/O.
+                job = _read(storage, job_id)  # Preserve pause/stop requests made during I/O.
                 job['counts'][status] += 1
                 job['changed_count'] += int(changed)
                 job['current'] = index + 1
@@ -190,9 +220,15 @@ def run_job(storage, job_id, progress=None):
                 job['logs'].append({'time': stamp(), 'level': 'warn' if status in {'partial', 'failed'} else 'info',
                                     'message': f'{index+1}/{len(ids)} · {job["current_paper"]} · {status.replace("_", " ")}: {message}'})
                 job['logs'] = job['logs'][-200:]
+                if job['status'] == 'stopping':
+                    _finish_stopped(storage, job)
+                    return
                 _save(storage, job)
         with _LOCK:
             job = _read(storage, job_id)
+            if job['status'] in {'stopping', 'stopped'}:
+                _finish_stopped(storage, job)
+                return
             counts = job['counts']
             job.update(status='completed', stage='complete', percent=100, finished_at=stamp(), current_paper='',
                 result={'job_type': 'metadata_refresh', 'metadata_mode': job['metadata_mode'],
@@ -202,8 +238,11 @@ def run_job(storage, job_id, progress=None):
     except Exception as exc:
         with _LOCK:
             job = _read(storage, job_id)
-            job.update(status='failed', stage='failed', error=str(exc))
-            _save(storage, job)
+            if job['status'] in {'stopping', 'stopped'}:
+                _finish_stopped(storage, job)
+            else:
+                job.update(status='failed', stage='failed', error=str(exc))
+                _save(storage, job)
 
 
 def start(db_path):

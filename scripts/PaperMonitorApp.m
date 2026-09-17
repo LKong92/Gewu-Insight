@@ -140,10 +140,15 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 @end
 
+// WKWebView implements these public AppKit callbacks for its own DOM drags.
+@interface WKWebView (GewuDragLifecycle) <NSDraggingSource>
+@end
+
 @interface GewuInsightWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
 @property(nonatomic, copy) NSString *nativeDragName;
 @property(nonatomic, copy) NSString *nativeDragCleanupPath;
+@property(nonatomic) BOOL nativeFileDragActive;
 @property(nonatomic) BOOL pdfQuickLookActive;
 @property(nonatomic) CGFloat pdfMagnificationAccumulator;
 @property(nonatomic) NSInteger pendingLibraryItemDragId;
@@ -161,6 +166,9 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    if ([sender draggingSource] == self && !self.nativeFileDragActive) {
+        return [super draggingEntered:sender];
+    }
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
         [self updateFinderDropTargetForDraggingInfo:sender];
         return [sender draggingSource] == self ? (self.pendingLibraryDragPayload ? NSDragOperationMove : NSDragOperationNone) : NSDragOperationCopy;
@@ -169,6 +177,9 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    if ([sender draggingSource] == self && !self.nativeFileDragActive) {
+        return [super draggingUpdated:sender];
+    }
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
         [self updateFinderDropTargetForDraggingInfo:sender];
         return [sender draggingSource] == self ? (self.pendingLibraryDragPayload ? NSDragOperationMove : NSDragOperationNone) : NSDragOperationCopy;
@@ -177,12 +188,20 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (void)draggingExited:(id<NSDraggingInfo>)sender {
+    if ([sender draggingSource] == self && !self.nativeFileDragActive) {
+        [super draggingExited:sender];
+        return;
+    }
     [self clearFinderDropTarget];
     [super draggingExited:sender];
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
     if ([sender draggingSource] == self) {
+        // WebKit also uses this view as the source when dragging a row/title.
+        // Only sessions we started from a file icon use the native payload.
+        // Rejecting a DOM session here prevents its JavaScript drop entirely.
+        if (!self.nativeFileDragActive) return [super performDragOperation:sender];
         if (!self.pendingLibraryDragPayload) return NO;
         [self dispatchPendingLibraryItemDropAtClientPoint:[self browserClientPointForDraggingInfo:sender]];
         return YES;
@@ -359,7 +378,13 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
             NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
             NSRect frame = NSMakeRect(point.x - 24, point.y - 24, 48, 48);
             [draggingItem setDraggingFrame:frame contents:icon];
-            [self beginDraggingSessionWithItems:@[draggingItem] event:event source:self];
+            self.nativeFileDragActive = YES;
+            NSDraggingSession *session = [self beginDraggingSessionWithItems:@[draggingItem] event:event source:self];
+            if (!session) {
+                self.nativeFileDragActive = NO;
+                self.pendingLibraryDragPayload = nil;
+                self.pendingLibraryItemDragId = 0;
+            }
             return;
         }
     }
@@ -386,11 +411,16 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     self.nativeDragName = nil;
     self.nativeDragCleanupPath = nil;
     [super mouseUp:event];
-    self.pendingLibraryDragPayload = nil;
-    self.pendingLibraryItemDragId = 0;
+    if (!self.nativeFileDragActive) {
+        self.pendingLibraryDragPayload = nil;
+        self.pendingLibraryItemDragId = 0;
+    }
 }
 
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    if (!self.nativeFileDragActive) {
+        return [super draggingSession:session sourceOperationMaskForDraggingContext:context];
+    }
     // Finder copies the file; application icons can negotiate opening it.
     // Moves within Gewu use managed ownership transitions; outside exports stay copies.
     return context == NSDraggingContextOutsideApplication
@@ -402,9 +432,28 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     return YES;
 }
 
+- (void)draggingSession:(NSDraggingSession *)session willBeginAtPoint:(NSPoint)screenPoint {
+    if (!self.nativeFileDragActive && [WKWebView instancesRespondToSelector:_cmd]) {
+        [super draggingSession:session willBeginAtPoint:screenPoint];
+    }
+}
+
 - (void)draggingSession:(NSDraggingSession *)session
            endedAtPoint:(NSPoint)screenPoint
               operation:(NSDragOperation)operation {
+    if (!self.nativeFileDragActive) {
+        if ([WKWebView instancesRespondToSelector:_cmd]) {
+            [super draggingSession:session endedAtPoint:screenPoint operation:operation];
+        } else {
+            // Older WebKit (including macOS 15) ends DOM drags through this
+            // public legacy callback. It dispatches dragend to the web page.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [super draggedImage:nil endedAt:screenPoint operation:operation];
+#pragma clang diagnostic pop
+        }
+        return;
+    }
     NSPoint windowPoint = [self.window convertPointFromScreen:screenPoint];
     NSPoint viewPoint = [self convertPoint:windowPoint fromView:nil];
     NSPoint clientPoint = [self browserClientPointForViewPoint:viewPoint];
@@ -416,6 +465,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     }
     self.pendingLibraryDragPayload = nil;
     self.pendingLibraryItemDragId = 0;
+    self.nativeFileDragActive = NO;
     [self evaluateJavaScript:@"window.clearNativeLibraryDrag && window.clearNativeLibraryDrag()" completionHandler:nil];
 }
 

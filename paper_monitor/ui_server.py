@@ -3567,7 +3567,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_stop_library_import_folder(self, payload: dict[str, Any]) -> None:
         job_id = str(payload.get("job_id") or "")
-        job = request_stop_library_import_job(job_id)
+        storage = Storage(self.configured_db_path)
+        try:
+            job = request_stop_library_import_job(job_id, storage=storage)
+        finally:
+            storage.close()
         if not job:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown import job")
             return
@@ -12346,27 +12350,36 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
                             if isinstance(p, dict) and p.get("paper_id")))
     refresh_job = metadata_jobs.create(storage, mode=mode, paper_ids=ids, origin="import")
     result["metadata_job_id"] = refresh_job["job_id"]
+    if job_id:
+        update_library_import_job(job_id, metadata_job_id=refresh_job["job_id"])
+        if library_import_cancel_requested(job_id):
+            metadata_jobs.control(storage, refresh_job["job_id"], "stop")
     last_progress = None
     def progress(job):
         nonlocal last_progress
         if not job_id:
             return
         if library_import_cancel_requested(job_id):
-            metadata_jobs.control(storage, job["job_id"], "pause")
-        update_library_import_job(job_id, stage="metadata", current=job["current"], total=job["total"], percent=min(99, job["percent"]))
+            metadata_jobs.control(storage, job["job_id"], "stop")
+        update_library_import_job(job_id, stage="stopping" if library_import_cancel_requested(job_id) else "metadata",
+                                  current=job["current"], total=job["total"], percent=min(99, job["percent"]))
         if job["logs"] and job["current"] != last_progress:
             log_library_import_job(job_id, job["logs"][-1]["message"])
         last_progress = job["current"]
     metadata_jobs.run_job(storage, refresh_job["job_id"], progress=progress)
     job = metadata_jobs.get(storage, refresh_job["job_id"])
     # A batch worker may have claimed this import job. Keep the import attached
-    # until its metadata checkpoint is final, including a requested pause.
-    while job["status"] in {"queued", "running", "pausing"}:
+    # until its metadata checkpoint is final, including a requested stop.
+    while job["status"] in {"queued", "running", "pausing", "stopping"}:
         progress(job)
         time.sleep(.2)
         job = metadata_jobs.get(storage, refresh_job["job_id"])
     counts = job["counts"]
     result.update(doi_metadata_refreshed=job["changed_count"], identifier_metadata_refreshed=job["changed_count"], metadata_counts=counts)
+    if job_id:
+        update_library_import_job(job_id, current=job["current"], total=job["total"], percent=job["percent"])
+    if job["status"] == "stopped" or (job_id and library_import_cancel_requested(job_id)):
+        raise ImportCancelled("Import stopped. Completed files and metadata are kept; the remaining queue has ended.")
     if job["status"] == "paused":
         raise ImportCancelled("Import metadata paused. Continue it in Refresh tasks.")
     if job["status"] == "failed":
@@ -19984,7 +19997,7 @@ def update_library_import_job(job_id: str, **updates: Any) -> None:
         job.update(updates)
 
 
-def request_stop_library_import_job(job_id: str) -> dict[str, Any] | None:
+def request_stop_library_import_job(job_id: str, *, storage: Storage | None = None) -> dict[str, Any] | None:
     with LIBRARY_IMPORT_JOBS_LOCK:
         job = LIBRARY_IMPORT_JOBS.get(job_id)
         if not job:
@@ -19995,6 +20008,11 @@ def request_stop_library_import_job(job_id: str) -> dict[str, Any] | None:
             job["stage"] = "stopping"
         snapshot = dict(job)
         snapshot["logs"] = list(job.get("logs") or [])[-300:]
+    # Stop the durable child as well, including during an in-flight lookup.
+    # Otherwise Stop Import leaves an orphaned paused Refresh Info task.
+    refresh_id = snapshot.get("metadata_job_id")
+    if storage is not None and refresh_id and snapshot.get("cancel_requested"):
+        metadata_jobs.control(storage, refresh_id, "stop")
     label = {
         "metadata_refresh": "metadata refresh",
         "identifier_recovery": "identifier recovery",
@@ -20316,6 +20334,7 @@ def run_library_import_job(
     source_paths = source_paths or [folder_path]
     metadata_mode = normalize_import_metadata_mode(metadata_mode)
     import_prefix = "finder-drop" if preserve_top_level else "folder"
+    result = None
     inventory_path = ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
     report_path = ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
     progress = library_import_progress_callback(job_id)
@@ -20446,6 +20465,10 @@ def run_library_import_job(
         )
     except ImportCancelled as exc:
         log_library_import_job(job_id, str(exc) or "Import stopped by user", level="warn")
+        # Metadata may have been stopped after the files were fully imported.
+        # Keep that result available in Details; Stop never deletes the batch.
+        if result is not None:
+            update_library_import_job(job_id, result=summarize_import_result(result))
         update_library_import_job(
             job_id,
             status="cancelled",
@@ -41530,7 +41553,12 @@ INDEX_HTML = """<!doctype html>
       if (description) description.textContent = refreshMode ? "Refresh paper information in the selected scope. You can keep browsing." : (identifierMode ? "Find identifiers for saved papers with missing DOI or arXiv IDs." : "Import a folder into Library with a live log. Source files are never moved or deleted.");
       const resumable = refreshMode && ["paused", "failed"].includes(job.status);
       const runLabel = identifierMode ? "Start Search" : (refreshMode ? (resumable ? "Continue" : "Start Refresh") : "Import");
-      const stopLabel = identifierMode ? "Stop Search" : (refreshMode ? "Pause" : "Stop Import");
+      const stopping = job.status === "stopping";
+      const canStop = refreshMode
+        ? ["queued", "running", "pausing", "paused", "failed"].includes(job.status)
+        : state.libraryImportBusy && !stopping;
+      const canPause = refreshMode && ["queued", "running"].includes(job.status);
+      const stopLabel = stopping ? "Stopping…" : (identifierMode ? "Stop Search" : (refreshMode ? "Stop" : "Stop Import"));
       const maintenanceSource = identifierMode
         ? "All Library PDF files without DOI/arXiv"
         : (state.metadataRefreshScopeLabel || "All active Library and Space papers");
@@ -41563,7 +41591,8 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="loader-action-group">
               <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>${runLabel}</button>
-              <button class="smallbtn" id="libraryStopImport" type="button"${state.libraryImportBusy ? "" : " disabled"}>${stopLabel}</button>
+              ${refreshMode ? `<button class="smallbtn" id="libraryPauseImport" type="button"${canPause ? "" : " disabled"}>Pause</button>` : ""}
+              <button class="smallbtn" id="libraryStopImport" type="button"${canStop ? "" : " disabled"}>${stopLabel}</button>
               ${maintenanceMode ? "" : `<button class="smallbtn danger loader-action-danger" id="libraryDeleteImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Delete Import</button>`}
             </div>
             <div class="loader-target-summary${maintenanceMode ? " hidden" : ""}">
@@ -41833,7 +41862,7 @@ INDEX_HTML = """<!doctype html>
           <div class="loader-metric"><strong>Mode</strong><span>${escapeHtml(state.libraryImportMetadataMode || "full")}</span></div>
           <p>${escapeHtml(loaderMetadataModeHint(state.libraryImportMetadataMode))}</p>
           <p>One check per Gewu Key. Recycle is excluded. Successful checks within 3 days are skipped; Full also satisfies Quick. Files, Default and folder locations stay unchanged.</p>
-          <p>Pause finishes the current paper and saves the remaining queue. Continue resumes it, including after restarting the App.</p>
+          <p>Pause finishes the current paper and saves the remaining queue. Continue resumes it, including after restarting the App. Stop finishes the current paper and ends the remaining queue. Completed results and task history are kept; a stopped task cannot be continued.</p>
           ${Object.entries({updated:"Updated", unchanged:"Unchanged", partial:"Partial", failed:"Failed", skipped_recent:"Cooldown skipped", missing_identifier:"Missing DOI/arXiv", removed:"No longer in scope"}).map(([key,label]) => `<div class="loader-metric"><strong>${Number(counts[key] || 0)}</strong><span>${label}</span></div>`).join("")}
         `;
       }
@@ -42057,7 +42086,7 @@ INDEX_HTML = """<!doctype html>
       renderLibraryActivityStatus();
       $("libraryImportDetails")?.addEventListener("click", () => {
         if (state.libraryImportNotice) openLibraryLoader({currentJob: true});
-        else { const job = state.metadataRefreshJobs.find(j => ["running","queued","pausing","paused","failed"].includes(j.status)); if (job) showMetadataJob(job.job_id); }
+        else { const job = state.metadataRefreshJobs.find(j => ["running","queued","pausing","stopping","paused","failed"].includes(j.status)); if (job) showMetadataJob(job.job_id); }
       });
       $("libraryImportDismiss")?.addEventListener("click", () => {
         if (state.libraryImportBusy) return;
@@ -42197,7 +42226,7 @@ INDEX_HTML = """<!doctype html>
       const base = "library-activity-status";
       const text = libraryActivityStatusText();
       if (!text) return base;
-      if (metadataRefreshActivityText("library") || state.metadataRefreshJobs?.some(job => ["queued", "running", "pausing"].includes(job.status)) || (state.libraryImportNotice ? state.libraryImportNotice.live : state.libraryActivityLive)) return `${base} live`;
+      if (metadataRefreshActivityText("library") || state.metadataRefreshJobs?.some(job => ["queued", "running", "pausing", "stopping"].includes(job.status)) || (state.libraryImportNotice ? state.libraryImportNotice.live : state.libraryActivityLive)) return `${base} live`;
       if (text === "Refresh complete") return `${base} refresh-complete`;
       if (/failed|could not|error|partial|review|unavailable/i.test(text)) return `${base} err`;
       return `${base} ok`;
@@ -42316,7 +42345,13 @@ INDEX_HTML = """<!doctype html>
       const stopButton = $("libraryStopImport");
       const deleteButton = $("libraryDeleteImport");
       if (runButton) runButton.disabled = state.libraryImportBusy;
-      if (stopButton) stopButton.disabled = !state.libraryImportBusy;
+      const refreshMode = state.libraryTaskMode === "metadata-refresh";
+      const statusValue = state.libraryImportJob?.status;
+      if (stopButton) stopButton.disabled = refreshMode
+        ? !["queued", "running", "pausing", "paused", "failed"].includes(statusValue)
+        : !state.libraryImportBusy || statusValue === "stopping";
+      const pauseButton = $("libraryPauseImport");
+      if (pauseButton) pauseButton.disabled = !["queued", "running"].includes(statusValue);
       if (deleteButton) deleteButton.disabled = state.libraryImportBusy;
     }
 
@@ -42343,8 +42378,9 @@ INDEX_HTML = """<!doctype html>
         else if (state.libraryTaskMode === "identifier-recovery") runLibraryIdentifierRecovery();
         else runLibraryFolderImport();
       });
+      $("libraryPauseImport")?.addEventListener("click", () => controlMetadataJob("pause"));
       $("libraryStopImport")?.addEventListener("click", () => {
-        if (state.libraryTaskMode === "metadata-refresh") controlMetadataJob("pause");
+        if (state.libraryTaskMode === "metadata-refresh") controlMetadataJob("stop");
         else stopLibraryFolderImport();
       });
       $("metadataJobHistory")?.addEventListener("change", event => { if (event.target.value) showMetadataJob(event.target.value); });
@@ -42667,7 +42703,7 @@ INDEX_HTML = """<!doctype html>
     function resumeLibraryImportPollingIfNeeded() {
       if (!state.libraryImportJobId || state.libraryImportPoller) return;
       const status = state.libraryImportJob?.status || "";
-      if (["completed", "failed", "cancelled", "deleted", "loaded", "unavailable", "paused"].includes(status)) return;
+      if (["completed", "failed", "cancelled", "deleted", "loaded", "unavailable", "paused", "stopped"].includes(status)) return;
       startLibraryImportPolling();
     }
 
@@ -42730,7 +42766,7 @@ INDEX_HTML = """<!doctype html>
           state.libraryImportLastResult = job.result;
           if (job.result.report_path) state.libraryImportReportPath = job.result.report_path;
         }
-        const terminal = ["completed", "failed", "cancelled", "deleted", "paused"].includes(job.status);
+        const terminal = ["completed", "failed", "cancelled", "deleted", "paused", "stopped"].includes(job.status);
         if (terminal) {
           state.libraryImportBusy = false;
           stopLibraryImportPolling();
@@ -42946,7 +42982,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function metadataBatchActivityText() {
-      const pending = (state.metadataRefreshJobs || []).filter(j => ["running","queued","pausing","paused","failed"].includes(j.status));
+      const pending = (state.metadataRefreshJobs || []).filter(j => ["running","queued","pausing","stopping","paused","failed"].includes(j.status));
       const job = pending.find(j => j.status === "running") || pending[0];
       if (!job) return "";
       return `Refresh Info · ${job.status} · ${job.current}/${job.total}${pending.length > 1 ? ` · ${pending.length} tasks` : ""}`;
@@ -42968,7 +43004,7 @@ INDEX_HTML = """<!doctype html>
       state.metadataRefreshScopeId = job.folder_id;
       state.metadataRefreshScopeLabel = job.scope_label;
       state.libraryImportStatus = metadataJobStatusText(job);
-      state.libraryImportBusy = ["queued", "running", "pausing"].includes(job.status);
+      state.libraryImportBusy = ["queued", "running", "pausing", "stopping"].includes(job.status);
       state.libraryImportReadyRefreshDone = true;
       state.libraryLoaderOpen = true;
       await refreshLibraryImportJob();
@@ -42982,10 +43018,17 @@ INDEX_HTML = """<!doctype html>
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not update refresh task");
         state.libraryImportJob = data.job;
-        state.libraryImportBusy = ["queued","running","pausing"].includes(data.job.status);
+        state.libraryImportLastResult = data.job.result;
+        state.metadataRefreshJobs = (state.metadataRefreshJobs || []).map(job => job.job_id === data.job.job_id ? data.job : job);
+        renderLibraryActivityStatus();
+        state.libraryImportBusy = ["queued","running","pausing","stopping"].includes(data.job.status);
         state.libraryImportStatus = metadataJobStatusText(data.job);
         renderLibraryLoader();
-        startLibraryImportPolling();
+        if (state.libraryImportBusy) startLibraryImportPolling();
+        else {
+          stopLibraryImportPolling();
+          signalLibraryRefresh("metadata-completed");
+        }
         pollMetadataJobs();
       } catch (error) { state.libraryImportStatus = error.message; renderLibraryLoader(); }
     }
@@ -43002,13 +43045,23 @@ INDEX_HTML = """<!doctype html>
         state.metadataRefreshJobs = data.jobs || [];
         for (const job of state.metadataRefreshJobs) {
           const old = previous.find(j => j.job_id === job.job_id);
-          if (old && old.status !== "completed" && job.status === "completed") {
-            if (!state.libraryActivityLive) updateLibraryActivityStatus("Refresh complete", {delay:5000});
+          if (old && old.status !== job.status && ["completed", "stopped"].includes(job.status)) {
+            if (!state.libraryActivityLive) updateLibraryActivityStatus(job.status === "stopped" ? "Refresh stopped" : "Refresh complete", {delay:5000});
             pollVisibleMetadataResult();
           }
         }
         renderLibraryActivityStatus();
-        if (state.libraryLoaderOpen && state.libraryTaskMode === "metadata-refresh" && !state.libraryImportBusy && JSON.stringify(previous) !== JSON.stringify(state.metadataRefreshJobs)) renderLibraryLoader();
+        if (state.libraryLoaderOpen && state.libraryTaskMode === "metadata-refresh" && !state.libraryImportBusy && JSON.stringify(previous) !== JSON.stringify(state.metadataRefreshJobs)) {
+          const selected = state.metadataRefreshJobs.find(job => job.job_id === state.libraryImportJobId);
+          if (selected) {
+            state.libraryImportJob = selected;
+            state.libraryImportLastResult = selected.result;
+            state.libraryImportStatus = metadataJobStatusText(selected);
+            state.libraryImportBusy = ["queued", "running", "pausing", "stopping"].includes(selected.status);
+            if (state.libraryImportBusy) startLibraryImportPolling();
+          }
+          renderLibraryLoader();
+        }
       } catch (_) { /* Keep the last known queue; a transient error is not completion. */ }
       finally { metadataJobsPolling = false; }
     }

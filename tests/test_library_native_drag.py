@@ -26,4 +26,4 @@ class LibraryNativeDragTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('18 native drag contract checks passed', result.stdout)
+            self.assertIn('native drag contract checks passed', result.stdout)

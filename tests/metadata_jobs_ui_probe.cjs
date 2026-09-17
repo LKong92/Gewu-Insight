@@ -24,7 +24,7 @@ const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
   await page.locator('#libraryRunImport').click();
   await page.waitForFunction(() => state.libraryImportJobId && state.libraryImportJob?.total===3);
   const jobId = await page.evaluate(() => state.libraryImportJobId);
-  await page.locator('#libraryStopImport').click();
+  await page.locator('#libraryPauseImport').click();
   await page.evaluate(() => fetch('/qa/release',{method:'POST'}));
   await page.waitForFunction(() => state.libraryImportJob?.status==='paused');
   assert.equal(await page.locator('#libraryRunImport').innerText(), 'Continue');
