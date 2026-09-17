@@ -15,7 +15,14 @@ from tests import test_inventory_importer as fixtures
 
 
 class ImportConflictFileTests(unittest.TestCase):
-    setUp = fixtures.InventoryImporterDryRunTests.setUp
+    def setUp(self):
+        fixtures.InventoryImporterDryRunTests.setUp(self)
+        for name, directory in (("LIBRARY_LOCAL_COPY_ROOT", "copied"), ("SPACES_LOCAL_COPY_ROOT", "Spaces"),
+                ("MY_PUBLICATIONS_LOCAL_COPY_ROOT", "My Publications"), ("ASSOCIATED_FILES_ROOT", "Associated Files"),
+                ("DEFAULT_PDF_DIR", "pdfs")):
+            active = patch.object(ui_server, name, self.root / directory)
+            active.start()
+            self.addCleanup(active.stop)
     tearDown = fixtures.InventoryImporterDryRunTests.tearDown
     write_inventory = fixtures.InventoryImporterDryRunTests.write_inventory
     write_text_pdf = fixtures.InventoryImporterDryRunTests.write_text_pdf
@@ -81,7 +88,8 @@ class ImportConflictFileTests(unittest.TestCase):
                 destination=self.storage.get_paper(two['paper_id'])
                 args={'new_title':'Separated file'} if create_new else {'target_key':destination['storage_key']}
                 moved=reassign_paper_file(self.storage,one['paper_id'],one['id'],**args)
-                original=Path(one['stored_path']).read_bytes()
+                moved_path=Path(self.storage.get_paper_resource(one['id'])['stored_path'])
+                original=moved_path.read_bytes()
                 trashed=[]
                 def fake_trash(path):
                     trashed.append(str(path))
@@ -95,7 +103,7 @@ class ImportConflictFileTests(unittest.TestCase):
                 target=self.storage.get_paper(moved['target_paper_id'])
                 self.assertIsNotNone(target)
                 self.assertIsNone(target['import_batch_id'])
-                self.assertEqual(Path(one['stored_path']).read_bytes(),original)
+                self.assertEqual(moved_path.read_bytes(),original)
                 self.assertEqual(self.storage.get_paper_resource(one['id'])['paper_id'],target['paper_id'])
                 self.assertNotIn(str(self.root/'copied'),trashed)
                 self.assertEqual([r['id'] for r in self.storage.list_paper_resources(target['paper_id'])],[one['id']])
@@ -127,7 +135,8 @@ class ImportConflictFileTests(unittest.TestCase):
         self.assertEqual(new['doi'],'')
         self.assertNotEqual(new['storage_key'],self.storage.get_paper(old)['storage_key'])
         after=self.storage.get_paper_resource(r['id'])
-        self.assertEqual(after['stored_path'],r['stored_path'])
+        self.assertNotEqual(after['stored_path'],r['stored_path'])
+        self.assertFalse(Path(r['stored_path']).exists())
         self.assertEqual(Path(after['stored_path']).read_bytes(),pdf.read_bytes())
         self.assertEqual(after['status'],'reassigned')
         self.assertIsNone(after['import_batch_id'])

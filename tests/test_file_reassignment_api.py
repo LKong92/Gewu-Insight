@@ -22,7 +22,7 @@ class FileReassignmentApiTests(unittest.TestCase):
         self.assertEqual(body['reassignment']['resource_id'],self.pdf['id'])
         self.assertEqual(body['reassignment']['target_gewu_key'],self.other_key)
         self.assertEqual(self.storage.get_paper_resource(self.pdf['id'])['paper_id'],'two')
-        self.assertEqual(self.call('get_paper',{'gewu_key':self.key})[1]['files'],[])
+        self.assertEqual(self.call('get_paper',{'gewu_key':self.key})[0],404)
         self.assertEqual(self.call('read_paper',{'gewu_key':self.key,'file_id':self.pdf['id']})[0],404)
         self.assertEqual(self.request('/api/paper-files/reassign',args,workspace=True)[0],400)
 

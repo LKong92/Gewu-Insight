@@ -1733,9 +1733,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             result = reassign_paper_file(storage, clean_text(str(payload.get("paper_id") or "")),
                 int(payload.get("resource_id") or 0), target_key=clean_text(str(payload.get("target_key") or "")),
-                new_title=clean_text(str(payload.get("new_title") or "")), folder_id=int(payload.get("folder_id") or 0))
-            response = {"reassignment": result, "paper_files": [paper_files_state_payload(storage, result[key])
-                         for key in ("source_paper_id", "target_paper_id")]}
+                new_title=clean_text(str(payload.get("new_title") or "")), folder_id=int(payload.get("folder_id") or 0),
+                target_paper_id=clean_text(str(payload.get("target_paper_id") or "")))
+            response = {"reassignment": result, "paper_files": paper_files_state_payloads(storage,
+                         [result["source_paper_id"], result["target_paper_id"]])}
         except (ValueError, KeyError) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -20642,7 +20643,7 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
     deleted_folders = cleanup_empty_import_folders(storage, started_at)
     storage.conn.commit()
 
-    # Reassignment changes ownership without moving bytes. Never trash a surviving
+    # Reassigned files no longer belong to the import batch. Never trash a surviving
     # file, or an import directory that still contains one of those files.
     protected_paths = set()
     for row in storage.conn.execute("""SELECT stored_path, source_path FROM resources
@@ -20986,9 +20987,20 @@ def configured_journal_entry(name: str, raw: dict[str, Any] | None = None) -> di
     )
 
 
+def journal_uses_text_label(name: str) -> bool:
+    key = clean_journal_name(name).casefold()
+    # APS pages expose publisher/campaign artwork rather than a dependable
+    # journal wordmark. Keep their names readable even if an old logo is cached.
+    return (
+        key in {ARXIV_JOURNAL_NAME.casefold(), "physical review", "prl", "prx", "rmp", "reviews of modern physics"}
+        or key.startswith("physical review ")
+        or key.startswith("prx ")
+    )
+
+
 def local_journal_logo_url(name: str) -> str:
     cleaned = clean_journal_name(name)
-    if not cleaned or cleaned.casefold() == ARXIV_JOURNAL_NAME.casefold():
+    if not cleaned or journal_uses_text_label(cleaned):
         return ""
     return f"/api/journal-logo-image?name={quote(cleaned)}"
 
@@ -21055,6 +21067,8 @@ def journal_logo_file_type(content: bytes, content_type: str = "", source_url: s
 
 
 def direct_journal_logo_source(name: str, configured: dict[str, Any] | None = None) -> str:
+    if journal_uses_text_label(name):
+        return ""
     journal = dict(configured or {})
     configured_url = clean_text(journal.get("logo_url") or "")
     if configured_url and not is_icon_logo_candidate(configured_url, configured_url):
@@ -21077,7 +21091,7 @@ def cache_journal_logo(
     configured: dict[str, Any] | None = None,
 ) -> Path | None:
     cleaned = clean_journal_name(name)
-    if not cleaned or cleaned.casefold() == ARXIV_JOURNAL_NAME.casefold():
+    if not cleaned or journal_uses_text_label(cleaned):
         return None
     cache_key = journal_logo_cache_key(db_path, cleaned)
     existing = cached_journal_logo_path(db_path, cleaned)
@@ -21166,7 +21180,7 @@ def resolve_journal_metadata(name: str) -> dict[str, Any]:
 
 
 def resolve_journal_logo_url(name: str, homepage_url: str = "") -> str:
-    if name.lower().strip() == ARXIV_JOURNAL_NAME.lower():
+    if journal_uses_text_label(name):
         return ""
     known = KNOWN_JOURNAL_LOGOS.get(name.lower().strip())
     if known:
@@ -22366,155 +22380,8 @@ def convert_library_item_to_paper_attachment(
     source_item_id: int,
     target_paper_id: str,
 ) -> dict[str, Any]:
-    """Turn one standalone Library work into managed files of another work."""
-    source_item = storage.get_library_item(int(source_item_id))
-    target_paper = storage.get_paper(str(target_paper_id))
-    if not source_item or not target_paper:
-        raise KeyError(int(source_item_id))
-    source_paper_id = clean_text(source_item.get("paper_id") or "")
-    if not source_paper_id or source_paper_id == str(target_paper_id):
-        raise ValueError("A paper cannot be attached to itself")
-    source_paper = storage.get_paper(source_paper_id)
-    if not source_paper:
-        raise KeyError(source_paper_id)
-
-    library_rows = storage.conn.execute(
-        "SELECT id FROM library_items WHERE paper_id = ? ORDER BY id ASC",
-        (source_paper_id,),
-    ).fetchall()
-    if len(library_rows) != 1:
-        raise ValueError("This work has other Library locations. Remove those copies before converting it to an attachment.")
-    if storage.conn.execute(
-        "SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1",
-        (source_paper_id,),
-    ).fetchone():
-        raise ValueError("This work is also in My Publications and cannot be converted to an attachment.")
-
-    destination_dir = associated_work_dir_for_paper(storage, str(target_paper_id)) / associated_resource_subdir("other")
-    managed_roots = [
-        LIBRARY_LOCAL_COPY_ROOT.absolute(),
-        SPACES_LOCAL_COPY_ROOT.absolute(),
-        MY_PUBLICATIONS_LOCAL_COPY_ROOT.absolute(),
-        ASSOCIATED_FILES_ROOT.absolute(),
-    ]
-
-    def belongs_to_managed_tree(path: Path) -> bool:
-        absolute = path.absolute()
-        for root in managed_roots:
-            try:
-                absolute.relative_to(root)
-                return True
-            except ValueError:
-                continue
-        return False
-
-    operations: list[dict[str, Any]] = []
-    try:
-        storage.conn.execute("BEGIN IMMEDIATE")
-        resources = refresh_paper_resource_fingerprints(
-            storage,
-            source_paper_id,
-            commit=False,
-        )
-        if not resources:
-            raise ValueError("The Library item has no managed file to attach")
-        source_entries: list[tuple[dict[str, Any], Path]] = []
-        seen_sources: set[str] = set()
-        for resource in resources:
-            stored_text = clean_text(resource.get("stored_path") or "")
-            if not stored_text:
-                raise ValueError("Every file in this work must have a managed local copy before it can be converted")
-            source = Path(stored_text).expanduser().absolute()
-            if not source.is_file():
-                raise ValueError(f"Managed file was not found: {source.name}")
-            source_key = str(source)
-            if source_key in seen_sources:
-                raise ValueError("This work contains duplicate local file records and cannot be converted safely")
-            seen_sources.add(source_key)
-            source_entries.append((resource, source))
-
-        destination_dir.mkdir(parents=True, exist_ok=True)
-        for resource, source in source_entries:
-            display_name = clean_text(resource.get("display_name") or resource.get("original_filename") or source.name)
-            destination = unique_path_in_dir(
-                destination_dir / finder_safe_name(Path(display_name).name or source.name, source.name)
-            )
-            managed_source = belongs_to_managed_tree(source)
-            mode = (
-                "move"
-                if managed_source and not source.is_symlink()
-                else ("copy_symlink" if managed_source and source.is_symlink() else "copy_external")
-            )
-            operation = {
-                "resource_id": int(resource.get("id") or 0),
-                "source": source,
-                "destination": destination,
-                "mode": mode,
-            }
-            operations.append(operation)
-            if managed_source and not source.is_symlink():
-                shutil.move(str(source), str(destination))
-            else:
-                shutil.copy2(str(source.resolve()), str(destination))
-
-        timestamp = now_iso()
-        for operation in operations:
-            destination = Path(operation["destination"])
-            storage.conn.execute(
-                """
-                UPDATE resources
-                SET paper_id = ?, stored_path = ?, display_name = ?,
-                    storage_mode = 'managed', added_via = 'library_drag_attachment',
-                    missing_status = '', updated_at = ?
-                WHERE id = ? AND paper_id = ?
-                """,
-                (
-                    str(target_paper_id),
-                    str(destination),
-                    destination.name,
-                    timestamp,
-                    int(operation["resource_id"]),
-                    source_paper_id,
-                ),
-            )
-        storage.conn.execute("DELETE FROM library_items WHERE id = ?", (int(source_item_id),))
-        storage.conn.execute("DELETE FROM papers WHERE paper_id = ?", (source_paper_id,))
-        storage.conn.commit()
-    except Exception:
-        storage.conn.rollback()
-        for operation in reversed(operations):
-            source = Path(operation["source"])
-            destination = Path(operation["destination"])
-            if operation["mode"] == "move" and destination.exists() and not source.exists():
-                source.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(destination), str(source))
-            elif destination.exists():
-                destination.unlink()
-        cleanup_empty_parents(
-            [
-                *[str(operation["destination"]) for operation in operations],
-                str(destination_dir / ".cleanup"),
-            ],
-            ASSOCIATED_FILES_ROOT.absolute(),
-        )
-        raise
-
-    removed_paths: list[str] = []
-    for operation in operations:
-        source = Path(operation["source"])
-        if operation["mode"] == "copy_symlink" and source.is_symlink():
-            source.unlink()
-            removed_paths.append(str(source))
-        elif operation["mode"] == "move":
-            removed_paths.append(str(source))
-    cleanup_local_copy_empty_parents(removed_paths)
-    return {
-        "source_item_id": int(source_item_id),
-        "source_paper_id": source_paper_id,
-        "target_paper_id": str(target_paper_id),
-        "attached_count": len(operations),
-        "files": [str(operation["destination"]) for operation in operations],
-    }
+    from .file_reassignment import attach_library_item
+    return attach_library_item(storage, int(source_item_id), str(target_paper_id))
 
 
 def attach_downloaded_publisher_pdf_to_paper(
@@ -22913,7 +22780,13 @@ def active_local_pdf_dirs_for_paper(storage: Storage, paper_id: str) -> list[Pat
     paper_id = storage.resolve_paper_id(paper_id)
     if not paper_id:
         return []
-    recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
+    # Directory lookup is also used inside file-move transactions. It must
+    # never create a special folder and commit the caller's pending changes.
+    recycle = storage.conn.execute(
+        "SELECT id FROM library_folders WHERE parent_id=1 AND name=? COLLATE NOCASE",
+        (LIBRARY_RECYCLE_FOLDER_NAME,),
+    ).fetchone()
+    recycle_id = int(recycle["id"]) if recycle else 0
     rows = storage.conn.execute(
         """
         SELECT id, folder_id, trashed_at
@@ -39048,28 +38921,81 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function handleNativeLibraryItemDrop(sourceItemId, dropPoint = null) {
-      const x = Number(dropPoint?.x);
-      const y = Number(dropPoint?.y);
+      return handleNativeLibraryManagedDrop({type: "item", id: Number(sourceItemId)}, dropPoint);
+    }
+
+    function clearNativeLibraryDrag() {
+      state.libraryDragPayload = null;
+      clearLibraryFinderDropTarget();
+      document.querySelectorAll(".library-attachment-drop-target, .drag-over").forEach((node) => {
+        node.classList.remove("library-attachment-drop-target", "drag-over");
+      });
+    }
+
+    async function reassignPaperFile(payload) {
+      const response = await fetch("/api/paper-files/reassign", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not move file");
+      applyPaperFilesPayloads(data.paper_files);
+      clearLibraryPaperResourceSelection({focusPaper: true});
+      if (state.libraryQuickLookOpen) closeLibraryQuickLook({restoreFocus: false});
+      await refreshMainLibrarySnapshot("file-reassigned");
+      return data;
+    }
+
+    // A native file-URL drag may also trigger WebKit DOM drop callbacks.
+    // One gesture token must result in at most one ownership operation.
+    const libraryManagedDropRequests = new Map();
+    async function performLibraryManagedDrop(payload, {paperId = "", folderId = 0} = {}) {
+      const token = payload?.token;
+      if (token && libraryManagedDropRequests.has(token)) return libraryManagedDropRequests.get(token);
+      const perform = async () => {
+        if (Array.isArray(payload?.entries) && payload.entries.length > 1 && paperId) {
+          throw new Error("Move one Library item into Paper Files at a time.");
+        }
+        if (payload?.type === "paper-file") {
+          if (paperId === payload.paper_id) return false;
+          if (!paperId && !folderId) return false;
+          const data = await reassignPaperFile({paper_id: payload.paper_id, resource_id: payload.resource_id,
+            ...(paperId ? {target_paper_id: paperId} : {folder_id: folderId,
+              new_title: String(payload.name || "Attached File").replace(/\.[^.]+$/, "") || "Attached File"})});
+          updateLibraryActivityStatus(`File moved to ${data.reassignment.target_gewu_key}.`, {live: false, clear: false});
+          return true;
+        }
+        if (payload?.type === "item" && paperId) {
+          await convertLibraryItemToAttachment(Number(payload.id), paperId);
+          return true;
+        }
+        if (folderId && ["item", "folder"].includes(payload?.type)) {
+          if (payload.entries?.length > 1) await moveLibraryEntries(payload.entries, folderId);
+          else await moveLibraryEntry(payload.type, Number(payload.id), folderId);
+          return true;
+        }
+        return false;
+      };
+      const request = perform().catch((error) => {
+        updateLibraryActivityStatus(error.message || "Could not move file", {live: false, clear: false});
+        return false;
+      });
+      if (token) {
+        libraryManagedDropRequests.set(token, request);
+        if (libraryManagedDropRequests.size > 100) libraryManagedDropRequests.delete(libraryManagedDropRequests.keys().next().value);
+      }
+      return request;
+    }
+
+    async function handleNativeLibraryManagedDrop(payload, dropPoint = null) {
+      const x = Number(dropPoint?.x), y = Number(dropPoint?.y);
       if (state.mode !== "library" || !Number.isFinite(x) || !Number.isFinite(y)) return false;
       const element = document.elementFromPoint(x, y);
-      const resourceColumn = element?.closest?.("[data-library-resource-paper]");
-      const detailsPanel = element?.closest?.("[data-paper-files-panel]");
-      const targetPaperId = String(
-        resourceColumn?.dataset.libraryResourcePaper
-        || detailsPanel?.dataset.paperId
-        || ""
-      );
-      document.querySelectorAll(".library-attachment-drop-target").forEach((node) => {
-        node.classList.remove("library-attachment-drop-target");
-      });
-      if (!Number(sourceItemId || 0) || !targetPaperId) return false;
-      try {
-        await convertLibraryItemToAttachment(Number(sourceItemId), targetPaperId);
-        return true;
-      } catch (_) {
-        // withLibraryActivityStatus already reports the server error.
-        return false;
-      }
+      const column = element?.closest?.("[data-library-resource-paper]");
+      const panel = element?.closest?.("[data-paper-files-panel]");
+      const paperId = String(column?.dataset.libraryResourcePaper || panel?.dataset.paperId || "");
+      const folder = element?.closest?.("[data-library-drop-folder], [data-library-column-folder]");
+      const folderId = Number(folder?.dataset.libraryDropFolder || folder?.dataset.libraryColumnFolder || 0);
+      clearNativeLibraryDrag();
+      return performLibraryManagedDrop(payload, {paperId, folderId});
     }
 
     async function reorderLibraryEntry(type, id, parentFolderId, targetId, position) {
@@ -42121,8 +42047,8 @@ INDEX_HTML = """<!doctype html>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="add-paper-resource">Add File</button>
           <button type="button" data-action="sync-paper-resources">Sync Versions</button>
-          <button type="button" data-action="move-paper-resource">Move to Another Paper…</button>
-          <button type="button" data-action="split-paper-resource">Create Paper from File…</button>
+          <button type="button" data-action="move-paper-resource">Move to Another Paper</button>
+          <button type="button" data-action="split-paper-resource">Create Paper from File</button>
           <button type="button" data-action="delete-paper-resource">Delete from Paper Files</button>
         </div>
       `;
@@ -43099,6 +43025,9 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function handleNativeFinderDrop(paths, dropPoint = null) {
+      if (state.libraryDragPayload) {
+        return handleNativeLibraryManagedDrop(state.libraryDragPayload, dropPoint);
+      }
       const droppedPaths = Array.isArray(paths)
         ? paths.filter((path) => typeof path === "string" && path.trim())
         : [];
@@ -45398,6 +45327,7 @@ INDEX_HTML = """<!doctype html>
               return `
                 <div class="library-resource-card${file.is_default ? " is-primary" : ""}${selected ? " is-selected" : ""}"
                   data-library-resource-id="${Number(file.id || 0)}" data-library-resource-paper-id="${escapeAttr(paperId)}"
+                  draggable="${file.exists ? "true" : "false"}"
                   data-library-resource-path="${escapeAttr(file.local_path || "")}" data-library-resource-ext="${escapeAttr(ext)}"
                   role="listitem" aria-current="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}"
                   title="${escapeAttr(file.local_path || name)}">
@@ -45775,7 +45705,7 @@ INDEX_HTML = """<!doctype html>
 
     function libraryNativeFileDragAttrs(path, fileName) {
       if (!path) return "";
-      return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName || fileNameFromPath(path))}" title="Drag to Finder or an application icon"`;
+      return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName || fileNameFromPath(path))}" title="Drag within Library to move, or to Finder to copy"`;
     }
 
     function libraryEntryIconClass(type, entry) {
@@ -49202,16 +49132,9 @@ INDEX_HTML = """<!doctype html>
         results.querySelectorAll("button").forEach((button) => button.disabled = true);
         status.textContent = "Updating file ownership…";
         try {
-          const response = await fetch("/api/paper-files/reassign", {method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({paper_id: paperId, resource_id: file.id,
-              folder_id: Number(state.libraryCurrentFolderId || state.libraryRootId || 1),
-              ...(createNew ? {new_title: input.value.trim()} : {target_key: targetKey})})});
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error || "Could not reassign file");
-          applyPaperFilesPayloads(data.paper_files);
-          clearLibraryPaperResourceSelection({focusPaper: true});
-          if (state.libraryQuickLookOpen) closeLibraryQuickLook({restoreFocus: false});
-          await refreshMainLibrarySnapshot("file-reassigned");
+          const data = await reassignPaperFile({paper_id: paperId, resource_id: file.id,
+            folder_id: Number(state.libraryCurrentFolderId || state.libraryRootId || 1),
+            ...(createNew ? {new_title: input.value.trim()} : {target_key: targetKey})});
           busy = false; close();
           updateLibraryActivityStatus(`File moved to ${data.reassignment.target_gewu_key}.`, {live: false, clear: false});
         } catch (error) {
@@ -49376,7 +49299,7 @@ INDEX_HTML = """<!doctype html>
         };
         target.addEventListener("dragover", (event) => {
           const payload = libraryDragPayload(event);
-          if (!payload || payload.type !== "item" || (Array.isArray(payload.entries) && payload.entries.length > 1)) return;
+          if (!payload || !["item", "paper-file"].includes(payload.type) || (Array.isArray(payload.entries) && payload.entries.length > 1)) return;
           event.preventDefault();
           event.stopPropagation();
           pendingAttachmentPayload = {payload, updatedAt: Date.now()};
@@ -49395,7 +49318,7 @@ INDEX_HTML = """<!doctype html>
             : null;
           const payload = libraryDragPayload(event) || cachedPayload;
           clearTarget({clearPayload: true});
-          if (!payload || payload.type !== "item") {
+          if (!payload || !["item", "paper-file"].includes(payload.type)) {
             updateLibraryActivityStatus("Could not read the dropped Library item. Please drag it again.", {live: false, clear: false});
             return;
           }
@@ -49403,17 +49326,7 @@ INDEX_HTML = """<!doctype html>
             updateLibraryActivityStatus("Move one Library item into Paper Files at a time.", {live: false, clear: false});
             return;
           }
-          const sourceItemId = Number(payload.id || 0);
-          const targetPaperId = String(target.dataset.libraryResourcePaper || "");
-          if (!sourceItemId || !targetPaperId) {
-            updateLibraryActivityStatus("Could not identify the source file or target paper.", {live: false, clear: false});
-            return;
-          }
-          try {
-            await convertLibraryItemToAttachment(sourceItemId, targetPaperId);
-          } catch (_) {
-            // withLibraryActivityStatus already reports the server error.
-          }
+          await performLibraryManagedDrop(payload, {paperId: String(target.dataset.libraryResourcePaper || "")});
         });
       });
     }
@@ -49576,8 +49489,6 @@ INDEX_HTML = """<!doctype html>
         event.stopPropagation();
         if (handle.dataset.nativeFolderDragId) armNativeFolderDrag(handle);
         else {
-          const itemRow = handle.closest('.library-row[data-library-type="item"]');
-          if (itemRow) armNativeLibraryItemDrop(Number(itemRow.dataset.libraryId || 0));
           prepareNativeFileDrag(handle);
         }
       });
@@ -49625,9 +49536,21 @@ INDEX_HTML = """<!doctype html>
         if (row.dataset.libraryType === "item") openNativeLibraryEntry("item", id);
       });
       shell.addEventListener("dragstart", (event) => {
-        if (event.target.closest?.("[data-native-file-drag-handle]")) {
+        if (event.target.closest?.("[data-native-file-drag-handle]") && window.webkit?.messageHandlers?.nativeFileDrag) {
           event.preventDefault();
           event.stopPropagation();
+          return;
+        }
+        const card = event.target.closest?.(".library-resource-card[data-library-resource-id]");
+        if (card) {
+          const payload = {type: "paper-file", paper_id: card.dataset.libraryResourcePaperId,
+            resource_id: Number(card.dataset.libraryResourceId), token: libraryDragToken(),
+            name: fileNameFromPath(card.dataset.libraryResourcePath) || "Attached File"};
+          if (state.libraryDragPayload?.type === "paper-file"
+              && state.libraryDragPayload.resource_id === payload.resource_id) payload.token = state.libraryDragPayload.token;
+          state.libraryDragPayload = payload;
+          event.dataTransfer?.setData("application/x-paper-monitor-library", JSON.stringify(payload));
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
           return;
         }
         const row = event.target.closest?.(".library-row");
@@ -49642,10 +49565,14 @@ INDEX_HTML = """<!doctype html>
           return;
         }
         const payload = {
+          token: libraryDragToken(),
           type: row.dataset.libraryType,
           id: Number(row.dataset.libraryId),
           parent_folder_id: Number(row.dataset.libraryParentFolder || state.libraryRootId)
         };
+        if (state.libraryDragPayload?.type === payload.type && state.libraryDragPayload.id === payload.id) {
+          payload.token = state.libraryDragPayload.token;
+        }
         const dragEntry = {type: payload.type, id: payload.id};
         const selectedEntries = libraryEntryIsInActionSelection(payload.parent_folder_id, dragEntry)
           ? selectedLibraryEntriesForAction()
@@ -49659,7 +49586,7 @@ INDEX_HTML = """<!doctype html>
         if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
       });
       shell.addEventListener("dragend", (event) => {
-        if (!event.target.closest?.(".library-row")) return;
+        if (!event.target.closest?.(".library-row, .library-resource-card")) return;
         state.libraryDragPayload = null;
         document.querySelectorAll(".library-attachment-drop-target").forEach((node) => node.classList.remove("library-attachment-drop-target"));
       });
@@ -49667,7 +49594,7 @@ INDEX_HTML = """<!doctype html>
         const payload = libraryDragPayload(event);
         if (!payload) return;
         const row = event.target.closest?.(".library-row");
-        if (row && libraryDropIsReorder(payload, row, event)) {
+        if (payload.type !== "paper-file" && row && libraryDropIsReorder(payload, row, event)) {
           event.preventDefault();
           event.stopPropagation();
           markLibraryReorderTarget(row, event);
@@ -49689,7 +49616,7 @@ INDEX_HTML = """<!doctype html>
         const payload = libraryDragPayload(event);
         if (!payload) return;
         const row = event.target.closest?.(".library-row");
-        if (row && libraryDropIsReorder(payload, row, event)) {
+        if (payload.type !== "paper-file" && row && libraryDropIsReorder(payload, row, event)) {
           event.preventDefault();
           event.stopPropagation();
           const position = libraryDropIntent(row, event);
@@ -49703,8 +49630,7 @@ INDEX_HTML = """<!doctype html>
         event.stopPropagation();
         target.classList.remove("drag-over");
         const folderId = Number(target.dataset.libraryDropFolder || state.libraryActiveFolderId || state.libraryRootId);
-        if (Array.isArray(payload.entries) && payload.entries.length > 1) await moveLibraryEntries(payload.entries, folderId);
-        else if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
+        await performLibraryManagedDrop(payload, {folderId});
       });
       shell.addEventListener("contextmenu", (event) => {
         const row = event.target.closest?.(".library-row");
@@ -49740,6 +49666,10 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function libraryDragToken() {
+      return window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
     function libraryDragPayload(event) {
       const types = Array.prototype.slice.call(event.dataTransfer?.types || []);
       if (!types.includes("application/x-paper-monitor-library")) return state.libraryDragPayload || null;
@@ -49753,10 +49683,15 @@ INDEX_HTML = """<!doctype html>
     function prepareNativeFileDrag(handle) {
       const path = handle?.dataset?.nativeDragPath || "";
       if (!path || !window.webkit?.messageHandlers?.nativeFileDrag) return;
-      window.webkit.messageHandlers.nativeFileDrag.postMessage({
-        path,
-        name: handle.dataset.nativeDragName || fileNameFromPath(path) || "paper.pdf"
-      });
+      const card = handle.closest?.("[data-library-resource-id]");
+      const row = handle.closest?.('.library-row[data-library-type="item"]');
+      const name = handle.dataset.nativeDragName || fileNameFromPath(path) || "Attached File";
+      const payload = card ? {type: "paper-file", paper_id: card.dataset.libraryResourcePaperId,
+        resource_id: Number(card.dataset.libraryResourceId), name, token: libraryDragToken()}
+        : row ? {type: "item", id: Number(row.dataset.libraryId), token: libraryDragToken()} : null;
+      state.libraryDragPayload = payload;
+      window.webkit.messageHandlers.nativeFileDrag.postMessage({path, name, library_payload: payload});
+      window.addEventListener("mouseup", () => { state.libraryDragPayload = null; }, {once: true});
     }
 
     function armNativeFolderDrag(handle) {
@@ -49789,10 +49724,14 @@ INDEX_HTML = """<!doctype html>
         }
         const result = data.result || {};
         if (!result.desktop_path) throw new Error("Could not prepare folder copy");
+        const payload = {type: "folder", id: folderId, token: libraryDragToken()};
+        state.libraryDragPayload = payload;
+        window.addEventListener("mouseup", () => { state.libraryDragPayload = null; }, {once: true});
         window.webkit.messageHandlers.nativeFileDrag.postMessage({
           path: result.desktop_path,
           name: result.folder_name || libraryFolderById(folderId)?.name || "Library Folder",
-          cleanup_path: result.cleanup_path || ""
+          cleanup_path: result.cleanup_path || "",
+          library_payload: payload
         });
       } catch (error) {
         updateLibraryActivityStatus(
@@ -59045,6 +58984,8 @@ INDEX_HTML = """<!doctype html>
     window.addEventListener("storage", handleLibraryRefreshSignal);
     window.handleNativeFinderDrop = handleNativeFinderDrop;
     window.handleNativeLibraryItemDrop = handleNativeLibraryItemDrop;
+    window.handleNativeLibraryManagedDrop = handleNativeLibraryManagedDrop;
+    window.clearNativeLibraryDrag = clearNativeLibraryDrag;
     window.handleNativePaperFileSelection = handleNativePaperFileSelection;
     window.updateNativeFinderDropTarget = updateNativeFinderDropTarget;
     window.clearNativeFinderDropTarget = clearLibraryFinderDropTarget;

@@ -51,9 +51,11 @@ function fn(name) {
       window.runLibraryDroppedPathsImport=()=>{throw Error('Paper Files drop became folder import');};
     });
     const names=['libraryNativeFileDragAttrs','libraryPaperResourcesColumnMarkup','libraryDragPayload',
-      'wireLibraryResourceInteractions','uploadPaperFiles','uploadPaperFilePaths',
+      'performLibraryManagedDrop','wireLibraryResourceInteractions','uploadPaperFiles','uploadPaperFilePaths',
       'clearLibraryFinderDropTargetVisuals','clearLibraryFinderDropTarget','libraryFileAssociationTargetFromPoint',
-      'libraryPdfDropTargetFromPoint','libraryImportDropTargetFolderId','handleNativeFinderDrop'];
+      'libraryPdfDropTargetFromPoint','libraryImportDropTargetFolderId','handleNativeFinderDrop',
+      'handleNativeLibraryManagedDrop','clearNativeLibraryDrag','prepareNativeFileDrag','libraryDragToken'];
+    await page.addScriptTag({content:'const libraryManagedDropRequests = new Map();'});
     // Optional while reproducing the old code before the regression fix.
     for(const name of ['wireLibraryPaperFilesDropTarget','paperFileDropMetadata']) {
       if(html.includes(`function ${name}(`)) names.push(name);
@@ -157,6 +159,36 @@ function fn(name) {
     await page.evaluate(()=>dropAt('blank'));
     await page.waitForFunction(()=>notices.includes('Fixture upload failed'));
     assert.equal(await page.locator('.finder-drop-association-target').count(),0);
+    await page.evaluate(()=>{
+      window.failUpload=false;mount('target');calls=[];moves=[];window.reassignments=[];
+      window.reassignPaperFile=async payload=>{reassignments.push(payload);return {reassignment:{target_gewu_key:'gw_fixture'}};};
+      document.querySelector('#libraryColumns > div').dataset.libraryDropFolder='42';
+    });
+    const managed=await page.evaluate(async()=>{
+      const r=document.querySelector('.library-resource-body').getBoundingClientRect();
+      const point={x:r.left+20,y:r.bottom-10};
+      const payload={type:'paper-file',paper_id:'source',resource_id:9,name:'notes.rtf',token:'one-gesture'};
+      await Promise.all([handleNativeLibraryManagedDrop(payload,point),handleNativeLibraryManagedDrop(payload,point)]);
+      const folder=document.querySelector('[data-library-drop-folder]').getBoundingClientRect();
+      await handleNativeLibraryManagedDrop({...payload,token:'detach'}, {x:folder.left+20,y:folder.top+20});
+      state.libraryDragPayload={...payload,token:'native-file-url'};
+      await handleNativeFinderDrop(['/fixture/notes.rtf'],point);
+      await handleNativeLibraryManagedDrop({...payload,paper_id:'target',token:'same-parent'},point);
+      return {reassignments,calls};
+    });
+    assert.deepEqual(managed.reassignments,[
+      {paper_id:'source',resource_id:9,target_paper_id:'target'},
+      {paper_id:'source',resource_id:9,folder_id:42,new_title:'notes'},
+      {paper_id:'source',resource_id:9,target_paper_id:'target'}]);
+    assert.deepEqual(managed.calls,[],'native internal file URLs cannot fall through to import');
+    const armed=await page.evaluate(()=>{
+      const messages=[];window.webkit={messageHandlers:{nativeFileDrag:{postMessage:m=>messages.push(m)}}};
+      prepareNativeFileDrag(document.querySelector('.library-resource-name'));
+      clearNativeLibraryDrag();return messages;
+    });
+    assert.equal(armed.length,1);assert.equal(armed[0].library_payload.type,'paper-file');
+    assert.equal(armed[0].library_payload.paper_id,'target');assert.equal(armed[0].library_payload.resource_id,1);
+    assert.ok(armed[0].library_payload.token);
     assert.deepEqual(errors,[]);
     console.log('Paper Files full-column drops passed for Library, Space and Shortcut: header/card/control/blank/bottom, empty/scrolled/multiple files, native paths, rerender target, internal move and error cleanup.');
   } finally {await browser.close();}

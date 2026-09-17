@@ -147,7 +147,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @property(nonatomic) BOOL pdfQuickLookActive;
 @property(nonatomic) CGFloat pdfMagnificationAccumulator;
 @property(nonatomic) NSInteger pendingLibraryItemDragId;
-@property(nonatomic, strong) NSDate *pendingLibraryItemDragStartedAt;
+@property(nonatomic, copy) NSDictionary *pendingLibraryDragPayload;
 @end
 
 @implementation GewuInsightWebView
@@ -163,7 +163,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
         [self updateFinderDropTargetForDraggingInfo:sender];
-        return NSDragOperationCopy;
+        return [sender draggingSource] == self ? (self.pendingLibraryDragPayload ? NSDragOperationMove : NSDragOperationNone) : NSDragOperationCopy;
     }
     return [super draggingEntered:sender];
 }
@@ -171,7 +171,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
         [self updateFinderDropTargetForDraggingInfo:sender];
-        return NSDragOperationCopy;
+        return [sender draggingSource] == self ? (self.pendingLibraryDragPayload ? NSDragOperationMove : NSDragOperationNone) : NSDragOperationCopy;
     }
     return [super draggingUpdated:sender];
 }
@@ -182,7 +182,9 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-    if ([sender draggingSource] == self && self.pendingLibraryItemDragId > 0) {
+    if ([sender draggingSource] == self) {
+        if (!self.pendingLibraryDragPayload) return NO;
+        [self dispatchPendingLibraryItemDropAtClientPoint:[self browserClientPointForDraggingInfo:sender]];
         return YES;
     }
     NSArray<NSString *> *paths = [self finderDropPathsFromDraggingInfo:sender];
@@ -213,18 +215,16 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (void)dispatchPendingLibraryItemDropAtClientPoint:(NSPoint)point {
-    NSInteger libraryItemId = self.pendingLibraryItemDragId;
-    NSDate *startedAt = self.pendingLibraryItemDragStartedAt;
+    NSDictionary *payload = self.pendingLibraryDragPayload;
+    self.pendingLibraryDragPayload = nil;
     self.pendingLibraryItemDragId = 0;
-    self.pendingLibraryItemDragStartedAt = nil;
-    NSTimeInterval age = startedAt ? [[NSDate date] timeIntervalSinceDate:startedAt] : 999.0;
-    if (libraryItemId <= 0 || age < 0.0 || age >= 12.0) return;
+    if (!payload) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    if (!data) return;
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSString *script = [NSString stringWithFormat:
-        @"window.handleNativeLibraryItemDrop && window.handleNativeLibraryItemDrop(%ld, {x:%0.2f,y:%0.2f})",
-        (long)libraryItemId,
-        point.x,
-        point.y
-    ];
+        @"window.handleNativeLibraryManagedDrop && window.handleNativeLibraryManagedDrop(%@, {x:%0.2f,y:%0.2f})",
+        json, point.x, point.y];
     [self evaluateJavaScript:script completionHandler:nil];
 }
 
@@ -379,8 +379,6 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    NSPoint viewPoint = [self convertPoint:event.locationInWindow fromView:nil];
-    NSPoint clientPoint = [self browserClientPointForViewPoint:viewPoint];
     if (self.nativeDragPath.length > 0 && self.nativeDragCleanupPath.length > 0) {
         [self scheduleNativeDragCleanup:self.nativeDragCleanupPath afterDelay:0.5];
     }
@@ -388,15 +386,16 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     self.nativeDragName = nil;
     self.nativeDragCleanupPath = nil;
     [super mouseUp:event];
-    [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
+    self.pendingLibraryDragPayload = nil;
+    self.pendingLibraryItemDragId = 0;
 }
 
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
     // Finder copies the file; application icons can negotiate opening it.
-    // Never offer Move/Delete for a file managed by the Library.
+    // Moves within Gewu use managed ownership transitions; outside exports stay copies.
     return context == NSDraggingContextOutsideApplication
         ? (NSDragOperationCopy | NSDragOperationGeneric)
-        : NSDragOperationCopy;
+        : (NSDragOperationCopy | NSDragOperationMove);
 }
 
 - (BOOL)ignoreModifierKeysForDraggingSession:(NSDraggingSession *)session {
@@ -412,7 +411,12 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     NSString *cleanupPath = self.nativeDragCleanupPath;
     self.nativeDragCleanupPath = nil;
     [self scheduleNativeDragCleanup:cleanupPath afterDelay:60.0];
-    [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
+    if ((operation & NSDragOperationMove) && NSPointInRect(viewPoint, self.bounds)) {
+        [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
+    }
+    self.pendingLibraryDragPayload = nil;
+    self.pendingLibraryItemDragId = 0;
+    [self evaluateJavaScript:@"window.clearNativeLibraryDrag && window.clearNativeLibraryDrag()" completionHandler:nil];
 }
 
 - (NSArray<NSString *> *)finderDropPathsFromDraggingInfo:(id<NSDraggingInfo>)sender {
@@ -855,7 +859,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
         NSInteger itemId = [value respondsToSelector:@selector(integerValue)] ? [value integerValue] : 0;
         GewuInsightWebView *webView = (GewuInsightWebView *)self.webView;
         webView.pendingLibraryItemDragId = itemId > 0 ? itemId : 0;
-        webView.pendingLibraryItemDragStartedAt = itemId > 0 ? [NSDate date] : nil;
+        webView.pendingLibraryDragPayload = itemId > 0 ? @{ @"type": @"item", @"id": @(itemId), @"token": NSUUID.UUID.UUIDString } : nil;
         return;
     }
     if ([message.name isEqualToString:@"publisherPdfDownload"]) {
@@ -916,6 +920,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
         webView.nativeDragPath = path;
         webView.nativeDragName = name;
         webView.nativeDragCleanupPath = cleanupPath;
+        webView.pendingLibraryDragPayload = [payload[@"library_payload"] isKindOfClass:NSDictionary.class] ? payload[@"library_payload"] : nil;
         return;
     }
     if ([message.name isEqualToString:@"authorPhotoChooser"]) {

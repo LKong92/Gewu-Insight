@@ -339,7 +339,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('fetch("/api/library/items/attach"', INDEX_HTML)
         self.assertIn("async function convertLibraryItemToAttachment", INDEX_HTML)
         self.assertIn('shell.querySelectorAll("[data-library-resource-paper]")', INDEX_HTML)
-        self.assertIn('payload.type !== "item"', INDEX_HTML)
+        self.assertIn('["item", "paper-file"].includes(payload.type)', INDEX_HTML)
         self.assertIn('target.classList.add("library-attachment-drop-target")', INDEX_HTML)
         self.assertIn('event.dataTransfer.dropEffect = "move"', INDEX_HTML)
         self.assertIn('content: "Move into Paper Files"', INDEX_HTML)
@@ -357,7 +357,7 @@ class PaperFilesUiTests(unittest.TestCase):
         launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")
         self.assertIn('addScriptMessageHandler:self name:@"libraryItemDrag"', launcher)
         self.assertIn("pendingLibraryItemDragId", launcher)
-        self.assertIn("handleNativeLibraryItemDrop", launcher)
+        self.assertIn("handleNativeLibraryManagedDrop", launcher)
         self.assertIn("convertPointFromScreen", launcher)
 
     def test_resource_actions_use_explicit_file_endpoints(self) -> None:
