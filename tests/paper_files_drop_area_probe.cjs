@@ -67,7 +67,7 @@ function fn(name) {
           libraryPaperResourcesColumnMarkup({paper_id:id,display_name:'Fixture paper'});
         wireLibraryResourceInteractions($('libraryShell'));
       };
-      window.dropAt=async(kind,files=['test.pdf'])=>{
+      window.dropAt=async(kind,files=['test.pdf'],libraryPayload=null)=>{
         const column=document.querySelector('[data-library-resource-paper]');
         const body=column.querySelector('.library-resource-body'), rect=body.getBoundingClientRect();
         let target,x,y;
@@ -81,15 +81,16 @@ function fn(name) {
         if(!target.closest('[data-library-resource-paper]')) throw Error('Fixture point missed Paper Files');
         const transfer=new DataTransfer();
         for(const name of files)transfer.items.add(new File(['test bytes'],name,{type:name.endsWith('.pdf')?'application/pdf':'text/markdown'}));
+        if(libraryPayload) transfer.setData('application/x-paper-monitor-library',JSON.stringify(libraryPayload));
         const event=new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:x,clientY:y});
         target.dispatchEvent(event);
         const accepted=event.defaultPrevented;
-        const highlighted=column.classList.contains('finder-drop-association-target');
+        const highlighted=column.classList.contains(libraryPayload?'library-attachment-drop-target':'finder-drop-association-target');
         target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:x,clientY:y}));
         return {accepted,highlighted};
       };
     });
-    for(const scope of ['library','workspace-0']) {
+    for(const scope of ['library','workspace-0','shortcut-0']) {
       for(const place of ['.library-resource-inspector-head strong','.library-resource-card','.library-resource-name',
           '.paper-file-version-select','blank','bottom']) {
         await page.evaluate(({scope})=>{state.libraryTab=scope;mount(scope);calls=[];notices=[];}, {scope});
@@ -99,6 +100,20 @@ function fn(name) {
         await page.waitForFunction(()=>calls.length===1 && notices.some(n=>n.includes('added')));
         assert.deepEqual(await page.evaluate(()=>calls.map(c=>[c.url,c.paperId,c.fileType])),[['/api/paper-files',scope,'preprint']]);
         assert.equal(await page.locator('.finder-drop-association-target').count(),0);
+      }
+      // Internal items need the same visible drop surface, including when
+      // their drag also advertises a native file. Each gesture must move once.
+      for(const count of [0,3,18]) {
+        for(const place of ['.library-resource-inspector-head strong','blank','bottom']) {
+          await page.evaluate(({scope,count})=>{state.libraryTab=scope;mount(scope,count);calls=[];moves=[];
+            wireLibraryPaperFilesDropTarget($('libraryShell'));
+            document.querySelector('.library-resource-body').scrollTop=10000;},{scope,count});
+          const result=await page.evaluate(place=>dropAt(place,['export.pdf'],{type:'item',id:7}),place);
+          assert.deepEqual(result,{accepted:true,highlighted:true},`${scope}: internal item at ${place}`);
+          assert.deepEqual(await page.evaluate(()=>moves),[{id:7,paper:scope}]);
+          assert.equal(await page.evaluate(()=>calls.length),0,'internal move must not also upload exported file');
+          assert.equal(await page.locator('.library-attachment-drop-target').count(),0);
+        }
       }
       for(const count of [0,18]) {
         await page.evaluate(({scope,count})=>{mount(scope,count);calls=[];notices=[];document.querySelector('.library-resource-body').scrollTop=10000;},{scope,count});
@@ -115,7 +130,7 @@ function fn(name) {
       assert.deepEqual(await page.evaluate(()=>calls.map(c=>[c.url,c.paperId,c.fileType])),[['/api/paper-files/path',scope,'preprint']]);
     }
     // Replacing the column and rewiring cannot retain an old target or duplicate imports.
-    await page.evaluate(()=>{mount('old');mount('current');calls=[];notices=[];});
+    await page.evaluate(()=>{mount('old');mount('current');wireLibraryPaperFilesDropTarget($('libraryShell'));calls=[];moves=[];notices=[];});
     await page.evaluate(()=>dropAt('blank'));
     await page.waitForFunction(()=>notices.some(n=>n.includes('added')));
     assert.deepEqual(await page.evaluate(()=>calls.map(c=>c.paperId)),['current']);
@@ -143,6 +158,6 @@ function fn(name) {
     await page.waitForFunction(()=>notices.includes('Fixture upload failed'));
     assert.equal(await page.locator('.finder-drop-association-target').count(),0);
     assert.deepEqual(errors,[]);
-    console.log('Paper Files full-column drops passed for Library and Space: header/card/control/blank/bottom, empty/scrolled/multiple files, native paths, rerender target, internal move and error cleanup.');
+    console.log('Paper Files full-column drops passed for Library, Space and Shortcut: header/card/control/blank/bottom, empty/scrolled/multiple files, native paths, rerender target, internal move and error cleanup.');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

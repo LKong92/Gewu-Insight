@@ -49225,57 +49225,62 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wireLibraryPaperFilesDropTarget(shell) {
-      // WebKit may deliver Finder drops over the scrolling body to the DOM
-      // instead of the native WKWebView delegate. Accept both paths across
-      // the entire column, including cards, controls and empty space.
-      if (!shell || shell.dataset.paperFilesDropWired === "1") return;
-      shell.dataset.paperFilesDropWired = "1";
-      const targetFor = (event) => {
-        if (state.mode !== "library" || libraryDragPayload(event)) return null;
-        if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return null;
-        const column = event.target?.closest?.("[data-library-resource-paper]");
-        return column?.dataset.libraryResourcePaper && shell.contains(column) ? column : null;
-      };
-      ["dragenter", "dragover"].forEach((eventName) => {
-        shell.addEventListener(eventName, (event) => {
+      if (!shell) return;
+      // WebKit hit-tests composited scrolling areas before dispatching DOM
+      // drag events. An ancestor-only listener can leave the scroll body's
+      // non-selectable background outside its drop region. Register the
+      // column AND its scrolling body, including after a column rerender.
+      shell.querySelectorAll("[data-library-resource-paper]").forEach((column) => {
+        if (column.dataset.paperFilesDropWired === "1") return;
+        column.dataset.paperFilesDropWired = "1";
+        const surfaces = [column, column.querySelector(".library-resource-body")].filter(Boolean);
+        const targetFor = (event) => {
+          if (state.mode !== "library" || libraryDragPayload(event)) return null;
+          if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return null;
+          const column = event.target?.closest?.("[data-library-resource-paper]");
+          return column?.dataset.libraryResourcePaper && shell.contains(column) ? column : null;
+        };
+        ["dragenter", "dragover"].forEach((eventName) => {
+          surfaces.forEach(surface => surface.addEventListener(eventName, (event) => {
+            const target = targetFor(event);
+            if (!target) return;
+            event.preventDefault();
+            event.stopPropagation();
+            clearLibraryFinderDropTargetVisuals();
+            state.libraryFinderDropTargetFolderId = 0;
+            state.libraryFinderDropTargetKind = "resource-column";
+            shell.classList.add("finder-drag-over");
+            target.classList.add("finder-drop-association-target");
+            event.dataTransfer.dropEffect = "copy";
+          }, true));
+        });
+        column.addEventListener("dragleave", (event) => {
+          const target = event.target?.closest?.("[data-library-resource-paper]");
+          if (target && !target.contains(event.relatedTarget)) clearLibraryFinderDropTarget();
+        }, true);
+        surfaces.forEach(surface => surface.addEventListener("drop", async (event) => {
           const target = targetFor(event);
           if (!target) return;
           event.preventDefault();
           event.stopPropagation();
-          clearLibraryFinderDropTargetVisuals();
-          state.libraryFinderDropTargetFolderId = 0;
-          state.libraryFinderDropTargetKind = "resource-column";
-          shell.classList.add("finder-drag-over");
-          target.classList.add("finder-drop-association-target");
-          event.dataTransfer.dropEffect = "copy";
-        }, true);
+          const paperId = String(target.dataset.libraryResourcePaper);
+          const files = Array.from(event.dataTransfer.files || []);
+          clearLibraryFinderDropTarget();
+          if (!files.length) {
+            updateLibraryActivityStatus("Could not read the dropped files. Please drag them again.", {live: false, clear: false});
+            return;
+          }
+          try {
+            // Match the native Finder-drop classification, retaining the manual
+            // Add File dialog's existing Unknown default.
+            await uploadPaperFiles(target, paperId, files, {fileRole: "publication_version", versionRole: "preprint"});
+            renderLibrary();
+            updateLibraryActivityStatus(`${files.length} file${files.length === 1 ? "" : "s"} added.`, {delay: 2600});
+          } catch (error) {
+            updateLibraryActivityStatus(error.message || "Could not add file", {live: false, clear: false});
+          }
+        }, true));
       });
-      shell.addEventListener("dragleave", (event) => {
-        const target = event.target?.closest?.("[data-library-resource-paper]");
-        if (target && !target.contains(event.relatedTarget)) clearLibraryFinderDropTarget();
-      }, true);
-      shell.addEventListener("drop", async (event) => {
-        const target = targetFor(event);
-        if (!target) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const paperId = String(target.dataset.libraryResourcePaper);
-        const files = Array.from(event.dataTransfer.files || []);
-        clearLibraryFinderDropTarget();
-        if (!files.length) {
-          updateLibraryActivityStatus("Could not read the dropped files. Please drag them again.", {live: false, clear: false});
-          return;
-        }
-        try {
-          // Match the native Finder-drop classification, retaining the manual
-          // Add File dialog's existing Unknown default.
-          await uploadPaperFiles(target, paperId, files, {fileRole: "publication_version", versionRole: "preprint"});
-          renderLibrary();
-          updateLibraryActivityStatus(`${files.length} file${files.length === 1 ? "" : "s"} added.`, {delay: 2600});
-        } catch (error) {
-          updateLibraryActivityStatus(error.message || "Could not add file", {live: false, clear: false});
-        }
-      }, true);
     }
 
     function wireLibraryResourceInteractions(shell) {
