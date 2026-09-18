@@ -448,8 +448,8 @@ class UserGuideTests(unittest.TestCase):
             " ", strip=True
         )
         for phrase in [
-            "The four publication types above take priority in automatic selection",
-            "manually choose any existing file except one classified as Invalid file",
+            "The four publication types above take priority over the Unknown/Other fallback",
+            "manually choose an existing valid file",
             "manual choice is sticky",
         ]:
             self.assertIn(phrase, versions_text)
@@ -626,7 +626,7 @@ class UserGuideTests(unittest.TestCase):
         for phrase in [
             "remove only the selected removable resource",
             "does not delete the parent paper",
-            "physical primary file used by older compatibility paths remains protected",
+            "current main file remains protected from direct deletion",
         ]:
             self.assertIn(phrase, paper_files_text)
 

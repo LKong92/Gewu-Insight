@@ -661,7 +661,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Version 1.0.0 · Build 1 · September 16, 2026 · Research and writing baseline</p>
+          <p class="guide-revision">Version 1.0.0 · Build 1 · September 18, 2026 · Current workflow edition</p>
 
 <h2>Why this workspace exists</h2>
           <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
@@ -765,6 +765,9 @@
 
           <h2>Open this guide again</h2>
           <p>Choose <span class="ui">Help &gt; User Guide</span>. The guide opens in its own window and works without an internet connection. Search filters the topic list; choose a result to read it, or use Previous and Next to follow the manual. Select <span class="ui">Print Guide</span> to open the complete, fixed-layout PDF in macOS Preview, where you can print or save a copy. In a separately hosted web UI, that button opens the PDF in a browser tab. It opens the whole guide, not just the topic currently on screen.</p>
+
+          <h2>Contact Us</h2>
+          <p>Choose <span class="ui">Help &gt; Contact Us</span> to open a draft in your Mac's default email application, addressed to <strong>konglingyuan@westlake.edu.cn</strong> with the subject <strong>Gewu Insight — Feedback and Support</strong>. This uses Mail only if Mail is your default; another configured email application is supported. Review and send the draft yourself. Include the version/build and the steps that led to the problem; omit passwords and connection tokens.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#guided-tour">Guided Tour</a><a href="#first-session">Your First Session</a><a href="#system-overview">System Architecture at a Glance</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
@@ -908,7 +911,7 @@
             <li><strong>Select the paper to show <span class="ui">Paper Files</span>.</strong> Cards initially show File type and size. Click a card's size footer to show or hide Annotation and Source.</li>
             <li><strong>Classify the available file.</strong> Use its small type, annotation, and source controls. Do not infer these facts from the filename alone.</li>
             <li><strong>Add related material if you have it.</strong> Add a supplement, annotated copy, note, presentation, data file, code file, or other attachment. Import first, then classify the resource.</li>
-            <li><strong>Check the default file.</strong> <span class="ui">Open in Preview</span> and Library preview use the resolved default when applicable. Selecting <span class="ui">Set as Default</span> preserves the resource identity and content. A selected PDF moves into the main managed file folder; the former main PDF remains in Associated Files.</li>
+            <li><strong>Check the default file.</strong> <span class="ui">Open in Preview</span> and Library preview use the resolved default when applicable. Selecting <span class="ui">Set as Default</span> preserves the resource identity and content. The managed Default becomes the main file, including for non-PDF formats; the other files remain in Associated Files. An automatic fallback is available even before you choose a Default manually.</li>
             <li><strong>Reveal one file in Finder.</strong> Choose <span class="ui">Show in Finder</span> and confirm the real managed file exists where the database expects it.</li>
           </ol>
 
@@ -1137,9 +1140,9 @@
           <p>Folder Loader is a migration-oriented workflow. It imports a visible collection as a collection instead of asking you to classify every incoming file as an attachment before identity resolution. The original source path and the managed result remain conceptually distinct.</p>
 
           <h2>How the default file is resolved</h2>
-          <p>An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. If no Default or main PDF exists, Browser Save establishes its first article PDF as a fallback Default even when its type is Unknown. This keeps the version classification intact.</p>
+          <p>An explicit manual default takes precedence while it remains available and valid. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. If none is available, Unknown or Other files provide a stable fallback: prefer the existing main file, otherwise the earliest PDF, otherwise the earliest remaining eligible file. No publication type is inferred from this fallback.</p>
 
-          <p>Correction notices, supplements, peer review files, commentary, summaries, analyses, source data, source code, Other and Invalid file do not become the automatic default. Other Unknown attachments remain peers until selected manually. Any valid resource can still be selected manually; <span class="ui">Invalid file</span> is never eligible and remains visible only for audit and repair.</p>
+          <p>Correction notices, supplements, peer review files, Perspective, News and Views, Summary, Analysis, Source Data and Source Code do not become the automatic default. You may choose an available valid resource manually. Missing files, Invalid file and unresolved identity-conflict files are excluded from automatic selection; some bundles can therefore have no eligible automatic Default.</p>
 
           <div class="note"><span class="callout-title">Published files</span>The user-facing type is <strong>Published version</strong>. A later formal correction can be classified as <strong>Corrected published version</strong>; the correction notice itself remains a separate peer.</div>
 
@@ -1266,7 +1269,7 @@
             <tr><td>Remove a shortcut</td><td>That fast entry point.</td><td>The underlying Library folder and its papers.</td></tr>
             <tr><td>Copy a paper to another folder</td><td>Add another placement.</td><td>One shared paper identity and resource bundle.</td></tr>
             <tr><td>Move a paper in the app</td><td>Change its managed placement and corresponding stored paths.</td><td>Gewu Key, metadata, versions, and associations.</td></tr>
-            <tr><td>Make another file default</td><td>Change the reading preference; a selected PDF becomes the main managed file.</td><td>Paper and resource identity, file contents and all other resources. The previous main PDF is retained in Associated Files; non-PDF defaults keep their location.</td></tr>
+            <tr><td>Make another file default</td><td>Change the reading preference; the selected managed file becomes the main file.</td><td>Paper and resource identity, file contents and all other resources. The previous main file is retained in Associated Files, including when the new Default is not a PDF.</td></tr>
             <tr><td>Delete an associated file</td><td>That resource relationship and its managed file, subject to confirmation.</td><td>The paper identity and unrelated resources.</td></tr>
           </table>
 
@@ -1304,6 +1307,10 @@
 
           <h2>Use the breadcrumb</h2>
           <p>The breadcrumb at the bottom displays the full managed path. A shortcut shows the real ancestry from Library or its independent Space root, including folders above the shortcut target. Its alias does not replace that path. Hover over the path to read it in full when space is limited. The segments are informational; use the columns or Left Arrow to navigate to a parent. The <span class="ui">List View / Table View</span> control at the lower right changes the representation of items without moving them.</p>
+
+          <h2>Follow background work in the bottom bar</h2>
+          <p>Folder Loader, batch Refresh Info, and individual downloads or refreshes have separate activity indicators. A long batch stays visible alongside a smaller operation instead of combining their messages. Indicators share the available footer width, shorten long text with an ellipsis, and keep navigation controls available. If many tasks no longer fit, scroll the indicator area horizontally. Hover over an indicator to read its full message and available task details. The activity dot marks work in progress; a paused task remains visible without that running animation.</p>
+          <p>The footer's <span class="ui">Details</span> opens the current Loader operation, or an active/paused Refresh Info task when no Loader notice is present. For a particular saved refresh, use <span class="ui">Loader &gt; Refresh All Metadata</span> and select it under <span class="ui">Refresh tasks</span>. These task details are separate from the right-side <span class="ui">Paper Details</span>. See <a href="#loader-maintenance">the complete close, return and stop workflow</a>.</p>
 
           <h2>Folder Details</h2>
           <p>When you select a folder, the right side shows its name, type, and the number of child folders and items. This is informational; it is not another folder level.</p>
@@ -1416,7 +1423,7 @@
           <p>To update the information for one project or topic, Control-click its active folder and choose <span class="ui">Refresh Info</span>. The task includes every subfolder once per Gewu Key and follows the same cooldowns as the all-Library task. See <a href="#loader-maintenance">Refresh Info: One Paper, a Folder, or the Library</a>.</p>
 
           <h2>Copy a paper to another folder</h2>
-          <p>A Library copy creates another reference to the same paper record rather than a second unrelated identity. The local filesystem may use a secondary symbolic link where appropriate. Paper versions and attachments remain associated with the work.</p>
+          <p>A Library copy creates another reference to the same paper record rather than a second unrelated identity. On macOS, the secondary main-file location uses a native Finder alias; its secondary Associated Files location points to the canonical bundle through a directory alias. Paper versions and attachments remain associated with the work. See <a href="#storage-model">managed file locations</a>.</p>
 
           <h2>Move an entire Space into Library</h2>
           <p>Use this when a temporary or project Space should become part of the permanent Library hierarchy.</p>
@@ -1568,7 +1575,7 @@
           <h2>Follow a preprint into publication</h2>
           <p>Explicit links from arXiv, Crossref, OpenAlex, Semantic Scholar or configured ADS can connect a preprint and its published DOI. A newly linked DOI loads detailed publication metadata while retaining the arXiv ID. Title similarity alone cannot bind identifiers. Manual corrections and cleared values are preserved; a DOI owned by another Gewu Key is reported without merging records.</p>
 
-          <p>Saved Library, Space and My Publications papers also enter a shared background queue. Checks become eligible after seven days, or thirty days after three unchanged checks; daily limits may delay them further. The worker shares Author Monitor's limits of 20 papers per batch and 80 per day, pauses between slices, and makes no Google Scholar requests. Background checks do not download PDFs, change Paper Files or Default, create placements, or move your selection and focus.</p>
+          <p>Saved Library, Space and My Publications papers are refreshed when you request it, including through a batch Refresh Info task. Saving a paper does not schedule periodic metadata refreshes. Author Monitor separately completes missing identifiers and abstracts for monitored publications, with bounded attempts and a daily allowance. This completion work does not download PDFs, change Paper Files or Default, create placements, or move your selection and focus.</p>
 
           <p>The bottom bar shows a running refresh, then green <span class="ui">Refresh complete</span>. Partial results preserve successful updates; the hover report explains unavailable sources and retry times. For batch scope and shared cooldowns, see <a href="#loader-maintenance">Refresh Info: One Paper, a Folder, or the Library</a>.</p>
 
@@ -1589,12 +1596,12 @@
             <tr><td>Folder context menu &gt; Refresh Info</td><td>The selected active Library/Space folder and all descendants, once per Gewu Key. Choose Quick or Full; default Full.</td></tr>
             <tr><td>Loader &gt; Refresh All Metadata</td><td>Active Library and Space papers, excluding Recycle. It is not a refresh of every Monitor-only database record. Choose Quick or Full; default Full.</td></tr>
             <tr><td>Folder Loader metadata mode</td><td>Imported papers use the chosen Skip, Quick or Full setting after file import and identifier recovery. Finder folder drops retain their separate import behavior.</td></tr>
-            <tr><td>Automatic background checks</td><td>Bounded lightweight checks on saved and monitored work. They retain their separate eligibility schedule and daily allowance.</td></tr>
+            <tr><td>Automatic background checks</td><td>Bounded completion of missing identifiers and abstracts in Author Monitor. Saved papers do not enter a periodic refresh queue.</td></tr>
           </table>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/loader-metadata.png" alt="Refresh All Metadata in the original Gewu Insight App" loading="lazy">
-            <figcaption><strong>Refresh All Metadata.</strong> The maintenance window shows its Library scope, metadata mode and skip rule before Start Refresh.</figcaption>
+            <img src="/user-guide-assets/loader-metadata.png" alt="Refresh Info showing a completed folder task, clickable paper log entries, task history, Pause and Stop in the original App" loading="lazy">
+            <figcaption><strong>Refresh All Metadata.</strong> This completed folder task shows its scope, Quick/Full mode, task history and per-paper log. Pause and Stop are separate controls. Partial results mean some sources did not supply usable information; completed means the task has ended.</figcaption>
           </figure>
 
 
@@ -1610,12 +1617,30 @@
             <li><strong>Choose Quick or Full.</strong> Folder and all-Library tasks default to Full. Quick updates core information and DOI/arXiv links; Full adds detailed authors and citation sources.</li>
             <li><strong>Choose <span class="ui">Start Refresh</span>.</strong> Each Gewu Key is checked once, even when it has several files or locations. The bottom status bar shows the task while you continue browsing.</li>
             <li><strong>Review the log.</strong> Counts distinguish updated, unchanged, partial, failed, cooldown skipped and missing DOI/arXiv records. Missing identifiers remain visible; use the separate identifier search when needed.</li>
-            <li><strong>Pause or continue.</strong> <span class="ui">Pause</span> finishes the current paper and saves the remaining queue. Select the task under <span class="ui">Refresh tasks</span> and choose <span class="ui">Continue</span>, including after reopening or restarting. Interrupted tasks reopen paused.</li>
+            <li><strong>Pause, continue, or stop.</strong> <span class="ui">Pause</span> finishes the current paper and saves the remaining queue. Select the task under <span class="ui">Refresh tasks</span> and choose <span class="ui">Continue</span>, including after reopening or restarting. <span class="ui">Stop</span> ends the remaining queue permanently for that task while keeping completed results and history. Interrupted running refresh tasks reopen paused; stopped tasks cannot be continued.</li>
           </ol>
-          <p>Batch and import work skips compatible successful checks from any entry point within three days. A changed identifier does not inherit the old identifier's cooldown. Full satisfies a later Quick task; Quick does not block Full. Partial retries reuse recent successful source responses and retry failed sources. A direct Paper Details refresh can check again immediately, while shared source rate limits still apply. Automatic background checks retain their separate seven/thirty-day schedule and daily allowance; Google Scholar protections are unchanged.</p>
+          <p>Batch and import work skips compatible successful checks from any entry point within three days. A changed identifier does not inherit the old identifier's cooldown. Full satisfies a later Quick task; Quick does not block Full. Partial retries reuse recent successful source responses and retry failed sources. A direct Paper Details refresh can check again immediately, while shared source rate limits still apply. Author Monitor completion retains its separate retry limits and daily allowance; Google Scholar protections are unchanged.</p>
           <p>Refreshing a shared Gewu Key updates its information in every location. Folder locations, PDF files, Paper Files classifications and Default selections stay unchanged. Multiple tasks wait in a queue; a direct single-paper refresh has priority between papers. The task log shows the most recent 200 entries; totals and the remaining queue are retained.</p>
 
           <p><span class="ui">Pausing</span> means the current paper is still finishing; it changes to <span class="ui">Paused</span> when the saved queue can resume later. Keep browsing while it settles. A completed refresh uses green <span class="ui">Refresh complete</span> in the bottom bar, including partial results. This reports that the operation ended, not that every source answered. Detailed outcomes remain in the task window and, for a single paper, below <span class="ui">Refresh Info</span> on hover. A transport failure or rejected operation still reports its error.</p>
+
+          <h2>Jump from a log entry to Library, then return</h2>
+          <ol class="steps">
+            <li><strong>Click a paper entry in the scrolling log.</strong> Entries linked to a paper offer <span class="ui">Show in Library</span> on hover. You can also focus an entry and press <kbd>Return</kbd> or <kbd>Space</kbd>. General process messages and older entries without a saved paper link are plain text.</li>
+            <li><strong>Inspect the selected paper.</strong> The task window closes after the paper is revealed in Library. Its folder and paper selection are restored for this destination. Closing the window does not pause or stop the background job.</li>
+            <li><strong>Return through the bottom bar's <span class="ui">Details</span>.</strong> While the Loader or refresh task remains active or paused, reopen its progress window and continue reading the log. For completed refreshes, reopen <span class="ui">Loader &gt; Refresh All Metadata</span> and select the saved task in <span class="ui">Refresh tasks</span>.</li>
+          </ol>
+          <p>The same log navigation is available in Folder Loader after an entry has been associated with a saved paper. Selecting text in the log lets you copy it without opening the paper. If the referenced item is no longer available, the window shows an error instead of silently navigating to another work.</p>
+
+          <h2>Close, pause, and stop are different</h2>
+          <table class="plain-table">
+            <tr><th>Action</th><th>What happens</th></tr>
+            <tr><td>Close the task window</td><td>Hide the window and keep working. The task continues while the app is running; Details returns to it.</td></tr>
+            <tr><td>Pause / Continue</td><td>Refresh Info finishes the current paper, saves the remaining queue and can resume it later, including after an app restart.</td></tr>
+            <tr><td>Stop</td><td>End a running or paused Refresh Info task. Stopping lets the current paper finish safely. Completed changes and history stay, but the remaining queue will not resume. Start Refresh creates another task if needed.</td></tr>
+            <tr><td>Stop Import / Stop Search</td><td>Folder Loader or identifier search stops at its next safe checkpoint. Completed imports and identifier changes stay. Stop Import also ends that import's linked metadata queue; it is not Delete Import.</td></tr>
+          </table>
+          <p>A stopped task no longer leaves a resumable progress indicator in the footer. Folder import and identifier search use their own Stop controls; they do not offer the batch refresh's Pause/Continue pair.</p>
 
           <h2>Find missing identifiers</h2>
           <ol class="steps">
@@ -1642,13 +1667,13 @@
             <li>Single-click a card to select it.</li>
             <li>Drag a card's file icon or filename to Finder or the Desktop to copy it, or onto a compatible application icon in the Dock or on the Desktop to open the original file with that application. Library item file icons support the same native drag. The target application decides which file types it accepts.</li>
             <li>Double-click a card to open it.</li>
-            <li>Double-click the paper row to the left to open the paper's Default file, independently of the highlighted resource card. PDFs open in macOS Preview. If an old unclassified import has no Default, its available current file still opens.</li>
+            <li>Double-click the paper row to the left to open the paper's Default file, independently of the highlighted resource card. PDFs open in macOS Preview. For unclassified files, automatic selection uses a stable Unknown/Other fallback when available; you do not have to choose a Default manually first.</li>
             <li>Press <kbd>Space</kbd> to use Quick Look.</li>
             <li>Control-click a card for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, default-file controls, <span class="ui">Change File Type</span>, or <span class="ui">Delete from Paper Files</span> where allowed. Control-click blank space in Paper Files for <span class="ui">Add File</span> and, when the paper has an arXiv identifier, <span class="ui">Sync Versions</span>. Those bundle-wide commands do not appear on an individual file card.</li>
             <li>Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.</li>
           </ul>
 
-          <p>The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing <span class="ui">Set as Default</span> makes that resource the file used by <span class="ui">Open in Preview</span> and paper preview. When it is a PDF, the app moves it into the main managed file folder and keeps the previous main PDF in Associated Files, updating paths and shortcuts together. Its file ID, classification and bytes are preserved; unrelated same-name files are not overwritten. A non-PDF Default keeps its existing location. If you set it manually, <span class="ui">Use Automatic Selection</span> returns control to the file-type priority rule.</p>
+          <p>The current main file remains protected from direct deletion. Choosing <span class="ui">Set as Default</span> makes that resource the preferred file for opening and preview. For a privately managed paper with an active folder placement, it becomes the main file and the other resources belong in Associated Files. This applies to PDFs and non-PDFs alike. File IDs, classification and bytes are preserved; unrelated same-name files are not overwritten. <span class="ui">Use Automatic Selection</span> releases a manual choice and returns to the priority and fallback rules in <a href="#versions-current">Default selection</a>.</p>
 
           <p>Library Paper Details no longer repeats this bundle. In My Publications, which has no adjacent Paper Files column, the collapsible <span class="ui">Files</span> panel keeps its file-management controls. <span class="ui">Show in Finder</span> reveals a physical file.</p>
           <p>Deleting a private managed attachment moves its bytes to macOS Trash before removing its resource record. Shared files and external originals are preserved. A failed database deletion restores the moved file when macOS returns its Trash path. The interface shows progress and updates only after success; path indexes keep the shared-file safety check fast even in large libraries.</p>
@@ -1656,8 +1681,8 @@
           <p><strong>Attachment deletion is shared.</strong> Every placement of the same Gewu Key uses this Paper Files bundle. Deleting one attachment here removes it from that paper everywhere; it does not merely hide it from the current folder. The current Default and protected primary file must be changed before they can be removed. This differs from deleting a Library placement, which follows the <a href="#recycle">reference-aware Recycle rules</a>.</p>
 
           <h2>Correct a file's paper assignment</h2>
-          <p>If an imported PDF was matched to the wrong paper, Control-click its card and choose <span class="ui">Move to Another Paper…</span>. Search the destination in Library by title, DOI, or Gewu Key, select it, and choose <span class="ui">Move File</span>. To make it independent, choose <span class="ui">Create Paper from File…</span>, enter a title, and choose <span class="ui">Create Paper</span>. The new paper appears in the current Library folder with a new Gewu Key and no guessed DOI.</p>
-          <p>Only the selected file changes ownership. Its bytes, filename, file ID, classification and source information remain intact; the existing paper's title and DOI stay unchanged. If you move its Default or primary file, the source falls back to a remaining eligible file. The new independent paper uses the selected file as its Default. A repeat import of the same source path and size respects the explicit reassignment. Historical analysis text is not rewritten, so check any notes that refer to the old grouping.</p>
+          <p>If an imported PDF was matched to the wrong paper, Control-click its card and choose <span class="ui">Move to Another Paper</span>. Search the destination in Library by title, DOI, or Gewu Key, select it, and choose <span class="ui">Move File</span>. To make it independent, choose <span class="ui">Create Paper from File</span>, enter a title, and choose <span class="ui">Create Paper</span>. The new paper appears in the current Library folder with a new Gewu Key and no guessed DOI.</p>
+          <p>Only the selected file changes ownership when using these card commands. Its bytes, file ID, classification and source information remain intact; a name collision may require a unique filename. A source with remaining files keeps its identity and selects another eligible Default. An emptied, unshared source is removed as an independent Library item rather than left as a fileless link. Protected shared relationships can prevent that removal. The new independent paper receives a new Gewu Key and uses the file as its Default. Managed paths follow the change: an attachment goes into the destination bundle in Associated Files; a newly independent file goes into its main folder. Explicit reassignment is respected on repeat imports. Historical analysis text is not rewritten.</p>
           <p>These correction commands are user interface actions. AI Access cannot move, edit, overwrite or delete Paper Files; it can only read authorized files and append new Markdown analyses.</p>
 
           <h2>Understand a Missing File row</h2>
@@ -1722,10 +1747,10 @@
           <p class="lead">The default file is the preferred local representation of the paper. Choose it manually or let Gewu Insight select it. Default appears first in the file list; Up and Down follow the visible order.</p>
 
           <h2>Automatic selection</h2>
-          <p>The automatic order is <span class="ui">Corrected published version</span>, <span class="ui">Published version</span>, <span class="ui">Accepted manuscript</span>, then <span class="ui">Preprint</span>. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Perspective, News and Views, Summary, Analysis, Source Data, Source Code, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.</p>
+          <p>The automatic order is <span class="ui">Corrected published version</span>, <span class="ui">Published version</span>, <span class="ui">Accepted manuscript</span>, then <span class="ui">Preprint</span>. Within a type, a later recognized version normally wins. If none is eligible, an available <span class="ui">Unknown</span> or <span class="ui">Other</span> file supplies a fallback: keep the existing main file where possible, otherwise choose the earliest PDF, otherwise the earliest remaining eligible file. This includes standalone RTF, image and other non-PDF imports; it does not relabel them as published papers.</p>
 
           <h2>Automatic and manual eligibility</h2>
-          <p>The four publication types above take priority in automatic selection, ahead of the first Browser PDF fallback. You may manually choose any existing file except one classified as <span class="ui">Invalid file</span>. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose <span class="ui">Use Automatic Selection</span>. Newly arriving files remain peer rows and do not erase or silently reclassify older files.</p>
+          <p>The four publication types above take priority over the Unknown/Other fallback. Correction notices, supplementary material, peer review files, Perspective, News and Views, Summary, Analysis, Source Data and Source Code are not automatic candidates. Missing, Invalid file and unresolved identity-conflict files are also excluded. You may manually choose an existing valid file, including a supporting file. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose <span class="ui">Use Automatic Selection</span>. Newly arriving files remain peer rows and do not erase or silently reclassify older files.</p>
 
           <h2>Choose a file manually</h2>
           <ol class="steps">
@@ -1733,7 +1758,7 @@
             <li><strong>Select the file you want.</strong></li>
             <li><strong>Choose <span class="ui">Set as Default</span>.</strong> This file will be used by <span class="ui">Open in Preview</span> and paper preview. You can also pin the automatically selected Default this way.</li>
           </ol>
-          <p class="result">The selected file becomes the manual default. When it is a PDF, Gewu Insight places it in the main managed file folder and keeps the previous primary PDF in Associated Files. The article and file identities stay unchanged. External originals and files shared with another article are copied safely; existing filenames are retained unless a name conflict requires a unique name. Non-PDF defaults keep their existing location.</p>
+          <p>The selected file becomes the manual default. In a managed paper with an active placement, it becomes the main file and the former main file moves to Associated Files. This applies to non-PDF defaults too. The article and file identities stay unchanged. External originals and files shared with another article are protected; existing names are retained unless a collision requires a unique name.</p>
 
           <h2>Return to automatic selection</h2>
           <p>Choose <span class="ui">Use Automatic Selection</span> for a manually selected default. Gewu Insight evaluates the eligible file types again.</p>
@@ -1754,7 +1779,7 @@
 
           <p><span class="ui">Publisher</span> is used only when a recognized publisher host or a publisher-specific acquisition path provides that evidence. arXiv, bioRxiv, and medRxiv are shown as <span class="ui">Preprint server</span>; repository hosts remain <span class="ui">Institutional repository</span>; ordinary local additions are <span class="ui">User import</span>; and a generic web download with no stronger evidence remains <span class="ui">Other</span>. A real host can appear after the source label when useful. Internal migration or ingestion markers are never user-facing source details, and choosing a different source clears a stale provider detail rather than appending it to the new choice.</p>
 
-          <div class="note"><span class="callout-title">Note</span>Changing File type can change the automatic Default. When the selected Default is a PDF, its main file location is synchronized too. Annotation and Source remain independent properties; changing a label does not apply a filename template or rewrite the PDF.</div>
+          <div class="note"><span class="callout-title">Note</span>Changing File type can change the automatic Default. The selected managed Default and its main file location are synchronized together. Annotation and Source remain independent properties; changing a label does not apply a filename template or rewrite the PDF.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#attachments">Add and Classify Attachments</a></div></div>
         </article>
@@ -1774,6 +1799,8 @@
 
           <h2>Attachment types</h2>
           <p>The same <a href="#versions-current">file-type choices</a> apply to every row and to Browser capture. Use <span class="ui">Summary</span> or <span class="ui">Analysis</span> for notes, <span class="ui">Source Data</span> for research data, and <span class="ui">Source Code</span> for code; use <span class="ui">Other</span> when none fits. File extension and MIME type remain separate from this classification. Existing files keep their saved labels until you change them.</p>
+
+          <p>Adding the same unchanged file to the same paper again reuses its existing resource, including when its source path or filename has changed. Matching uses exact file contents; an edited or annotated PDF with different bytes remains a separate version. A shared DOI alone does not make two files duplicates.</p>
 
           <h2>Add by drag and drop</h2>
           <p>Drag one or more Finder files anywhere in the visible Paper Files column: over its heading, an existing card, or the empty gray area. No card needs to be expanded. Wait for the whole-column drop highlight, confirm the selected destination paper, then release. The files are copied into that paper’s associated bundle and appear in Paper Files. The same behavior applies in Library, shortcuts and Spaces.</p>
@@ -1847,6 +1874,11 @@
 
           <p class="result">The physical file and database link now belong to the destination paper; the former standalone entry is gone.</p>
 
+          <h2>Make a Paper Files resource independent again</h2>
+          <p>Drag a resource's icon or filename from Paper Files onto a Library folder or that folder's content area. The file leaves its former paper, receives an independent paper record with a new Gewu Key, and moves from Associated Files into the destination's main folder. Control-clicking the resource and choosing <span class="ui">Create Paper from File</span> performs the same separation in the current folder, with an editable title. The former paper keeps its remaining files.</p>
+          <p>To transfer just one resource between existing papers, use <span class="ui">Move to Another Paper</span> or drag it into the other paper's Paper Files area. A Library paper-row drag adopts the source paper's files as a group; it removes the former independent identity only when the conversion is safe. A single-file RTF therefore disappears from its former folder and becomes one resource of the destination paper.</p>
+          <div class="note"><span class="callout-title">Check the destination</span>Dragging within Gewu Insight changes ownership or location. Dragging a file to Finder or the Desktop makes an external copy and leaves Paper Files intact. Dragging from Finder into Paper Files imports a managed copy and keeps the external original.</div>
+
           <h2>If the conversion cannot finish</h2>
           <p>The file moves and database changes are coordinated as one recoverable operation. If any step fails, Gewu Insight restores the original standalone files and rolls back the paper, Library item, resource relationships, and fingerprint fields. The source should remain usable rather than becoming a half-converted attachment.</p>
 
@@ -1919,19 +1951,24 @@
             <li><strong>Review the result.</strong> Open previous logs or the result guide when items need attention.</li>
           </ol>
 
+          <h2>Follow a folder drop without keeping Loader open</h2>
+          <p>Dropping an external folder into Library starts Folder Loader in the background; it does not need to open the Loader window first. The Library footer shows import progress. Choose <span class="ui">Details</span> beside the activity indicators to open the live Loader window, inspect progress and read the log. Closing it leaves the import running, and Details opens it again. When the import has finished, Details still opens the retained result until you choose <span class="ui">Dismiss</span>; previous reports remain available in Loader.</p>
+          <p>Click a log entry linked to a paper to <span class="ui">Show in Library</span>. The window closes after the item is revealed, without interrupting the job. General progress messages cannot identify a Library item. Use the footer's Details to return, or <span class="ui">Loader &gt; Open Loader</span> to review saved reports. See <a href="#loader-maintenance">log navigation and task controls</a>.</p>
+          <p><span class="ui">Stop Import</span> finishes at the next safe checkpoint, preserves completed files and ends any linked metadata queue. It does not undo the import. The separate <span class="ui">Delete Import</span> command has a different, destructive purpose.</p>
+
           <h2>What Folder Loader preserves</h2>
           <ul>
             <li>The source folder’s relative hierarchy.</li>
             <li>Existing managed targets and files on repeated imports.</li>
-            <li>An existing primary PDF rather than overwriting it.</li>
+            <li>An existing main file rather than overwriting it, plus edited versions with different contents.</li>
             <li>A verified exported Paper Files relationship when a Gewu Insight manifest is present.</li>
           </ul>
 
           <p>Folder Loader copies into Gewu Insight’s managed storage. It does not move, rename, or delete the external source files and folders you selected. Loader, Paper Details, folder and all-Library refresh use the same service and refresh history. <span class="ui">Quick refresh</span> updates core information (title, authors, journal and date) and verified DOI/arXiv links; <span class="ui">Full refresh</span> adds detailed authors, citations and other source data. Recovered identifiers use the selected mode. Partial source failures remain visible in the log and are not recorded as a fully successful refresh.</p>
 
           <h2>Identity mismatches and partial imports</h2>
-          <p>Loader and Finder folder drops share the same matching and file-preservation policy. When a DOI, title or existing identifier disagrees with the matched paper, the incoming file is still saved in its Paper Files and the paper is placed in the target folder. Existing metadata and Default are preserved. Different PDFs with the same DOI are kept as separate files; the import continues without a mandatory review prompt.</p>
-          <p>The live log and <span class="ui">Result Guide</span> identify each mismatch by filename, detected DOI, existing DOI and Gewu Key. Correct a wrong assignment later from the file card's <span class="ui">Move to Another Paper…</span> or <span class="ui">Create Paper from File…</span> command. This preserves the PDF; it does not certify that the identified DOI is correct.</p>
+          <p>Loader and Finder folder drops share the same matching and file-preservation policy. When a DOI, title or existing identifier disagrees with the matched paper, the incoming file is still saved in its Paper Files and the paper is placed in the target folder. Existing metadata and Default are preserved. PDFs with different bytes but the same DOI are kept as separate files; an exact unchanged copy already owned by that paper reuses its existing resource even after a source rename or move; the import continues without a mandatory review prompt.</p>
+          <p>The live log and <span class="ui">Result Guide</span> identify each mismatch by filename, detected DOI, existing DOI and Gewu Key. Correct a wrong assignment later from the file card's <span class="ui">Move to Another Paper</span> or <span class="ui">Create Paper from File</span> command. This preserves the PDF; it does not certify that the identified DOI is correct.</p>
           <p>A disk or other import error can still stop a batch. Completed items remain available, and the result shows the failing file and actual progress. For a background drop, use the bottom bar's <span class="ui">Details</span> to reopen its current result and <span class="ui">Dismiss</span> when finished. Previously saved results remain available in Loader logs.</p>
 
           <h2>Delete an import batch</h2>
@@ -1939,7 +1976,7 @@
 
           <div class="important"><span class="callout-title">Important</span>Review the selected batch and make a backup before using Delete Import, especially if you have already reorganized or reused imported items.</div>
 
-          <div class="note"><span class="callout-title">Note</span>For an ordinary folder, Loader does not guess which files are “primary” versus “associated.” It imports the collection as supplied. Special reconstruction occurs only for a verified Gewu Insight export manifest.</div>
+          <div class="note"><span class="callout-title">Note</span>For an ordinary folder, Loader does not guess paper-to-attachment relationships from similar filenames. A verified Gewu Insight export manifest can restore those relationships. After paper identity and ownership are known, the normal Default and Associated Files rules determine where that paper’s managed files belong.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#desktop-copy">Make a Portable Desktop Copy</a><a href="#loader-maintenance">Refresh Info: One Paper, a Folder, or the Library</a><a href="#backup-migrate">Back Up or Move to Another Mac</a></div></div>
         </article>
@@ -2138,6 +2175,8 @@
 
           <p>The destination chooser initially selects your <a href="#add-to-library-settings">Setting &gt; Add to Library</a> default, initially <span class="ui">Library / unsorted</span>. You can confirm another active Library or Space folder for this addition. The choice does not change the global default.</p>
 
+          <p>Journal tabs identify the journal by a supported wordmark or by text. APS titles, including Physical Review Letters, Physical Review X and Reviews of Modern Physics, use readable journal names rather than a publisher icon or a page image.</p>
+
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#subject-monitor">Subject Monitor</a><a href="#network-access">Publisher and Network Access</a><a href="#import-files">Add Papers and Files</a></div></div>
         </article>
 
@@ -2241,19 +2280,19 @@
 
           <h2>Background work and status</h2>
           <p>Opening this tab reuses available local cards, including older cached lists, while the background checks for changes. It does not start another Scholar fetch. Background list updates retain your selection, reading position, open controls and details.</p>
-          <p>The bottom bar keeps the latest publication-check status and the separate paper-metadata status after brief action messages disappear. Pending work, retry waits and daily limits remain visible; hover over shortened text for its full message. A skipped batch does not mean all missing information has been resolved.</p>
-          <p>Automatic DOI and abstract completion uses other metadata services, independently of Scholar profile checks. It rotates between authors and reuses shared paper identities: up to 20 papers per batch and 80 per local day, yielding between papers after about two minutes and resting at least five minutes between batches. Recent attempts wait seven days before automatic retry. Progress reservations and rest times survive restarting; explicit identifier commands remain available separately.</p>
+          <p>The bottom bar keeps publication checks separate from <span class="ui">Author metadata · All authors</span>. Metadata counts cover all monitored authors, not just the selected author, and are recalculated from current missing information even during a daily pause. Ready work, retry waits and papers needing manual lookup are distinct; hover over shortened text for its full message.</p>
+          <p>Automatic DOI and abstract completion uses other metadata services, independently of Scholar profile checks. It rotates between authors and reuses shared paper identities: up to 20 papers per batch and 80 per local day, yielding between papers after about two minutes and resting at least five minutes between batches. Recent attempts wait seven days before automatic retry, with at most three automatic attempts per paper. Papers still unresolved then need manual lookup; completed papers are not periodically refreshed. Progress reservations and rest times survive restarting; explicit identifier commands remain available separately.</p>
           <p>Scholar requests remain serialized, with 4–8 seconds between requests, 12–24 seconds between profile pages and 45–90 seconds between automatic author checks. Every request checks the shared workspace cooldown again before sending, including My Publications imports. Access restrictions pause Scholar for 24 hours; manual actions and restarts do not bypass or reset that pause. This is Gewu's protective waiting period, not a promised unblock time from Google.</p>
 
           <h2>Recover after a network interruption</h2>
           <p>A temporary connection failure shows <span class="ui">Google Scholar temporarily unavailable</span> in the bottom bar. Hover over it for the author, error and retry details. Cached publications remain available. After the connection returns, keep the App running: failed transport requests have a paced automatic retry queue, including before the normal 10:00 daily check. The message clears after a successful retry, not immediately when Wi-Fi reconnects.</p>
-          <p>This retry queue is separate from a Scholar access restriction. A displayed access cooldown still takes precedence; repeatedly refreshing or restarting does not bypass it. You can use <span class="ui">Refresh This Author</span> for a deliberate retry when the status permits.</p>
+          <p>An unreadable Scholar publication list is a failed check, not evidence of no publications. Saved papers and the last successful check are retained. Automatic checks stop probing other Scholar authors in that pass, wait an hour, and allow at most three unsuccessful page probes per day before waiting for the next daily check. An access restriction has its separate cooldown. You can use <span class="ui">Refresh This Author</span> for a deliberate retry when permitted.</p>
 
           <h2>Refresh one author or find missing identifiers</h2>
           <p>Control-click the author and choose <span class="ui">Refresh This Author</span> to update that person's publications. <span class="ui">Find Missing Identifiers</span> checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose <span class="ui">Find Missing Identifier</span>; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from <span class="ui">Get DOI</span>, which uses an available local PDF.</p>
 
           <h2>Update citation profiles</h2>
-          <p>For a Google Scholar author, Control-click the author, choose <span class="ui">Update All Scholar Citations</span>, review the request estimate, then confirm <span class="ui">Update All Citations</span>. This updates that author’s full profile paper by paper and can take a long time. Follow the bottom progress status until it finishes.</p>
+          <p>For a Google Scholar author, use the circular arrow beside the name or Control-click the author and choose <span class="ui">Update All Scholar Citations</span>. Review the request estimate, then confirm <span class="ui">Update All Citations</span>. This rereads only that author’s Scholar profile, updates citation counts and discovers new publications. It does not start a Library-wide metadata refresh. Follow the bottom progress status until it finishes.</p>
 
           <h2>Manage the profile image</h2>
           <p>Control-click an author and choose <span class="ui">Edit Homepage</span> to edit the website, or <span class="ui">Change Photo</span> / <span class="ui">Add Photo</span> to choose a local portrait. Downloaded Scholar avatars are saved locally. Opening the author list does not need to reopen SQLite or contact the image host for every row; a manual photo takes precedence. Without a valid local photo, the list can show initials until you refresh or replace the image.</p>
@@ -2687,6 +2726,8 @@
           <h2>Give the original PDF to the AI client</h2>
           <p>Use <code>get_paper_file</code> with the Gewu Key and a file ID from <code>get_paper</code>, or <code>default</code>. When no Default exists, choose an explicit file ID. Gewu checks the connection and transfers the original bytes. The client receives a read-only temporary copy, title, authors, DOI, file classification and actual SHA-256. Its own tools can read the PDF, inspect pages and figures, or run OCR. Gewu does not render pages, run OCR, upload the file to a model or fetch a replacement from the DOI.</p>
           <p>The delivered copy is separate from Paper Files and never syncs changes back. Write rendered pages and intermediate results separately. A file is limited to 64 MiB, with up to 256 MiB or 64 retained copies per MCP session. Each delivery returns a <code>delivery_id</code> and <code>quota</code> showing used and remaining bytes and file slots. Use <code>get_file_delivery_status</code> to check capacity and find active delivery IDs.</p>
+          <p>Remaining capacity is reported to the AI client in these tool results; it is not a separate Library or AI Access status meter. Ask the connected assistant to check file-delivery status when you need the current amount.</p>
+
           <p>After every reader, rendering and OCR task finishes with a copy, call <code>release_paper_file</code> with its delivery ID. This frees its temporary quota immediately; original Paper Files, saved analyses and derived outputs remain unchanged. Keep the source file ID, SHA-256 and page references for citations and saving analyses. Active repeat delivery shares the same copy and ID, so finish all its users before release. Repeating a release is safe. No files are automatically evicted: when quota is full, release finished copies and retry.</p>
           <p>Unreleased copies last until normal MCP process exit. The two local management tools also work offline or after grant expiry; they cannot retrieve new files. Reconnect MCP once after upgrading to discover them, after finishing work with old copies. A client needs access to the adapter's local filesystem; a returned path is not a cloud PDF attachment. If unavailable, report that limitation rather than reading the source Library directly.</p>
           <p>Revocation, expiry or disabling AI Access prevents new deliveries. Copies already delivered to a client cannot be recalled. File transfer uses local disk and memory; PDF processing done by a client on the same computer can still compete for resources. Gewu adds no automatic whole-document OCR workload.</p>
@@ -2790,28 +2831,30 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
         <article class="help-topic guide-topic" id="storage-model" data-group="Settings and Safety" data-title="How Gewu Insight Stores Files" data-keywords="SQLite source truth associated files canonical current physical path bundle mirror alias Gewu key">
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Understand How Gewu Insight Stores Files</h1>
-          <p class="lead">The visible Library stays simple: its main tree contains a compatibility primary path. Other resources can live in a mirrored Associated Files area, while the UI presents every resource as a peer in one flat Paper Files list.</p>
+          <p>The visible Library stays simple: each file-backed paper has a main managed file at one canonical location, while its other privately managed resources live in Associated Files. Paper Files presents these resources together as one flat list.</p>
 
           <h2>One work, several representations</h2>
           <p>Each managed paper has one database identity and a stable <span class="ui">Gewu Key</span>. DOI and arXiv are external identifiers attached to that identity; neither is used as the sole storage identity.</p>
 
           <h2>Where the files go</h2>
           <ul>
-            <li>A compatibility primary PDF stays in the visible Library, Space, or My Publications tree.</li>
-            <li>Older PDF versions go to a mirrored <code>Versions</code> area.</li>
+            <li>The Default is the main file in the visible Library, Space, or My Publications tree. It may be a PDF or another file type.</li>
+            <li>Other PDF versions belong in the associated bundle, usually under <code>Versions</code>.</li>
             <li>Supporting information goes to <code>Supplements</code>.</li>
-            <li>Images, notes, presentations, data, code, and other attachments go to <code>Files</code>.</li>
+            <li>Other resources use the bundle’s <code>Figures</code> or <code>Files</code> areas as appropriate; the file-type label remains separate from its physical subfolder.</li>
           </ul>
 
           <p>The associated bundle mirrors the paper’s managed path under <code>data/Associated Files</code>. When you move the paper in the UI, Gewu Insight moves the associated bundle and refreshes live paths.</p>
 
           <h2>Why the UI and Finder look different</h2>
-          <p>The UI presents a paper as one item with a flat Paper Files list inside it. Finder shows a compatibility primary file in the normal tree and the related bundle in Associated Files. The UI Default marker identifies the preferred file. When a PDF becomes Default, the app synchronizes it to the main managed file folder and retains the former main PDF in Associated Files. This preserves file identity, classification and bytes; a non-PDF Default keeps its existing location.</p>
+          <p>The UI presents a paper as one item with a flat Paper Files list inside it. Finder shows the Default as the main file in the normal tree and the remaining managed resources in Associated Files. Choosing a different Default synchronizes both locations, including for non-PDFs, while preserving file identity, classification and bytes. With no manual Default, the <a href="#versions-current">automatic priority and fallback</a> rules still select the main file when an eligible resource exists.</p>
 
           <h2>Copies and filesystem shortcuts</h2>
-          <p>When the same work appears in more than one Library folder, those locations can share one database record and one canonical managed file. Symbolic links can represent secondary filesystem locations. <span class="ui">Make Copy Desktop</span> resolves those shortcuts into real files for a portable export.</p>
+          <p>When the same Gewu Key appears in several folders, it shares one Paper Files bundle. The real main file stays at one canonical location; secondary locations contain a native Finder alias on macOS. The corresponding secondary path under Associated Files is a directory alias to the canonical associated bundle, rather than another copy of its contents. A paper without associated resources does not need an empty bundle. Other supported platforms use filesystem links. <span class="ui">Make Copy Desktop</span> resolves these pointers into real files for a portable export.</p>
 
           <p>A surviving normal Library, Space or My Publications placement keeps the original outside the local Recycle directory. Deleting or dragging a folder checks each paper; restoring or re-adding a recycled paper migrates its original back to normal storage. SQLite resource paths and secondary shortcuts follow. See <a href="#recycle">Delete and Recover Items</a>.</p>
+
+          <p>The canonical location stays stable while it is still an active placement. If that location is removed or moved, Gewu Insight uses a surviving Library, Space or My Publications placement and updates its aliases. External originals, files shared with another paper, and occupied destinations are protected; do not replace an unrelated file to force a layout change.</p>
 
           <div class="important"><span class="callout-title">Important</span>Do not manually move an Associated Files bundle or replace an alias in Finder. Use Gewu Insight so the database and physical paths change together.</div>
 
@@ -2999,6 +3042,10 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <p>The Dock tile, native startup panel, and in-window loading state use the icon packaged with the same app build. Startup has a native launch phase and a local-web bootstrap phase, but the visual handoff should not introduce a second icon frame or fall back to an older product mark.</p>
 
+          <h2>Startup is not a Library cleanup</h2>
+          <p>Ordinary startup does not reorganize the whole Library, merge historical duplicate files, or make a new full database backup. Managed layout and duplicate protections apply when you import or change the affected paper and files. Keep your own regular <a href="#backup-migrate">backups</a>.</p>
+          <p>If a file move was interrupted before its database and disk changes finished together, startup recovers only the recorded unfinished operation before background workers start. A launch with no unfinished move goes directly to normal preparation. An ambiguous conflict is reported and preserved for repair rather than overwriting a destination or triggering a full-library sweep.</p>
+
           <h2>Automatic local-server recovery</h2>
           <p>If the local UI server exits unexpectedly while the macOS window remains open, the launcher starts it again. The window rechecks local health and reloads the workspace when the service becomes ready. A startup-failure sheet is nonblocking; if the server recovers after that sheet appears, the stale sheet is dismissed automatically instead of continuing to interrupt a healthy workspace.</p>
 
@@ -3013,7 +3060,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
             <tr><th>Monitor</th><th>Current automatic schedule</th></tr>
             <tr><td>Journal Monitor</td><td>Daily work becomes due from 09:00 in the Mac's local time zone; stored completion and pending retry state determine what still needs work.</td></tr>
             <tr><td>Subject Monitor</td><td>Daily work becomes due from 09:00 local time; incomplete sources have their own bounded retry state.</td></tr>
-            <tr><td>Author Monitor</td><td>Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick. Failed transport checks use a separate paced retry queue, including before 10:00; access cooldowns still apply.</td></tr>
+            <tr><td>Author Monitor</td><td>Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick. Failed transport checks use a separate paced retry queue, including before 10:00. Unrecognized Scholar pages use an hourly delay and a daily failure cap; access cooldowns still apply. Opening an author does not force a full profile fetch each time.</td></tr>
             <tr><td>arXiv</td><td>Uses its separate announcement-ready schedule and buffer, not the journal's 09:00 rule. Read the displayed update/countdown state.</td></tr>
           </table>
           <p>These are local scheduler rules, not guarantees of remote source completion or a hosted monitoring service. Manual Refresh remains available for the selected scope; repeated broad refreshes can worsen a source's rate limit.</p>
@@ -3098,7 +3145,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <p>Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.</p>
 
           <h2>A default file cannot be deleted</h2>
-          <p>A Default PDF is kept as the protected main file. Choose another PDF with <span class="ui">Set as Default</span> to move the previous primary PDF into Associated Files, where it remains available as a separate file. A non-PDF default changes the reading preference and leaves the main PDF in place. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An <span class="ui">Invalid file</span> remains an audit record and is never eligible to become default.</p>
+          <p>The Default is kept as the protected main file, including for non-PDFs. Choose another eligible resource with <span class="ui">Set as Default</span> before removing the old main file from Paper Files. The old resource remains in Associated Files until you explicitly remove it. To remove the paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a main-file warning in Finder. An <span class="ui">Invalid file</span> remains an audit record and is never eligible to become Default.</p>
 
           <h2>Change where website links open</h2>
           <p>Open <a href="#website-link-settings">Setting &gt; Website Links</a> and save <span class="ui">System Default Browser</span> to use the browser selected in macOS. The default, <span class="ui">Gewu Insight Browser</span>, opens a new built-in webpage tab or reuses its unused first tab. This covers website actions in all five research views, including publisher arrows, DOI/arXiv links, scholarly profiles, citation-source links, and links inside Note. Existing web pages stay open. Local PDF, Preview, Finder, download, and file-import actions are unchanged.</p>
@@ -3115,6 +3162,13 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
 
+          <h2>A long task keeps returning as Continue</h2>
+          <p>That task was paused or interrupted, so its remaining queue is saved. Choose the footer's <span class="ui">Details</span>, or open <span class="ui">Loader &gt; Refresh All Metadata</span> and select the task. Choose <span class="ui">Stop</span> to end it permanently. Completed work remains. Closing the window merely hides it; <span class="ui">Pause</span> deliberately keeps it resumable.</p>
+          <h2>Two Paper Files cards seem to be the same file</h2>
+          <p>Two folders showing the same Gewu Key normally share a single Paper Files bundle. Within that bundle, different edited PDFs can have similar names. Use <span class="ui">Show in Finder</span> and inspect each resource before deleting anything. Exact unchanged reimports are reused, but changing a DOI, restarting, or clearing Monitor Cache is not a historical duplicate-repair command. If two cards reveal the same physical file, report the Gewu Key and the steps that produced it through <span class="ui">Help &gt; Contact Us</span>.</p>
+          <h2>Contact support</h2>
+          <p><span class="ui">Help &gt; Contact Us</span> opens your default email application's draft to <strong>konglingyuan@westlake.edu.cn</strong>, with subject <strong>Gewu Insight — Feedback and Support</strong>. If no email handler is configured, use that address in your preferred mail service. Include the version/build, operation, displayed error and relevant screenshot; never include tokens or passwords. The app does not send the message automatically.</p>
+
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#startup">Startup, Monitor Cache, and Text Size</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
@@ -3126,7 +3180,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <ul class="path-list">
             <li><code>data/paper_monitor.sqlite</code><span>Authoritative database for papers, identities, relationships, settings, operational state, Browser bookmarks, and visit history. May contain saved metadata API keys; treat backups as private.</span></li>
             <li><code>data/cache/journal_logos</code><span>Rebuildable local image cache for configured Journal Monitor logos.</span></li>
-            <li><code>data/Library</code><span>Visible main Library root and compatibility primary files.</span></li>
+            <li><code>data/Library</code><span>Visible main Library root, canonical main files and secondary Finder aliases.</span></li>
             <li><code>data/Spaces</code><span>Independent Space roots.</span></li>
             <li><code>data/My Publications</code><span>Managed local files for My Publications.</span></li>
             <li><code>data/Associated Files</code><span>Mirrored bundles for versions, supplements, and attachments.</span></li>

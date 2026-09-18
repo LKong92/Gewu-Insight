@@ -1,9 +1,80 @@
 # User Guide audit — 1.0.0 / Build 1
 
-Edition reviewed: September 16, 2026. Scope: the installed macOS product and the
+Edition reviewed: September 18, 2026. Baseline audit: September 16, 2026. Scope: the installed macOS product and the
 source on main. This is a current manual audit, not a chronological change log.
 
-## Method and evidence
+## September 18 workflow audit
+
+Reviewed the complete 49-topic inventory against the September 16 baseline and
+the intervening product changes through `4000d98`, plus the pending Author
+Monitor correction. Changed instructions were checked against runtime source;
+unchanged feature explanations and illustrations retain the baseline evidence
+below. This is a documentation pass, not another live-data functional test.
+
+The concrete corrections are:
+
+- Folder-drop background import, footer Details, reopening live results and
+  saved reports, and clicking linked log rows to Show in Library. Navigation
+  closes the task window without stopping work; unlinked messages remain text.
+- Refresh Info Pause/Continue versus terminal Stop; import Stop Import and
+  identifier Stop Search have different controls. Keep completed work and
+  history, end the import's linked metadata queue, and distinguish Delete Import.
+- Independent activity indicators, constrained width, horizontal overflow,
+  truncation and full hover information. Details is a shared task entry point,
+  not a clickable action on every progress chip or the Paper Details pane.
+- Unknown/Other automatic Default fallback, non-PDF main files, canonical main
+  placement, native macOS Finder aliases and secondary associated-directory
+  aliases. External and shared files remain protected.
+- Ownership transfer in both directions, single-file card commands versus
+  whole-paper adoption, new independent Keys, empty-source removal, safe moves
+  versus external drag copies, and removal of outdated menu ellipses.
+- Exact-content reimport reuse without merging edited versions; direct startup
+  without full-library normalization/backups; targeted interrupted-move recovery.
+- Help > Contact Us and default email-client draft, MCP quota visibility and
+  release workflow, APS textual journal labels, and bounded Author Monitor
+  missing-data completion with separate profile discovery/citation refresh.
+
+Runtime evidence: `ui_server.py` (Loader rendering/log navigation, footer routing
+and activity styles, paper context menus); `metadata_jobs.py`; `file_reassignment.py`;
+`storage.py`; managed-layout and resource-deduplication modules and their existing
+contracts; `scripts/PaperMonitorApp.m` (Contact Us and native Loader bridge);
+`mcp_server.py`; `author_metadata_work.py` and `author_profile_retry.py`.
+
+Only `loader-metadata.png` is replaced in this pass. The user selected a completed
+folder task and its visible log position in the original App. Core Graphics
+captured the full standalone window without overlays or image alteration. The
+earlier capture was discarded at the user's request. The replacement correctly
+shows Pause, Stop, history and a paper log; partial results are described honestly
+in its caption. No import, metadata refresh, Stop, Pause, log navigation or email
+send was triggered for this audit. All other 34 illustrations are retained.
+
+## September 18 validation
+
+- 30 Guide/audit unit checks pass, including current controls, log navigation,
+  file ownership, aliases, fallback, startup, contact and quota contracts. All six
+  PDF structure checks pass. `git diff --check` passes.
+- Generated PDF: 115 pages, 356 resolving internal links; all 49 HTML topic
+  anchors and 35 figure registrations remain. HTML, generated TeX and the bundled
+  PDF are synchronized. Version 1.0.0 / Build 1 is unchanged; guide edition is
+  September 18.
+- Compared PDF page bodies with the pre-audit 111-page edition; rendered and
+  visually reviewed 45 changed/repaginated pages and the three Product Identity
+  pages. Identity 4-1 is on page 102, 4-2 on 103, and 4-3/4-4 share 104. The
+  builder retains continuous identity flow without introducing forced breaks.
+- Source PDF and App resource match byte-for-byte; strict deep code-signature
+  verification passes. Native executable copies are identical after stripping
+  signatures, so documentation packaging does not change executable code.
+- No live task was created, paused or stopped, no log row was clicked for
+  acceptance, no email sent and no App restart performed. Screenshot capture
+  only used the user's selected existing task and final log position. Earlier
+  Author Monitor runtime changes are recorded separately in commit `6110a80`.
+
+Evidence and the pre-update App/PDF are under
+`/private/tmp/gewu-guide-sep18/`. No research database migration, repair, file
+move or permission/grant change was performed.
+
+## Baseline method and evidence (September 16)
+
 
 All 49 registered topics were read against the installed macOS product, current
 UI labels and feature contracts, with source checks for changed behavior. This
@@ -73,38 +144,38 @@ instruction was checked and did not need a substantive rewrite.
 
 | Topic | Review result |
 |---|---|
-| [Welcome](../paper_monitor/user_guide.html#welcome) | Align the short name explanation with the physics-based research outlook and link to Product Identity; retain 1.0.0 / Build 1. |
+| [Welcome](../paper_monitor/user_guide.html#welcome) | Add Contact Us, default email client, recipient, subject and user-controlled sending; retain approved name/mission text and 1.0.0 / Build 1. |
 | [Guided Tour](../paper_monitor/user_guide.html#guided-tour) | Retain six-tab visual grammar, selection, pane sizing, search and separate Help window. |
-| [Your First Session](../paper_monitor/user_guide.html#first-session) | Correct Add Paper metadata-only behavior; retain the research-to-writing route. |
+| [Your First Session](../paper_monitor/user_guide.html#first-session) | Align managed Default placement and unclassified fallback with non-PDF files; retain the complete research-to-writing route. |
 | [System Architecture at a Glance](../paper_monitor/user_guide.html#system-overview) | Verify six workspaces, shared record, independent files and provider boundary. |
 | [The Persistent Paper Object](../paper_monitor/user_guide.html#persistent-paper-object) | Separate guarded automatic metadata from non-discarding file-import reconciliation. |
 | [Why SQLite Is the Core](../paper_monitor/user_guide.html#sqlite-core) | Retain SQLite authority, provenance, durable settings and coordinated file operations. |
-| [Visible Research Files](../paper_monitor/user_guide.html#visible-research-files) | Align the expanded classification list and Default exclusions. |
+| [Visible Research Files](../paper_monitor/user_guide.html#visible-research-files) | Correct Unknown/Other fallback and explicit secondary-type exclusions; preserve flat file properties and identity. |
 | [The Personal Research Workspace](../paper_monitor/user_guide.html#personal-research-workspace) | Retain six-tab model; organization and discovery do not imply extra physical copies. |
 | [From Discovery to Durable Memory](../paper_monitor/user_guide.html#research-loop) | Separate discovery of a published DOI from explicit acquisition of the PDF. |
-| [State, Scope, and Safe Change](../paper_monitor/user_guide.html#state-and-scope) | Correct Default physical placement and active-reference Recycle rules. |
-| [Library Layout](../paper_monitor/user_guide.html#library-layout) | Correct the informational breadcrumb and full Shortcut ancestry; retain the classified-file illustration. |
+| [State, Scope, and Safe Change](../paper_monitor/user_guide.html#state-and-scope) | Correct non-PDF Default placement; retain active-reference Recycle and shared-resource boundaries. |
+| [Library Layout](../paper_monitor/user_guide.html#library-layout) | Add separate footer task indicators, truncation/hover/overflow and Details routing; retain full Shortcut ancestry. |
 | [Navigate with Mouse and Keyboard](../paper_monitor/user_guide.html#navigation) | Verify independent saved selection, keyboard traversal and primary tab focus. |
-| [Folders, Shortcuts, and Spaces](../paper_monitor/user_guide.html#organize) | Document persistent source headings bounded by Details, nested headings, source menus and full Shortcut paths; update two illustrations. |
+| [Folders, Shortcuts, and Spaces](../paper_monitor/user_guide.html#organize) | Retain bounded source headings, shared table workflow and full Shortcut paths; replace symbolic-link-only wording with native Finder and associated-directory aliases. |
 | [Search, List View, and Table View](../paper_monitor/user_guide.html#search-views) | Document all four table sort headers and both directions; add the real table illustration and correct search scope. |
 | [Add Papers and Files](../paper_monitor/user_guide.html#import-files) | Correct the shared inline single-submit Add Paper workflow and post-add review. |
 | [Use Paper Details](../paper_monitor/user_guide.html#paper-details) | Verify compact two-row actions, Get DOI / Refresh Info, citation evidence and files separation. |
 | [Edit DOI and arXiv Identifiers](../paper_monitor/user_guide.html#identifiers) | Document Return, green saved/updated feedback, explicit correction and guarded refresh. |
-| [Refresh Info: One Paper, a Folder, or the Library](../paper_monitor/user_guide.html#loader-maintenance) | Verify the shared single/folder/all/import/automatic workflow, cooldowns, source retry and Pause/Continue. |
-| [Understand Paper Files](../paper_monitor/user_guide.html#paper-files) | Clarify Default placement, peer navigation and shared-resource deletion/protection. |
+| [Refresh Info: One Paper, a Folder, or the Library](../paper_monitor/user_guide.html#loader-maintenance) | Add linked-log Show in Library, close/return through Details, task history, terminal Stop and the distinct import/search controls; replace the changed screenshot. |
+| [Understand Paper Files](../paper_monitor/user_guide.html#paper-files) | Correct main-file ownership, non-PDF Default and last-file removal; distinguish transfer versus independent creation and remove menu ellipses. |
 | [Preview Files with Quick Look](../paper_monitor/user_guide.html#quick-look) | Document immediate selection updates, same-file reuse and hybrid Markdown handling. |
-| [Choose File Types and the Default File](../paper_monitor/user_guide.html#versions-current) | List all current file classifications, including the six additions, and preserve Default boundaries. |
-| [Add and Classify Attachments](../paper_monitor/user_guide.html#attachments) | Replace the obsolete type count and expanded-only drop claim; explain whole-column drops and specific data/code/note roles. |
+| [Choose File Types and the Default File](../paper_monitor/user_guide.html#versions-current) | Document automatic Unknown/Other fallback and non-PDF main placement while preserving manual choices and all classification labels. |
+| [Add and Classify Attachments](../paper_monitor/user_guide.html#attachments) | Add exact-content reimport reuse and preservation of changed/annotated bytes; retain whole-column drops and classification controls. |
 | [Download and Sync Versions](../paper_monitor/user_guide.html#download-sync) | Clarify independent background jobs, validation, Default placement and explicit Browser fallback. |
-| [Move a Standalone File into Paper Files](../paper_monitor/user_guide.html#drag-attach) | Retain adoption safeguards; update classification choices for notes, data and code. |
+| [Move a Standalone File into Paper Files](../paper_monitor/user_guide.html#drag-attach) | Document both internal directions, new Key on separation, card versus whole-paper moves, and external Finder copy boundaries. |
 | [Delete and Recover Items](../paper_monitor/user_guide.html#recycle) | Distinguish placement, resource and Empty Recycle actions; preserve active references and whole-folder Trash shape. |
-| [Use Folder Loader](../paper_monitor/user_guide.html#folder-loader) | Retain import settings, staged results and filename/content identifier discovery. |
+| [Use Folder Loader](../paper_monitor/user_guide.html#folder-loader) | Document background folder drops, live Details return, clickable log entries, safe Stop Import and saved results; clarify identity-based layout and exact-content reuse. |
 | [Make a Portable Desktop Copy](../paper_monitor/user_guide.html#desktop-copy) | Retain independent exported files, pointer resolution and no bidirectional desktop sync. |
 | [Back Up or Move to Another Mac](../paper_monitor/user_guide.html#backup-migrate) | Verify consistent SQLite plus managed-file backup, WAL and separate Browser/credential lifecycle. |
 | [My Publications](../paper_monitor/user_guide.html#my-publications) | Verify profile add/import/history, identifier resolver, citation comments and export. |
-| [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Verify Nature figures, calendar, field filters, provenance and configurable add destination. |
+| [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Retain discovery/filter/add workflows; clarify readable APS text labels. |
 | [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Verify subject matching, numeric counts, stored windows, exclusions and add destination. |
-| [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Add neutral network failure status and paced recovery; retain Hong Ding, unread scope and access cooldowns. |
+| [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Align daily discovery, profile citation arrow, cached papers on failed parsing, bounded retries, and Author-only missing-data completion; no periodic saved-paper refresh. |
 | [Browse, Bookmark, and Revisit Websites](../paper_monitor/user_guide.html#browser) | Update centered icon/title and both save-review images; clarify loaded-PDF reuse, native save arrows, source Key association and manual target correction. |
 | [Open Source Settings](../paper_monitor/user_guide.html#citation-settings) | Verify source controls, masked credential visibility and separate service tests. |
 | [arXiv Scope Settings](../paper_monitor/user_guide.html#arxiv-scope-settings) | Verify future discovery scope and grouped archive settings. |
@@ -112,16 +183,16 @@ instruction was checked and did not need a substantive rewrite.
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Use the current hybrid PDF-and-Markdown label; distinguish explicit all-native mode. |
 | [Default Add to Library Folder](../paper_monitor/user_guide.html#add-to-library-settings) | Verify choose/save, initial unsorted, overrides, stable folder ID and fallback. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Verify internal/system browser routing and Save Details preference. |
-| [AI Access](../paper_monitor/user_guide.html#ai-access) | Document opt-in directory browsing, current/existing connection controls, all seven tools, folder-to-Gewu-Key traversal, collection visibility and revision-bound pagination. Retain scoped file delivery and append-only analysis; replace the two changed Settings illustrations. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Verify all nine tools and scoped folder traversal; retain append-only analysis and temporary-copy release. Explain that remaining quota appears in tool results, not an App meter. |
 | [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Verify rename templates, naming scope and explicit preferences. |
-| [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Align Default physical promotion and shared active-reference ownership with filesystem/SQLite behavior. |
+| [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Document canonical Default including non-PDFs, secondary native Finder aliases and associated-directory aliases, stable canonical selection and protected collisions. |
 | [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Retain local/private data boundary and external provider/AI client responsibility. |
 | [Visual Identity and Cultural Elements](../paper_monitor/user_guide.html#visual-identity) | Add the approved name meaning and software-mission connection, ending with the exact English/parenthesized Chinese sentence. Preserve glyph provenance, artwork and continuous Product Identity PDF chapters. |
 | [Keyboard Shortcuts](../paper_monitor/user_guide.html#keyboard) | Verify contextual shortcuts for workspace, Browser, Quick Look and editing. |
 | [Publisher and Network Access](../paper_monitor/user_guide.html#network-access) | Distinguish transport/VPN/secure-connection failures from publisher restrictions; retain access protections. |
-| [Startup, Monitor Cache, and Text Size](../paper_monitor/user_guide.html#startup) | Add transport retries before the ordinary 10:00 author schedule; retain private-session recovery and paused-job behavior. |
-| [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Add identifier correction, partial refresh, active file in Recycle and search limitations. |
-| [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Verify physical folders, SQLite and caches without introducing private paths into the manual. |
+| [Startup, Monitor Cache, and Text Size](../paper_monitor/user_guide.html#startup) | Document direct startup without whole-library reorganization/backups, narrowly scoped interrupted-move recovery and bounded Author Monitor retries. |
+| [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Add terminal Stop, same-file duplicate-card reporting and Contact Us; correct non-PDF protected-main-file advice. |
+| [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Align main-root description with canonical files and Finder aliases; retain SQLite, managed roots and disposable caches. |
 
 ## Version and reproducibility
 
@@ -132,7 +203,7 @@ contain the same PDF. Internal links and the complete screenshot inventory are
 checked automatically. Product Identity chapters 4-1 through 4-4 keep their
 numbering and continuous flow in the builder.
 
-## Validation
+## Baseline validation (September 16)
 
 - All 27 Guide/audit tests and six PDF structure checks pass after the
   name-and-mission follow-up. Python compilation and `git diff --check` pass. The existing

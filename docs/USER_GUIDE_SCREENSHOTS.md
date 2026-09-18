@@ -1,6 +1,19 @@
 # User Guide screenshot inventory
 
-Edition: September 16, 2026 · Version 1.0.0 / Build 1. HTML and PDF use the same 35 packaged PNG captures.
+Edition: September 18, 2026 · Version 1.0.0 / Build 1. HTML and PDF use the same 35 packaged PNG captures.
+
+## September 18 follow-up
+
+Only `loader-metadata.png` was recaptured; the other 34 illustrations remain.
+The user opened an existing completed Refresh Info folder task, then selected the
+preferred log position. The full original standalone window was captured through
+the user-authorized Core Graphics API at 2440 × 1616, with no CUA overlay,
+cursor halo, repainting or cropping. No task was started or stopped and no paper
+entry was clicked for functional acceptance. The discarded first capture is not
+packaged. The new caption explains the completed state and partial source results.
+The retained Browser illustrations already show the centered icon next to its
+title; they do not need another recapture. Earlier capture counts below refer to
+their original September 16 pass.
 
 ## Capture rules
 
@@ -26,8 +39,8 @@ Edition: September 16, 2026 · Version 1.0.0 / Build 1. HTML and PDF use the sam
 | Organize Folders, Shortcuts, and Spaces | [shortcut-path.png](../assets/user-guide/screenshots/shortcut-path.png) | Sep 16 | A shortcut retains its full path. The footer starts at Library and includes the shortcut target and selected folder. The heading identifies the shortcut while Paper Details remains independent. |
 | Search and Change Views | [library-search.png](../assets/user-guide/screenshots/library-search.png) | Sep 13; reviewed Sep 16 | Search Library. Library search finds saved items across Library and Spaces. Select a result or use Show in Library to reveal its folder location. |
 | Search and Change Views | [library-table.png](../assets/user-guide/screenshots/library-table.png) | Sep 16 | Table View sorting. The Year arrow shows descending order. The same headers work in Library and shortcuts. This existing paper's Published version remains Default, with a separate Summary in Paper Files. |
-| Refresh Info: One Paper, a Folder, or the Library | [loader-metadata.png](../assets/user-guide/screenshots/loader-metadata.png) | Sep 13; reviewed Sep 16 | Refresh All Metadata. The maintenance window shows its Library scope, metadata mode and skip rule before Start Refresh. |
-| Refresh Info: One Paper, a Folder, or the Library | [loader-identifiers.png](../assets/user-guide/screenshots/loader-identifiers.png) | Sep 9; reviewed Sep 16 | Find All Missing Identifiers. Start Search checks eligible Library PDFs for missing identifiers. The right pane explains the source policy and retry cooldowns. |
+| Refresh Info: One Paper, a Folder, or the Library | [loader-metadata.png](../assets/user-guide/screenshots/loader-metadata.png) | Sep 18 | Completed folder task selected by the user, with Pause/Stop, Refresh tasks history and per-paper log. |
+| Refresh Info: One Paper, a Folder, or the Library | [loader-metadata.png](../assets/user-guide/screenshots/loader-metadata.png) | Sep 18 | Completed folder task selected by the user, with Pause/Stop, Refresh tasks history and per-paper log. |
 | Preview Files with Quick Look | [pdf-quick-look.png](../assets/user-guide/screenshots/pdf-quick-look.png) | Sep 9; reviewed Sep 16 | Built-in PDF Quick Look. The selected Library PDF appears with page thumbnails and Open in Preview. The document and thumbnail column scroll independently. |
 | Preview Files with Quick Look | [markdown-quick-look.png](../assets/user-guide/screenshots/markdown-quick-look.png) | Sep 9; reviewed Sep 16 | Built-in Markdown Quick Look. This existing README.md renders headings and links. Remote images remain explicit links; nearby local images can appear inline. |
 | Use Folder Loader | [folder-loader.png](../assets/user-guide/screenshots/folder-loader.png) | Sep 9; reviewed Sep 16 | Folder Loader. Choose a source directory and metadata mode before Import. The live log and Result Guide fill the remaining window height and scroll independently. |
