@@ -459,6 +459,12 @@ def run_ui_server(
         configure_semantic_scholar_api_key(
             credential_storage.get_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, "")
         )
+        if (not documentation_mode
+                and db_path.parent.resolve() == LIBRARY_LOCAL_COPY_ROOT.resolve().parent):
+            # Only replay unfinished move journals before workers can touch the
+            # same files. No Library scan, layout migration or database backup.
+            from .file_layout_journal import recover
+            recover(credential_storage)
     finally:
         credential_storage.close()
     prewarm_author_monitor_photo_cache(db_path)

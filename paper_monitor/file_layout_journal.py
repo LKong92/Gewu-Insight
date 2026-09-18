@@ -1,4 +1,4 @@
-"""Recover interrupted managed-file relocations before the next UI startup."""
+"""Recover only journaled file moves, independently of Library maintenance."""
 from __future__ import annotations
 
 import json
@@ -41,6 +41,8 @@ class MoveJournal:
 
 
 def recover(storage):
+    # An absent/empty journal directory performs no paper/resource queries or
+    # file changes. Do not attach full-library repair or backup work here.
     root = storage.db_path.parent / "file-layout-recovery"
     recovered = 0
     for path in sorted(root.glob("*.json")):

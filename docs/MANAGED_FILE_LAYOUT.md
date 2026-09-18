@@ -70,11 +70,17 @@ rollback; consult the path report when reverting physical layout.
 Each normalization holds SQLite's writer lock and rechecks resource paths and
 preferences before moving files. A journal records each exclusive filesystem
 move before it happens; failed transactions restore moved originals and displaced
-aliases. Explicit recovery restores an uncommitted move or retains a committed
+aliases. Journal recovery restores an uncommitted move or retains a committed
 destination. Ambiguous external changes stop recovery for review instead of
 overwriting bytes. Pending alias projections survive interruption and are
 retried by later file operations or explicit maintenance, not by normal startup.
-Interrupted move journals are retained for explicit maintenance recovery.
+Before workers start, the App checks only the dedicated unfinished-move journal
+directory. An absent/empty directory triggers no paper/resource queries or file
+changes. An existing journal identifies the exact resources and paths to recover;
+there is no Library scan, historical duplicate cleanup, alias reconciliation or
+database backup. Documentation mode and mismatched custom roots skip recovery.
+Conflicting external changes preserve the files and journal and stop recovery
+before workers start, rather than overwriting data.
 Saved attachments are not removed merely because a later alias operation failed.
 
 ## Validation
@@ -93,3 +99,13 @@ user subsequently restarted it and checked the result, confirming it looks good.
 The backed-up startup reconciliation handled 579 works and deferred four cases
 where real directories occupied alias destinations, preserving those directories.
 Read-only health and root-page checks passed after startup.
+
+The separate journal-recovery follow-up passed 32 isolated checks (1.403 s),
+including six startup tests with real temporary SQLite/files and disabled
+UI/network workers. They verify unchanged files with absent/empty journals,
+uncommitted and committed moves, interruption between link/unlink, preserved
+external conflicts, idempotency, recovery before workers, and documentation/custom
+root exclusions. Both maintenance entry points are forbidden by these fixtures,
+and no maintenance backup directories are created. Python compilation and diff
+checks passed. The agent did not restart or manually operate the original App;
+the user subsequently reported restarting it.
