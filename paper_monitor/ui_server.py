@@ -28410,21 +28410,47 @@ INDEX_HTML = """<!doctype html>
       border-color: rgba(255, 255, 255, 0.42);
       background: rgba(255, 255, 255, 0.12);
     }
-    .my-publications-row.dragging td {
-      opacity: 0.68;
-      background: #ffffff;
-      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
-      transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
+    .my-publications-row.dragging { opacity: 0.48; }
+    /* Author / publication sorting feedback never participates in list layout. */
+    .list-reorder-drag-image {
+      position: fixed;
+      z-index: 10100;
+      pointer-events: none;
+      box-sizing: border-box;
+      max-width: calc(100vw - 24px);
+      padding: 8px 12px;
+      border: 1px solid rgba(52, 120, 237, 0.3);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.92);
+      color: #253348;
+      box-shadow: 0 5px 18px rgba(25, 44, 73, 0.17);
+      font: 500 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    .my-publications-row.drag-over-before td {
-      transform: translateY(24px);
-      box-shadow: 0 -20px 0 rgba(31, 79, 122, 0.14), inset 0 3px 0 var(--accent);
-      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    .list-reorder-drag-image > div {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .my-publications-row.drag-over-after td {
-      transform: translateY(-24px);
-      box-shadow: 0 20px 0 rgba(31, 79, 122, 0.14), inset 0 -3px 0 var(--accent);
-      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    .list-reorder-drag-image > div + div { color: #667085; font-size: 12px; font-weight: 400; }
+    .list-reorder-marker {
+      position: fixed;
+      z-index: 10101;
+      pointer-events: none;
+      height: 2px;
+      border-radius: 1px;
+      background: #3478ed;
+    }
+    .list-reorder-marker::before {
+      content: "";
+      position: absolute;
+      box-sizing: border-box;
+      width: 8px;
+      height: 8px;
+      left: -4px;
+      top: -3px;
+      border: 2px solid #3478ed;
+      border-radius: 50%;
+      background: #fff;
     }
     .my-publications-title-cell {
       display: flex;
@@ -31780,8 +31806,6 @@ INDEX_HTML = """<!doctype html>
     .author-monitor-author[draggable="true"] { cursor: grab; }
     .author-monitor-author[draggable="true"]:active { cursor: grabbing; }
     .author-monitor-author.dragging { opacity: 0.48; }
-    .author-monitor-author.drag-over-before { box-shadow: inset 0 3px 0 var(--accent); }
-    .author-monitor-author.drag-over-after { box-shadow: inset 0 -3px 0 var(--accent); }
     .author-monitor-avatar {
       width: 38px;
       height: 38px;
@@ -47769,9 +47793,63 @@ INDEX_HTML = """<!doctype html>
       return `${clean.replace(/[.。]+$/g, "")}.`;
     }
 
+    let listReorderMarker = null;
+    let listReorderMarkerRow = null;
+
+    function clearListReorderMarker(row = null) {
+      if (row && row !== listReorderMarkerRow) return;
+      listReorderMarker?.remove();
+      listReorderMarker = null;
+      listReorderMarkerRow = null;
+    }
+
+    function showListReorderMarker(row, after) {
+      const rect = row.getBoundingClientRect();
+      const scroller = row.closest(".author-monitor-authors, .my-publications-table-wrap");
+      const bounds = scroller?.getBoundingClientRect() || {left: 0, right: window.innerWidth, top: 0, bottom: window.innerHeight};
+      const top = after ? rect.bottom : rect.top;
+      const left = Math.max(rect.left + 5, bounds.left + 5);
+      const right = Math.min(rect.right - 4, bounds.right - 5);
+      if (!row.isConnected || right <= left || top < bounds.top || top > bounds.bottom) {
+        clearListReorderMarker();
+        return;
+      }
+      if (!listReorderMarker) {
+        listReorderMarker = document.createElement("div");
+        listReorderMarker.className = "list-reorder-marker";
+        listReorderMarker.setAttribute("aria-hidden", "true");
+        document.body.appendChild(listReorderMarker);
+      }
+      listReorderMarkerRow = row;
+      Object.assign(listReorderMarker.style, {left: `${left}px`, top: `${top - 1}px`, width: `${right - left}px`});
+    }
+
+    function setListReorderDragImage(row, event) {
+      clearListReorderMarker();
+      const preview = document.createElement("div");
+      preview.className = "list-reorder-drag-image";
+      preview.setAttribute("aria-hidden", "true");
+      for (const selector of [".my-publications-title-text, .author-monitor-author-name", ".my-publications-id, .author-monitor-author-affiliation"]) {
+        const text = row.querySelector(selector)?.textContent?.trim();
+        if (!text) continue;
+        const line = document.createElement("div");
+        line.textContent = text;
+        preview.appendChild(line);
+      }
+      preview.style.width = `${Math.min(480, Math.max(160, row.getBoundingClientRect().width))}px`;
+      document.body.appendChild(preview);
+      preview.style.left = `${Math.max(8, Math.min(window.innerWidth - preview.offsetWidth - 8, event.clientX))}px`;
+      preview.style.top = `${Math.max(8, Math.min(window.innerHeight - preview.offsetHeight - 8, event.clientY))}px`;
+      event.dataTransfer?.setDragImage(preview, 18, 16);
+      // Leave it mounted until WebKit has captured the native drag image.
+      window.setTimeout(() => preview.remove(), 0);
+    }
+
     function wireMyPublicationInteractions() {
       const shell = $("libraryShell");
       if (!shell) return;
+      if (listReorderMarkerRow && !listReorderMarkerRow.isConnected) clearListReorderMarker();
+      shell.querySelector(".my-publications-table-wrap")?.addEventListener("scroll", clearMyPublicationDragMarkers, {passive: true});
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (state.suppressClickOnce) {
@@ -47811,14 +47889,20 @@ INDEX_HTML = """<!doctype html>
           }
           event.dataTransfer?.setData("text/plain", row.dataset.publicationId || "");
           event.dataTransfer?.setData("application/x-my-publication-id", row.dataset.publicationId || "");
+          setListReorderDragImage(row, event);
           row.classList.add("dragging");
         });
         row.addEventListener("dragover", (event) => {
+          if (!event.dataTransfer?.types?.includes("application/x-my-publication-id") || row.classList.contains("dragging")) {
+            clearMyPublicationDragMarkers();
+            return;
+          }
           event.preventDefault();
-          clearMyPublicationDragMarkers();
-          row.classList.add(myPublicationDropPosition(row, event) === "after" ? "drag-over-after" : "drag-over-before");
+          showListReorderMarker(row, myPublicationDropPosition(row, event) === "after");
         });
-        row.addEventListener("dragleave", () => row.classList.remove("drag-over-before", "drag-over-after"));
+        row.addEventListener("dragleave", (event) => {
+          if (!row.contains(event.relatedTarget)) clearListReorderMarker(row);
+        });
         row.addEventListener("dragend", () => {
           row.classList.remove("dragging");
           clearMyPublicationDragMarkers();
@@ -47826,7 +47910,7 @@ INDEX_HTML = """<!doctype html>
         row.addEventListener("drop", async (event) => {
           event.preventDefault();
           const position = myPublicationDropPosition(row, event);
-          row.classList.remove("drag-over-before", "drag-over-after");
+          clearMyPublicationDragMarkers();
           const draggedId = Number(event.dataTransfer?.getData("application/x-my-publication-id") || event.dataTransfer?.getData("text/plain") || 0);
           const targetId = Number(row.dataset.publicationId || 0);
           if (draggedId && targetId && draggedId !== targetId) await reorderMyPublications(draggedId, targetId, position);
@@ -47998,9 +48082,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function clearMyPublicationDragMarkers() {
-      document.querySelectorAll(".my-publications-row.drag-over-before, .my-publications-row.drag-over-after").forEach((row) => {
-        row.classList.remove("drag-over-before", "drag-over-after");
-      });
+      clearListReorderMarker();
     }
 
     function rightDragSelectIsInteractiveTarget(target) {
@@ -53088,6 +53170,7 @@ INDEX_HTML = """<!doctype html>
     function renderAuthorMonitorRail() {
       const root = $("authorMonitorAuthors");
       if (!root) return;
+      if (root.contains(listReorderMarkerRow)) clearListReorderMarker();
       const previousScroll = Number(root.scrollTop || state.authorMonitorRailScrollTop || 0);
       const totalUnread = state.authorMonitors.reduce((sum, author) => sum + Number(author.unread_count || 0), 0);
       root.innerHTML = `
@@ -53130,23 +53213,27 @@ INDEX_HTML = """<!doctype html>
           });
           row.addEventListener("dragstart", (event) => {
             state.authorMonitorDragId = Number(author.id);
+            setListReorderDragImage(row, event);
             row.classList.add("dragging");
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", String(author.id));
           });
           row.addEventListener("dragover", (event) => {
             const draggedId = Number(state.authorMonitorDragId || event.dataTransfer.getData("text/plain") || 0);
-            if (!draggedId || draggedId === Number(author.id)) return;
+            if (!draggedId || draggedId === Number(author.id)) {
+              clearListReorderMarker();
+              return;
+            }
             event.preventDefault();
             const rect = row.getBoundingClientRect();
             const after = event.clientY > rect.top + rect.height / 2;
-            row.classList.toggle("drag-over-before", !after);
-            row.classList.toggle("drag-over-after", after);
+            showListReorderMarker(row, after);
           });
-          row.addEventListener("dragleave", () => {
-            row.classList.remove("drag-over-before", "drag-over-after");
+          row.addEventListener("dragleave", (event) => {
+            if (!row.contains(event.relatedTarget)) clearListReorderMarker(row);
           });
           row.addEventListener("drop", (event) => {
+            clearListReorderMarker();
             const draggedId = Number(state.authorMonitorDragId || event.dataTransfer.getData("text/plain") || 0);
             if (!draggedId || draggedId === Number(author.id)) return;
             event.preventDefault();
@@ -53155,8 +53242,9 @@ INDEX_HTML = """<!doctype html>
           });
           row.addEventListener("dragend", () => {
             state.authorMonitorDragId = 0;
+            clearListReorderMarker();
             root.querySelectorAll(".author-monitor-author").forEach((item) => {
-              item.classList.remove("dragging", "drag-over-before", "drag-over-after");
+              item.classList.remove("dragging");
             });
           });
         }
@@ -53165,6 +53253,7 @@ INDEX_HTML = """<!doctype html>
       state.authorMonitorRailScrollTop = previousScroll;
       root.addEventListener("scroll", () => {
         state.authorMonitorRailScrollTop = root.scrollTop;
+        clearListReorderMarker();
       }, {passive: true});
     }
 
