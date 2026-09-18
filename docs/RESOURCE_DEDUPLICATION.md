@@ -27,10 +27,11 @@ separate paper identities by hash. MCP analysis permissions are unchanged.
 
 ## Existing duplicate repair
 
-Normal App startup checks legacy duplicates before starting background workers.
-Documentation mode and mismatched custom database roots skip repair. Existing
-interrupted file-layout moves are recovered first. The check runs once; protected
-or conflicting cases are recorded for review rather than repeatedly scanned.
+Normal App startup does not check or repair legacy duplicates or create repair
+backups. Import-time duplicate prevention remains active. The historical repair
+routine is retained for explicit development maintenance and skips mismatched
+custom database roots. It recovers interrupted moves first; protected or
+conflicting cases are recorded for review rather than repeatedly scanned.
 
 Each duplicate group is verified again under SQLite's writer lock. The repair
 keeps a manual Default where present, otherwise the existing primary resource,
@@ -47,8 +48,9 @@ are merged. Original external linked files and files referenced by another paper
 are not removed. The surviving physical file is always retained. Per-group JSON
 reports and archived rows support recovery; interruption before commit keeps the
 originals, while interruption after commit resumes only the verified cleanup.
-Changed files are retained and reported. File and Associated Files aliases are
-then synchronized by the existing layout repair.
+Changed files are retained and reported. Explicit maintenance must follow this
+repair with the existing layout repair to synchronize file and Associated Files
+aliases. Normal startup does not resume historical duplicate-file cleanup.
 
 Do not restore the database alone as a filesystem rollback. Use its matching
 per-group reports and saved file copies. No backup bytes are deleted by this

@@ -459,11 +459,6 @@ def run_ui_server(
         configure_semantic_scholar_api_key(
             credential_storage.get_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, "")
         )
-        if not documentation_mode:
-            from .resource_dedup_migration import migrate as deduplicate_resources
-            deduplicate_resources(credential_storage)
-            from .file_layout_migration import migrate
-            migrate(credential_storage)
     finally:
         credential_storage.close()
     prewarm_author_monitor_photo_cache(db_path)

@@ -57,11 +57,11 @@ problems remain visible as errors/warnings for later review.
 
 ## Recovery and existing libraries
 
-On first normal UI startup, before workers start, the managed-library migration
-takes an SQLite backup and reconciles saved works with multiple resources or
-placements, My Publications references, or existing attachment storage. A custom
-database with mismatched managed roots is skipped. Documentation mode skips the
-migration. No database schema change is required.
+Normal UI startup does not run managed-library reconciliation or make a database
+backup. Layout is maintained by the file operations described above. The earlier
+historical repair remains available as an explicit development maintenance
+routine; it backs up SQLite before reconciling saved works. A custom database
+with mismatched managed roots is skipped. No database schema change is required.
 
 Backups and a per-paper before/after path report are written beneath
 `data/file-layout-backups/`. A backup database is not by itself a filesystem
@@ -70,11 +70,12 @@ rollback; consult the path report when reverting physical layout.
 Each normalization holds SQLite's writer lock and rechecks resource paths and
 preferences before moving files. A journal records each exclusive filesystem
 move before it happens; failed transactions restore moved originals and displaced
-aliases. Startup recovery restores an uncommitted move or retains a committed
+aliases. Explicit recovery restores an uncommitted move or retains a committed
 destination. Ambiguous external changes stop recovery for review instead of
 overwriting bytes. Pending alias projections survive interruption and are
-retried on the next startup. Saved attachments are not removed merely because
-a later alias operation failed.
+retried by later file operations or explicit maintenance, not by normal startup.
+Interrupted move journals are retained for explicit maintenance recovery.
+Saved attachments are not removed merely because a later alias operation failed.
 
 ## Validation
 

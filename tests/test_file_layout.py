@@ -167,7 +167,7 @@ class FileLayoutTests(unittest.TestCase):
             self.assertEqual(target.exists(), committed)
             self.assertEqual(paths[0].exists(), not committed)
 
-    def test_startup_migration_keeps_backup_and_does_not_repeat(self):
+    def test_explicit_migration_keeps_backup_and_does_not_repeat(self):
         _, resources, paths = self.fixture()
         report = migrate(self.storage)
         self.assertFalse(report['errors'])
@@ -232,7 +232,7 @@ class FileLayoutTests(unittest.TestCase):
                 self.assertEqual([r['id'] for r in files], ids)
         self.assertEqual(sorted(p.read_bytes() for p in source.rglob('*.pdf')), sorted(contents))
 
-    def test_pending_alias_failure_is_repaired_on_next_startup(self):
+    def test_pending_alias_failure_is_repaired_by_explicit_maintenance(self):
         _, _, paths = self.fixture()
         migrate(self.storage)
         path = paths[0]
