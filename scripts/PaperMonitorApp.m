@@ -950,6 +950,10 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
         if ([message.body isKindOfClass:[NSDictionary class]]) {
             NSDictionary *payload = (NSDictionary *)message.body;
             type = [payload[@"type"] isKindOfClass:[NSString class]] ? payload[@"type"] : type;
+            if ([type isEqualToString:@"show-paper"] && message.webView == self.loaderWebView) {
+                [self showLoaderPaperInLibrary:payload];
+                return;
+            }
         }
         if ([type isEqualToString:@"open"]) {
             [self showLibraryLoaderWindow];
@@ -2457,6 +2461,28 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSURLComponents *components = [NSURLComponents componentsWithURL:self.url resolvingAgainstBaseURL:NO];
     components.queryItems = @[[[NSURLQueryItem alloc] initWithName:@"standalone" value:@"loader"]];
     return components.URL ?: self.url;
+}
+
+- (void)showLoaderPaperInLibrary:(NSDictionary *)payload {
+    NSString *paperId = [payload[@"paper_id"] isKindOfClass:NSString.class] ? payload[@"paper_id"] : @"";
+    NSNumber *itemId = [payload[@"library_item_id"] isKindOfClass:NSNumber.class] ? payload[@"library_item_id"] : @0;
+    if (!paperId.length) return;
+    // Arguments are passed as values, never interpolated into JavaScript.
+    [self.webView callAsyncJavaScript:
+        @"try { await window.revealLoaderPaper(paperId, itemId); return ''; } catch (error) { return error.message || 'Could not show paper in Library.'; }"
+        arguments:@{@"paperId": paperId, @"itemId": itemId}
+        inFrame:nil inContentWorld:WKContentWorld.pageWorld
+        completionHandler:^(id result, NSError *error) {
+            NSString *message = error ? @"Could not show paper in Library. Please try again."
+                : ([result isKindOfClass:NSString.class] ? result : @"");
+            if (!message.length) {
+                [self.loaderWindow orderOut:nil];
+                [self.window makeKeyAndOrderFront:nil];
+                [NSApp activateIgnoringOtherApps:YES];
+            }
+            [self.loaderWebView callAsyncJavaScript:@"window.finishLoaderPaperReveal(errorMessage);"
+                arguments:@{@"errorMessage": message} inFrame:nil inContentWorld:WKContentWorld.pageWorld completionHandler:nil];
+        }];
 }
 
 - (void)showLibraryLoaderWindow {

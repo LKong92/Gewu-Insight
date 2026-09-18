@@ -499,6 +499,7 @@ def execute_import(
                 result["warnings"].append(f"Skipping non-object file record at index {index}.")
                 continue
             record = normalize_record(raw)
+            library_item = None
             source_path = record["source_path"]
             source = Path(source_path) if source_path else None
             reusable_path = reusable_stored_path(storage, record, copy_mode=result["copy_mode"])
@@ -560,7 +561,7 @@ def execute_import(
                         upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                     if result["preserve_folders"]:
                         folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                        _, created = ensure_imported_library_item(
+                        library_item, created = ensure_imported_library_item(
                             storage,
                             paper_id=paper_id,
                             folder_id=folder_id,
@@ -570,6 +571,10 @@ def execute_import(
                             result["library_items_created"] += 1
                         else:
                             result["library_items_existing"] += 1
+                    emit_progress(progress_callback, stage="import",
+                                  message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                                  current=index + 1, total=total, paper_id=paper_id,
+                                  library_item_id=library_item["id"] if library_item else None)
                     continue
                 stored_path = ""
                 if reusable_path:
@@ -596,7 +601,7 @@ def execute_import(
                     upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    _, created = ensure_imported_library_item(
+                    library_item, created = ensure_imported_library_item(
                         storage,
                         paper_id=paper_id,
                         folder_id=folder_id,
@@ -606,6 +611,10 @@ def execute_import(
                         result["library_items_created"] += 1
                     else:
                         result["library_items_existing"] += 1
+                emit_progress(progress_callback, stage="import",
+                              message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                              current=index + 1, total=total, paper_id=paper_id,
+                              library_item_id=library_item["id"] if library_item else None)
                 continue
 
             if import_as == "resource":
@@ -636,7 +645,7 @@ def execute_import(
                         append_limited(result["resources_to_import"], resource_plan(record), 500)
                     if result["preserve_folders"]:
                         folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                        _, created = ensure_imported_library_item(
+                        library_item, created = ensure_imported_library_item(
                             storage,
                             paper_id=paper_id,
                             folder_id=folder_id,
@@ -646,6 +655,10 @@ def execute_import(
                             result["library_items_created"] += 1
                         else:
                             result["library_items_existing"] += 1
+                    emit_progress(progress_callback, stage="import",
+                                  message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                                  current=index + 1, total=total, paper_id=paper_id,
+                                  library_item_id=library_item["id"] if library_item else None)
                     continue
                 stored_path = ""
                 if reusable_path:
@@ -671,7 +684,7 @@ def execute_import(
                 append_limited(result["resources_to_import"], resource_plan(record), 500)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    _, created = ensure_imported_library_item(
+                    library_item, created = ensure_imported_library_item(
                         storage,
                         paper_id=paper_id,
                         folder_id=folder_id,
@@ -681,6 +694,10 @@ def execute_import(
                         result["library_items_created"] += 1
                     else:
                         result["library_items_existing"] += 1
+                emit_progress(progress_callback, stage="import",
+                              message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                              current=index + 1, total=total, paper_id=paper_id,
+                              library_item_id=library_item["id"] if library_item else None)
                 continue
 
             result["skipped"] += 1
@@ -931,6 +948,8 @@ def emit_progress(
     total: int | None = None,
     files_scanned: int | None = None,
     directories_scanned: int | None = None,
+    paper_id: str | None = None,
+    library_item_id: int | None = None,
 ) -> None:
     if not progress_callback:
         return
@@ -940,6 +959,10 @@ def emit_progress(
             event["files_scanned"] = files_scanned
         if directories_scanned is not None:
             event["directories_scanned"] = directories_scanned
+        if paper_id:
+            event["paper_id"] = paper_id
+        if library_item_id:
+            event["library_item_id"] = library_item_id
         progress_callback(event)
     except ImportCancelled:
         raise

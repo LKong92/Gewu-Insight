@@ -1949,6 +1949,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            paper_id = storage.resolve_paper_id(paper_id)
             paper = storage.get_paper(paper_id)
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -1961,7 +1962,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             navigation = library_navigation_snapshot(storage)
         finally:
             storage.close()
-        self.send_json({"items": items, **navigation})
+        self.send_json({"paper_id": paper_id, "items": items, **navigation})
 
     def handle_my_publications(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
@@ -12290,6 +12291,7 @@ def recover_imported_pdf_identifiers(
             log_library_import_job(
                 job_id,
                 f"Recovering identifier {index} / {total}: {pdf_path.name}",
+                paper_id=str(paper.get("paper_id") or ""),
             )
         found = extract_identifier_from_pdf_or_title(
             pdf_path,
@@ -12328,6 +12330,7 @@ def recover_imported_pdf_identifiers(
             log_library_import_job(
                 job_id,
                 f"Recovered {kind.upper()} via {source}: {label}",
+                paper_id=paper_id,
             )
     result["identifiers_recovered"] = len(recovered)
     result["identifier_recovery_unresolved"] = max(0, total - len(recovered))
@@ -12364,7 +12367,8 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
         update_library_import_job(job_id, stage="stopping" if library_import_cancel_requested(job_id) else "metadata",
                                   current=job["current"], total=job["total"], percent=min(99, job["percent"]))
         if job["logs"] and job["current"] != last_progress:
-            log_library_import_job(job_id, job["logs"][-1]["message"])
+            entry = next((entry for entry in reversed(job["logs"]) if entry.get("paper_id")), job["logs"][-1])
+            log_library_import_job(job_id, entry["message"], level=entry.get("level", "info"), paper_id=entry.get("paper_id"))
         last_progress = job["current"]
     metadata_jobs.run_job(storage, refresh_job["job_id"], progress=progress)
     job = metadata_jobs.get(storage, refresh_job["job_id"])
@@ -12374,6 +12378,7 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
         progress(job)
         time.sleep(.2)
         job = metadata_jobs.get(storage, refresh_job["job_id"])
+    progress(job)
     counts = job["counts"]
     result.update(doi_metadata_refreshed=job["changed_count"], identifier_metadata_refreshed=job["changed_count"], metadata_counts=counts)
     if job_id:
@@ -12619,6 +12624,7 @@ def run_library_identifier_recovery_job(
             log_library_import_job(
                 job_id,
                 f"Finding identifier {index} / {total}: {label}",
+                paper_id=paper_id,
             )
             refresh_id = record_metadata_refresh_start(
                 storage,
@@ -12652,6 +12658,7 @@ def run_library_identifier_recovery_job(
                         job_id,
                         f"No confident identifier found: {label}",
                         level="warn",
+                        paper_id=paper_id,
                     )
                 else:
                     recorded = record_recovered_identifier(
@@ -12688,6 +12695,7 @@ def run_library_identifier_recovery_job(
                     log_library_import_job(
                         job_id,
                         f"Recovered {kind.upper()} via {source}: {clean_text(refreshed.get('title') or identifier)}",
+                        paper_id=paper_id,
                     )
             except Exception as exc:
                 failed_count += 1
@@ -12703,6 +12711,7 @@ def run_library_identifier_recovery_job(
                     job_id,
                     f"Identifier recovery failed for {label}: {exc}",
                     level="warn",
+                    paper_id=paper_id,
                 )
             if used_title_lookup:
                 time.sleep(0.75)
@@ -20027,14 +20036,20 @@ def library_import_cancel_requested(job_id: str) -> bool:
         return bool(job and job.get("cancel_requested"))
 
 
-def log_library_import_job(job_id: str, message: str, *, level: str = "info") -> None:
+def log_library_import_job(job_id: str, message: str, *, level: str = "info", paper_id: str | None = None,
+                           library_item_id: int | None = None) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     with LIBRARY_IMPORT_JOBS_LOCK:
         job = LIBRARY_IMPORT_JOBS.get(job_id)
         if not job:
             return
         logs = job.setdefault("logs", [])
-        logs.append({"time": stamp, "level": level, "message": message})
+        entry = {"time": stamp, "level": level, "message": message}
+        if paper_id:
+            entry["paper_id"] = str(paper_id)
+            if library_item_id:
+                entry["library_item_id"] = int(library_item_id)
+        logs.append(entry)
         if len(logs) > 20000:
             del logs[:-20000]
 
@@ -20062,7 +20077,7 @@ def library_import_progress_callback(job_id: str):
             updates["scan_dirs"] = int(event.get("directories_scanned") or 0)
         update_library_import_job(job_id, **updates)
         if message:
-            log_library_import_job(job_id, message)
+            log_library_import_job(job_id, message, paper_id=event.get("paper_id"), library_item_id=event.get("library_item_id"))
 
     return progress
 
@@ -28993,6 +29008,10 @@ INDEX_HTML = """<!doctype html>
     .loader-line.done { color: #ccfbf1; border-left-color: #14b8a6; background: rgba(20, 184, 166, 0.12); }
     .loader-line.error { color: #fecaca; border-left-color: #ef4444; background: rgba(239, 68, 68, 0.12); }
     .loader-line.warn { color: #fde68a; border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+    .loader-line[data-paper-id] { cursor: pointer; }
+    .loader-line[data-paper-id]:hover { box-shadow: inset 0 0 0 1px #64748b; }
+    .loader-line[data-paper-id]:hover .loader-message { text-decoration: underline; text-underline-offset: 3px; }
+    .loader-line[data-paper-id]:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
     .loader-badge {
       display: inline-flex;
       justify-content: center;
@@ -38428,7 +38447,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function navigateToPaperInLibrary(paperId, preferredItemId = 0) {
-      await refreshLibrarySnapshotForNavigation(paperId);
+      const snapshot = await refreshLibrarySnapshotForNavigation(paperId);
+      paperId = String(snapshot?.paper_id || paperId);
       const preferredItem = Number(preferredItemId || 0)
         ? libraryItemById(Number(preferredItemId))
         : null;
@@ -41522,6 +41542,7 @@ INDEX_HTML = """<!doctype html>
 	    }
 
     function renderLibraryLoader() {
+      if (state.libraryLoaderLogPointerDown) return;
       const backdrop = $("libraryLoaderBackdrop");
       const root = $("libraryLoaderModalBody");
       if (!backdrop || !root) return;
@@ -41606,6 +41627,7 @@ INDEX_HTML = """<!doctype html>
           </div>
           ${refreshMode ? metadataJobHistoryMarkup() : loaderHistoryMarkup()}
           ${result ? `<div class="loader-result">${escapeHtml(loaderResultSummary(result))}</div>` : ""}
+          ${state.libraryLoaderNavigationError ? `<div class="status err" role="alert">${escapeHtml(state.libraryLoaderNavigationError)}</div>` : ""}
           <div class="loader-main">
             <div class="loader-console-wrap">
               <div class="loader-console" id="libraryLoaderConsole">${loaderConsoleMarkup(job)}</div>
@@ -41622,6 +41644,7 @@ INDEX_HTML = """<!doctype html>
       if (consoleEl) {
         consoleEl.scrollTop = state.libraryImportFollowLatest || consoleWasAtBottom ? consoleEl.scrollHeight : previousConsoleScrollTop;
         wireLoaderConsoleScroll(consoleEl);
+        wireLoaderLogNavigation(consoleEl);
       }
       const sideEl = $("libraryLoaderSide");
       if (sideEl && previousSideScrollTop) sideEl.scrollTop = previousSideScrollTop;
@@ -41745,14 +41768,75 @@ INDEX_HTML = """<!doctype html>
         const groupClass = loaderLogGroupClass(message);
         const label = loaderLogLabel(kind);
         const time = String(entry.time || "").split("T").pop() || "";
+        const target = entry.paper_id
+          ? ` data-paper-id="${escapeAttr(entry.paper_id)}" data-library-item-id="${Number(entry.library_item_id || 0)}" role="button" tabindex="0" title="Show in Library" aria-label="${escapeAttr(`Show in Library: ${message}`)}"`
+          : "";
         return `
-          <div class="loader-line ${escapeAttr(kind)} ${escapeAttr(groupClass)}">
+          <div class="loader-line ${escapeAttr(kind)} ${escapeAttr(groupClass)}"${target}>
             <span class="loader-badge">${escapeHtml(label)}</span>
             <span class="loader-time">${escapeHtml(time)}</span>
             <span class="loader-message">${loaderLogMessageMarkup(message)}</span>
           </div>
         `;
       }).join("");
+    }
+
+    function wireLoaderLogNavigation(consoleEl) {
+      consoleEl.addEventListener("pointerdown", event => {
+        if (!event.target.closest?.(".loader-line[data-paper-id]")) return;
+        // Keep polling from replacing the row between pointerdown and click.
+        state.libraryLoaderLogPointerDown = true;
+        const release = () => {
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+          window.removeEventListener("blur", release);
+          window.setTimeout(() => { state.libraryLoaderLogPointerDown = false; }, 0);
+        };
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+        window.addEventListener("blur", release);
+      });
+      const activate = (event) => {
+        if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
+        if (event.type === "click" && window.getSelection()?.isCollapsed === false) return;
+        const row = event.target.closest?.(".loader-line[data-paper-id]");
+        if (!row || !consoleEl.contains(row)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openLoaderLogPaper(row.dataset.paperId, Number(row.dataset.libraryItemId || 0));
+      };
+      consoleEl.addEventListener("click", activate);
+      consoleEl.addEventListener("keydown", activate);
+    }
+
+    function finishLoaderPaperReveal(errorMessage = "") {
+      state.libraryLoaderRevealBusy = false;
+      state.libraryLoaderNavigationError = errorMessage;
+      if (state.libraryLoaderOpen) renderLibraryLoader();
+    }
+
+    async function revealLoaderPaper(paperId, itemId = 0) {
+      // An import completion already refreshing the main window must finish
+      // before explicit navigation, or its saved selection can replace ours.
+      if (state.libraryRefreshPromise) await state.libraryRefreshPromise;
+      await navigateToPaperInLibrary(paperId, itemId);
+      closeLibraryLoader();
+    }
+
+    async function openLoaderLogPaper(paperId, itemId = 0) {
+      if (!paperId || state.libraryLoaderRevealBusy) return;
+      state.libraryLoaderRevealBusy = true;
+      state.libraryLoaderNavigationError = "";
+      try {
+        if (IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
+          window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type: "show-paper", paper_id: paperId, library_item_id: itemId});
+          return; // Native bridge waits for the main window before hiding this one.
+        }
+        await revealLoaderPaper(paperId, itemId);
+        finishLoaderPaperReveal();
+      } catch (error) {
+        finishLoaderPaperReveal(error.message || "Could not show paper in Library.");
+      }
     }
 
     function loaderLogGroupClass(message) {
@@ -59051,6 +59135,8 @@ INDEX_HTML = """<!doctype html>
     window.openFontSizeSettings = openFontSizeSettings;
     window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;
+    window.revealLoaderPaper = revealLoaderPaper;
+    window.finishLoaderPaperReveal = finishLoaderPaperReveal;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;
     window.openIdentifierRecoveryWindow = openIdentifierRecoveryWindow;
     window.setLibraryContentView = setLibraryContentViewFromMenu;

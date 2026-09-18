@@ -4,6 +4,7 @@ The immutable candidate snapshot and small mutable checkpoint are stored
 separately. No external JSON files, Library files or placements are changed.
 """
 import json
+import re
 import threading
 import uuid
 from datetime import datetime
@@ -34,6 +35,7 @@ def _save(storage, job):
 def _finish_stopped(storage, job):
     """End the queue without undoing completed paper updates or its history."""
     if job['status'] != 'stopped':
+        _add_log_targets(storage, job)
         job.update(status='stopped', stage='stopped', finished_at=stamp(), current_paper='',
                    message='Stopped. Completed results are kept; the remaining queue has ended.')
         job['result'] = {'job_type': 'metadata_refresh', 'status': 'stopped',
@@ -130,17 +132,36 @@ def create(storage, *, mode='full', skip_days=3, folder_id=None, job_id=None,
         return job
 
 
+def _add_log_targets(storage, job):
+    """Resolve legacy progress lines through the saved queue, never by title."""
+    if not job:
+        return job
+    ids = None
+    for entry in job.get('logs', []):
+        if entry.get('paper_id'):
+            continue
+        match = re.match(r'^(\d+)/(\d+) · ', entry.get('message', ''))
+        if not match or int(match[2]) != job.get('total'):
+            continue
+        if ids is None:
+            ids = json.loads(storage.get_setting('metadata_candidates:' + job['job_id'], '[]'))
+        index = int(match[1]) - 1
+        if 0 <= index < len(ids):
+            entry['paper_id'] = ids[index]
+    return job
+
+
 def get(storage, job_id):
     initialize(storage)
     with _LOCK:
-        return _read(storage, job_id)
+        return _add_log_targets(storage, _read(storage, job_id))
 
 
 def listing(storage):
     initialize(storage)
     with _LOCK:
         rows = storage.conn.execute('SELECT value FROM app_settings WHERE key LIKE ?', (PREFIX + '%',)).fetchall()
-        return sorted((json.loads(row[0]) for row in rows), key=lambda j: j['started_at'], reverse=True)
+        return sorted((_add_log_targets(storage, json.loads(row[0])) for row in rows), key=lambda j: j['started_at'], reverse=True)
 
 
 def control(storage, job_id, action):
@@ -218,6 +239,7 @@ def run_job(storage, job_id, progress=None):
                 job['current'] = index + 1
                 job['percent'] = round(100 * (index + 1) / max(1, len(ids)))
                 job['logs'].append({'time': stamp(), 'level': 'warn' if status in {'partial', 'failed'} else 'info',
+                                    'paper_id': paper_id,
                                     'message': f'{index+1}/{len(ids)} · {job["current_paper"]} · {status.replace("_", " ")}: {message}'})
                 job['logs'] = job['logs'][-200:]
                 if job['status'] == 'stopping':
