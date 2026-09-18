@@ -15,6 +15,7 @@ from .config import DEFAULT_DB_PATH
 from .browser_store import ensure_browser_schema
 from .workflow_store import ensure_workflow_schema, PUBLICATION_REMOVED_BY_USER
 from .ai_store import ensure_ai_schema
+from .resource_dedup import ensure_schema as ensure_resource_dedup_schema
 from . import paper_identity
 from .text import (
     is_placeholder_publication_title,
@@ -26,7 +27,7 @@ from .text import (
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 19
+STORAGE_SCHEMA_VERSION = 20
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -749,6 +750,7 @@ class Storage:
                 ensure_browser_schema(self.conn)
                 ensure_workflow_schema(self.conn)
                 ensure_ai_schema(self.conn)
+                ensure_resource_dedup_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -766,6 +768,8 @@ class Storage:
                     ensure_ai_schema(self.conn)
                 if schema_version < 19:
                     paper_identity.ensure_schema(self.conn)
+                if schema_version < 20:
+                    ensure_resource_dedup_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -3337,6 +3341,14 @@ class Storage:
         if not self.get_paper(str(paper_id)):
             raise KeyError(str(paper_id))
         path = Path(str(stored_path)).expanduser()
+        from .resource_dedup import find_existing, remember_source
+        existing = find_existing(self, paper_id, path, exact_content=False)
+        if existing:
+            remember_source(self, existing['id'], {'source_path': source_path,
+                'size_bytes': self._resource_size(str(path)), 'kind': kind or path.suffix.lstrip('.')}, sha256)
+            if commit:
+                self.conn.commit()
+            return existing
         inferred_mime = mime_type or ("application/pdf" if path.suffix.lower() == ".pdf" else "")
         inferred_kind = kind or (path.suffix.lower().lstrip(".") or "file")
         resolved_type = (

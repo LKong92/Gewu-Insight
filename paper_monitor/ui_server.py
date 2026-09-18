@@ -67,6 +67,7 @@ from .config import (
     load_config,
 )
 from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha256_for_file
+from .resource_dedup import serialize_writes as serialize_paper_file_writes
 from .download import (
     convert_word_document_to_pdf,
     download_paper,
@@ -459,6 +460,8 @@ def run_ui_server(
             credential_storage.get_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, "")
         )
         if not documentation_mode:
+            from .resource_dedup_migration import migrate as deduplicate_resources
+            deduplicate_resources(credential_storage)
             from .file_layout_migration import migrate
             migrate(credential_storage)
     finally:
@@ -22321,6 +22324,7 @@ def register_downloaded_paper_resource(
     return storage.get_paper_resource(created_id)
 
 
+@serialize_paper_file_writes
 def attach_file_to_paper(
     storage: Storage,
     *,
@@ -22366,10 +22370,8 @@ def attach_file_to_paper(
     digest = hashlib.sha256(content).hexdigest()
     if refresh_existing:
         refresh_paper_resource_fingerprints(storage, str(paper_id))
-    duplicate = storage.conn.execute(
-        "SELECT id FROM resources WHERE paper_id = ? AND sha256 = ? ORDER BY id ASC LIMIT 1",
-        (str(paper_id), digest),
-    ).fetchone()
+    from .resource_dedup import find_content
+    duplicate = find_content(storage, str(paper_id), digest, len(content))
     if duplicate:
         resource = storage.get_paper_resource(int(duplicate["id"])) or {}
         resource["duplicate"] = True

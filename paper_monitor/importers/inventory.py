@@ -11,7 +11,8 @@ from typing import Any, Callable, Iterable
 from pypdf import PdfReader
 
 from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, ROOT
-from ..resource_fingerprint import fingerprint_file
+from ..resource_fingerprint import fingerprint_file, sha256_for_file
+from ..resource_dedup import find_existing, remember_source, source_resources, serialize_writes
 from ..storage import Storage
 from ..text import clean_text, is_placeholder_publication_title, make_paper_id, normalize_doi, safe_slug, sha1_short
 
@@ -537,6 +538,10 @@ def execute_import(
 
                 matched_paper_id = matched_import_paper(storage, record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                if matched_paper_id and source_exists:
+                    duplicate = find_existing(storage, paper_id, source)
+                    if duplicate:
+                        reusable_path = storage.resource_local_path(duplicate)
                 conflict = note_import_identity_conflict(storage, record, paper_id, result, progress_callback) if matched_paper_id else False
                 if matched_paper_id:
                     result["existing_papers"] += 1
@@ -622,6 +627,10 @@ def execute_import(
             if import_as == "resource":
                 matched_paper_id = matched_import_paper(storage, record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                if matched_paper_id and source_exists:
+                    duplicate = find_existing(storage, paper_id, source)
+                    if duplicate:
+                        reusable_path = storage.resource_local_path(duplicate)
                 conflict = note_import_identity_conflict(storage, record, paper_id, result, progress_callback) if matched_paper_id else False
                 if matched_paper_id:
                     result["existing_papers"] += 1
@@ -736,15 +745,15 @@ def reconcile_imported_layout(storage, paper_id, target_root, result):
 
 def matched_import_paper(storage, record, existing, dedupe_keys):
     # An explicit file reassignment wins over later DOI-based imports.
-    moved = storage.conn.execute(
-        "SELECT paper_id FROM resources WHERE source_path=? AND size_bytes=? AND kind=? AND status='reassigned'",
-        (record["source_path"], record["size_bytes"], record["kind"]),
-    ).fetchone()
-    if moved and moved["paper_id"]:
-        return str(moved["paper_id"])
+    origins = source_resources(storage, record)
+    moved = next((r for r in origins if r.get('status') == 'reassigned'), None)
+    if moved and moved['paper_id']:
+        return str(moved['paper_id'])
     matched = existing_paper_id(record, existing, dedupe_keys)
     if matched:
         return matched
+    if origins and origins[0].get('paper_id'):
+        return str(origins[0]['paper_id'])
     candidate = new_paper_id(record)
     return candidate if storage.get_paper(candidate) else ""
 
@@ -1419,7 +1428,20 @@ def attach_imported_file_to_existing_paper(
     storage.conn.commit()
 
 
-def upsert_resource(
+@serialize_writes
+def upsert_resource(storage, record, *, batch_id, paper_id, stored_path):
+    # Serialize lookup + registration across processes, including two Loaders
+    # importing the same bytes at the same time from different source paths.
+    if not storage.conn.in_transaction:
+        storage.conn.execute("BEGIN IMMEDIATE")
+    try:
+        return _upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
+    except Exception:
+        storage.conn.rollback()
+        raise
+
+
+def _upsert_resource(
     storage: Storage,
     record: dict[str, Any],
     *,
@@ -1435,6 +1457,29 @@ def upsert_resource(
             fingerprint = fingerprint_file(fingerprint_path)
         except OSError:
             fingerprint = None
+    duplicate = find_existing(storage, paper_id, fingerprint_path) if paper_id else None
+    if duplicate:
+        remember_source(storage, duplicate['id'], record, fingerprint.sha256 if fingerprint else '', batch_id)
+        extra = record.pop('_new_copy', '')
+        actual = storage.resource_local_path(duplicate)
+        # Only discard the private copy made by this invocation, after another
+        # writer won registration. Never remove an external input or a resource.
+        discard = bool(extra and extra == stored_path and extra != actual
+            and not storage.conn.execute('SELECT 1 FROM resources WHERE stored_path=? OR source_path=?',
+                                         (extra, extra)).fetchone())
+        if discard:
+            from ..ui_server import update_paper_file_path_references
+            update_paper_file_path_references(storage, paper_id, Path(extra), Path(actual), commit=False)
+        storage.conn.commit()
+        if discard:
+            Path(extra).unlink(missing_ok=True)
+        return
+    # A source may be edited in place without changing its length. Preserve its
+    # old resource/version instead of ON CONFLICT overwriting its stored path.
+    origin = record['source_path']
+    if storage.conn.execute('SELECT 1 FROM resources WHERE source_path=? AND size_bytes=? AND kind=?',
+                            (origin, record['size_bytes'], record['kind'])).fetchone():
+        origin = None
     parse_status = clean_text(record.get("parse_status") or "").casefold()
     file_type = (
         "invalid_file"
@@ -1446,7 +1491,7 @@ def upsert_resource(
         if fingerprint and fingerprint.is_annotated
         else ("unannotated" if fingerprint and record.get("kind") == "pdf" else "unknown")
     )
-    storage.conn.execute(
+    cursor = storage.conn.execute(
         """
         INSERT INTO resources (
           paper_id, source_path, stored_path, original_relative_path,
@@ -1456,46 +1501,10 @@ def upsert_resource(
           is_annotated, file_type, file_source, source_detail, annotation_state,
           status, created_at, updated_at, added_via
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_path, size_bytes, kind) DO UPDATE SET
-          paper_id = COALESCE(excluded.paper_id, resources.paper_id),
-          stored_path = COALESCE(NULLIF(excluded.stored_path, ''), resources.stored_path),
-          original_relative_path = excluded.original_relative_path,
-          original_parent_relative_path = excluded.original_parent_relative_path,
-          original_filename = excluded.original_filename,
-          mime_type = excluded.mime_type,
-          import_as = excluded.import_as,
-          import_batch_id = CASE WHEN resources.status = 'reassigned' THEN resources.import_batch_id ELSE excluded.import_batch_id END,
-          modified_at = excluded.modified_at,
-          parse_status = excluded.parse_status,
-          parse_error = excluded.parse_error,
-          page_count = excluded.page_count,
-          sha256 = COALESCE(NULLIF(excluded.sha256, ''), resources.sha256),
-          content_sha256 = COALESCE(NULLIF(excluded.content_sha256, ''), resources.content_sha256),
-          annotation_count = MAX(COALESCE(resources.annotation_count, 0), COALESCE(excluded.annotation_count, 0)),
-          is_annotated = CASE
-            WHEN COALESCE(resources.annotation_override, 0) = 1 THEN resources.is_annotated
-            ELSE excluded.is_annotated
-          END,
-          annotation_state = CASE
-            WHEN COALESCE(resources.annotation_override, 0) = 1 THEN resources.annotation_state
-            ELSE excluded.annotation_state
-          END,
-          file_type = CASE
-            WHEN COALESCE(resources.file_type_override, 0) = 1 THEN resources.file_type
-            ELSE excluded.file_type
-          END,
-          file_source = CASE
-            WHEN COALESCE(resources.file_source, 'unknown') = 'unknown' THEN excluded.file_source
-            ELSE resources.file_source
-          END,
-          source_detail = COALESCE(NULLIF(resources.source_detail, ''), excluded.source_detail),
-          status = CASE WHEN resources.status = 'reassigned' THEN resources.status ELSE excluded.status END,
-          added_via = CASE WHEN resources.status = 'reassigned' THEN resources.added_via ELSE COALESCE(resources.added_via, excluded.added_via) END,
-          updated_at = excluded.updated_at
         """,
         (
             paper_id,
-            record["source_path"],
+            origin,
             stored_path,
             record["relative_path"],
             record["parent_relative_path"],
@@ -1523,6 +1532,7 @@ def upsert_resource(
             "inventory_conflict" if record.get("identity_conflict_detail") else "inventory",
         ),
     )
+    remember_source(storage, int(cursor.lastrowid), record, fingerprint.sha256 if fingerprint else '', batch_id)
     storage.conn.commit()
 
 
@@ -1548,9 +1558,23 @@ def import_metadata(record: dict[str, Any], *, batch_id: str, stored_path: str) 
 def copy_record(record: dict[str, Any], *, target_root: Path) -> str:
     source = Path(record["source_path"])
     relative_path = safe_inventory_relative_path(record["relative_path"] or record["filename"])
-    target = unique_target_path(target_root / relative_path)
+    target = target_root / relative_path
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    while True:
+        target = unique_target_path(target)
+        try:
+            stream = target.open('xb')
+            break
+        except FileExistsError:
+            continue
+    try:
+        with stream, source.open('rb') as original:
+            shutil.copyfileobj(original, stream)
+        shutil.copystat(source, target)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    record['_new_copy'] = str(target)
     return str(target)
 
 
@@ -1562,28 +1586,15 @@ def reusable_stored_path(storage: Storage, record: dict[str, Any], *, copy_mode:
     kind = record.get("kind") or ""
     if not source_path or size_bytes is None or not kind:
         return ""
-    row = storage.conn.execute(
-        """
-        SELECT resources.stored_path
-        FROM resources
-        LEFT JOIN inventory_import_batches
-          ON inventory_import_batches.id = resources.import_batch_id
-        WHERE resources.source_path = ?
-          AND resources.size_bytes = ?
-          AND resources.kind = ?
-          AND resources.stored_path IS NOT NULL
-          AND resources.stored_path != ''
-          AND resources.stored_path != resources.source_path
-        ORDER BY
-          CASE WHEN inventory_import_batches.status = 'completed' THEN 0 ELSE 1 END,
-          resources.updated_at DESC
-        LIMIT 1
-        """,
-        (source_path, size_bytes, kind),
-    ).fetchone()
-    stored_path = path_text(row["stored_path"] if row else "")
-    if stored_path and Path(stored_path).exists():
-        return stored_path
+    source = Path(source_path)
+    for resource in source_resources(storage, record):
+        stored = storage.resource_local_path(resource)
+        if not stored or not Path(stored).is_file():
+            continue
+        # A missing source can resume from its saved copy. Existing sources must
+        # match current bytes, even if their path and byte count are unchanged.
+        if not source.is_file() or sha256_for_file(source) == sha256_for_file(Path(stored)):
+            return stored
     return ""
 
 

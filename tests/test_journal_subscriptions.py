@@ -60,7 +60,7 @@ class JournalSubscriptionStorageTests(unittest.TestCase):
             finally:
                 migrated.close()
 
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 19)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 20)
         self.assertEqual(version, STORAGE_SCHEMA_VERSION)
         self.assertIsNotNone(table)
 
