@@ -30154,12 +30154,41 @@ INDEX_HTML = """<!doctype html>
       user-select: text;
     }
     .library-path-parts {
-      min-width: 0;
+      min-width: min(100px, 15vw);
       display: inline-flex;
       align-items: center;
       gap: 6px;
       overflow: hidden;
       flex: 1 1 auto;
+    }
+    .library-activity-list {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 65%;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .library-activity-list::-webkit-scrollbar { display: none; }
+    .library-activity-list:empty { display: none; }
+    .library-activity-list > .library-activity-status {
+      flex: 1 1 240px;
+      min-width: 120px;
+      max-width: 320px;
+      box-sizing: border-box;
+      justify-content: flex-start;
+    }
+    .library-activity-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-activity-list > .library-activity-status:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
     }
     .library-activity-status {
       max-width: min(360px, 42vw);
@@ -35751,6 +35780,8 @@ INDEX_HTML = """<!doctype html>
       libraryActivityText: "",
       libraryActivityLive: false,
       libraryActivityTimer: 0,
+      libraryActivities: [],
+      libraryActivitySequence: 0,
       libraryDragPayload: null,
       libraryRevealColumnFolderId: 0,
       libraryRevealColumnDirection: "",
@@ -39424,7 +39455,7 @@ INDEX_HTML = """<!doctype html>
         : `Refreshing info · ${requests.length} papers`;
     }
 
-    function updateMetadataRefreshActivity(scope, message = "", failed = false) {
+    function updateMetadataRefreshActivity(scope, message = "", failed = false, activityId = "") {
       const pending = metadataRefreshActivityText(scope);
       if (scope === "author") {
         if (message) updateAuthorMonitorActivityStatus(message, {channel: "secondary", kind: "metadata-refresh", delay: failed ? 4800 : 3200});
@@ -39439,7 +39470,7 @@ INDEX_HTML = """<!doctype html>
         }
       } else {
         // Keep a separate in-flight refresh indicator alongside imports/downloads.
-        if (message && !state.libraryActivityLive) updateLibraryActivityStatus(message, {delay: failed ? 4800 : 3200});
+        if (message && (activityId || !state.libraryActivityLive)) updateLibraryActivityStatus(message, {activityId, failed, delay: failed ? 4800 : 3200});
         else renderLibraryActivityStatus();
       }
     }
@@ -39572,6 +39603,7 @@ INDEX_HTML = """<!doctype html>
       let completion = "Refresh complete";
       let failed = false;
       paperMetadataRequests.set(paper.paper_id, {scope, title});
+      if (scope === "library") updateLibraryActivityStatus("", {activityId: `metadata:${paper.paper_id}`});
       updateMetadataRefreshButton(root, paper.metadata_refresh || {});
       updateMetadataRefreshActivity(scope);
       try {
@@ -39594,7 +39626,8 @@ INDEX_HTML = """<!doctype html>
       } finally {
         paperMetadataRequests.delete(paper.paper_id);
         if (button?.isConnected) updateMetadataRefreshButton(root);
-        updateMetadataRefreshActivity(scope, completion, failed);
+        updateMetadataRefreshActivity(scope, scope === "library" ? `${completion} · ${title}` : completion,
+          failed, scope === "library" ? `metadata:${paper.paper_id}` : "");
       }
     }
 
@@ -42104,7 +42137,7 @@ INDEX_HTML = """<!doctype html>
           </aside>
           <div class="library-path-bar" id="libraryPathBar" title="${escapeAttr(librarySelectionPathText())}">
             <span class="library-path-parts">${librarySelectionPathMarkup()}</span>
-            <span class="${libraryActivityStatusClass()}" id="libraryActivityStatus">${escapeHtml(libraryActivityStatusText())}</span>
+            <span class="library-activity-list" id="libraryActivityStatus" role="list" aria-label="Background tasks and activity"></span>
             <button class="library-import-status-action" id="libraryImportDetails" type="button" hidden>Details</button>
             <button class="library-import-status-action" id="libraryImportDismiss" type="button" aria-label="Dismiss import result" hidden>Dismiss</button>
             <span class="library-view-toggle" id="libraryViewToggle" role="group" aria-label="Library content view">
@@ -42302,26 +42335,76 @@ INDEX_HTML = """<!doctype html>
         .join("");
     }
 
-    function libraryActivityStatusText() {
-      return [metadataRefreshActivityText("library"), metadataBatchActivityText(), state.libraryImportNotice?.text || state.libraryActivityText].filter(Boolean).join(" · ");
+    function libraryActivityStatusItems() {
+      const items = [];
+      for (const job of state.metadataRefreshJobs || []) {
+        if (!["running", "queued", "pausing", "stopping", "paused", "failed"].includes(job.status)) continue;
+        const text = `Refresh Info · ${job.status} · ${job.current}/${job.total}`;
+        items.push({id: `batch:${job.job_id}`, text,
+          detail: [text, job.scope_label, job.metadata_mode, job.current_paper, job.message].filter(Boolean).join("\\n"),
+          live: ["running", "queued", "pausing", "stopping"].includes(job.status), failed: job.status === "failed"});
+      }
+      if (state.libraryImportNotice) {
+        const job = state.libraryImportJob || {};
+        const notice = state.libraryImportNotice;
+        const percent = Math.min(100, Math.max(0, Math.round(Number(job.percent) || 0)));
+        const text = notice.live && state.libraryTaskMode === "import"
+          ? ["Folder Loader", percent ? `${percent}%` : "", job.stage, state.libraryImportTargetPath].filter(Boolean).join(" · ")
+          : notice.text;
+        items.push({id: "import", text, live: notice.live,
+          detail: [notice.text, state.libraryImportPath, job.message, job.current != null && job.total ? `${job.current}/${job.total}` : ""].filter(Boolean).join("\\n")});
+      }
+      for (const [paperId, request] of paperMetadataRequests) {
+        if (request.scope === "library") items.push({id: `metadata:${paperId}`, text: `Refreshing info · ${request.title}`, live: true});
+      }
+      for (const activity of state.libraryActivities || []) {
+        if (!items.some(item => item.id === activity.id)) items.push(activity);
+      }
+      if (state.libraryActivityText) items.push({id: "notice", text: state.libraryActivityText, live: state.libraryActivityLive});
+      return items;
     }
 
-    function libraryActivityStatusClass() {
+    function libraryActivityStatusText() {
+      return libraryActivityStatusItems().map(item => item.text).join("\\n");
+    }
+
+    function libraryActivityStatusClass(item) {
       const base = "library-activity-status";
-      const text = libraryActivityStatusText();
+      const text = item.text || "";
       if (!text) return base;
-      if (metadataRefreshActivityText("library") || state.metadataRefreshJobs?.some(job => ["queued", "running", "pausing", "stopping"].includes(job.status)) || (state.libraryImportNotice ? state.libraryImportNotice.live : state.libraryActivityLive)) return `${base} live`;
-      if (text === "Refresh complete") return `${base} refresh-complete`;
-      if (/failed|could not|error|partial|review|unavailable/i.test(text)) return `${base} err`;
+      if (item.live) return `${base} live`;
+      if (item.failed || (item.failed == null && /failed|could not|error|partial|review|unavailable/i.test(text))) return `${base} err`;
+      if (text.startsWith("Refresh complete")) return `${base} refresh-complete`;
       return `${base} ok`;
     }
 
     function renderLibraryActivityStatus() {
       const status = $("libraryActivityStatus");
       if (status) {
-        status.textContent = libraryActivityStatusText();
-        status.title = libraryActivityStatusText();
-        status.className = libraryActivityStatusClass();
+        const items = libraryActivityStatusItems();
+        const existing = new Map(Array.from(status.children, node => [node.dataset.activityId, node]));
+        // Keep each task's element stable across polling so hover and animation
+        // are not restarted every time the progress changes.
+        for (const [index, item] of items.entries()) {
+          let node = existing.get(item.id);
+          if (!node) {
+            node = document.createElement("span");
+            node.dataset.activityId = item.id;
+            node.setAttribute("role", "listitem");
+            node.tabIndex = 0;
+            const label = document.createElement("span");
+            label.className = "library-activity-label";
+            node.appendChild(label);
+          }
+          const className = libraryActivityStatusClass(item);
+          if (node.className !== className) node.className = className;
+          if (node.firstElementChild.textContent !== item.text) node.firstElementChild.textContent = item.text;
+          const detail = item.detail || item.text;
+          if (node.title !== detail) { node.title = detail; node.setAttribute("aria-label", detail); }
+          if (status.children[index] !== node) status.insertBefore(node, status.children[index] || null);
+          existing.delete(item.id);
+        }
+        existing.forEach(node => node.remove());
       }
       const details = $("libraryImportDetails");
       const dismiss = $("libraryImportDismiss");
@@ -42330,6 +42413,25 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateLibraryActivityStatus(text = "", options = {}) {
+      if (options.activityId) {
+        const activities = state.libraryActivities ||= [];
+        const previous = activities.find(item => item.id === options.activityId);
+        if (previous?.timer) window.clearTimeout(previous.timer);
+        const index = activities.indexOf(previous);
+        if (text) {
+          const item = {id: options.activityId, text, detail: options.detail || text, live: Boolean(options.live), failed: Boolean(options.failed)};
+          if (index < 0) activities.push(item);
+          else activities[index] = item;
+          if (!item.live && options.clear !== false) item.timer = window.setTimeout(() => {
+            // A finished task's timer must not clear a newer run of that task.
+            const current = activities.indexOf(item);
+            if (current >= 0) activities.splice(current, 1);
+            renderLibraryActivityStatus();
+          }, Number(options.delay || 1800));
+        } else if (index >= 0) activities.splice(index, 1);
+        renderLibraryActivityStatus();
+        return;
+      }
       if (state.libraryActivityTimer) {
         window.clearTimeout(state.libraryActivityTimer);
         state.libraryActivityTimer = 0;
@@ -42347,13 +42449,14 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function withLibraryActivityStatus(liveText, doneText, action) {
-      updateLibraryActivityStatus(liveText, {live: true, clear: false});
+      const activityId = `operation:${state.libraryActivitySequence = (state.libraryActivitySequence || 0) + 1}`;
+      updateLibraryActivityStatus(liveText, {activityId, live: true, clear: false});
       try {
         const result = await action();
-        if (doneText) updateLibraryActivityStatus(doneText, {live: false});
+        updateLibraryActivityStatus(doneText, {activityId, live: false});
         return result;
       } catch (error) {
-        updateLibraryActivityStatus(`Library action failed: ${error.message || "Unknown error"}`, {live: false});
+        updateLibraryActivityStatus(`Library action failed: ${error.message || "Unknown error"}`, {activityId, failed: true, live: false});
         throw error;
       }
     }
@@ -46569,9 +46672,10 @@ INDEX_HTML = """<!doctype html>
       const syncAll = mode === "all";
       const progress = syncAll ? "Syncing arXiv versions..." : "Downloading latest arXiv PDF...";
       const activityId = `arxiv:${paper.paper_id}`;
+      const activityText = text => `${text} · ${paper.title || paper.storage_key || paper.paper_id}`;
       if (button) button.disabled = true;
       if (state.libraryTab === "my-publications") setMyPublicationActivity(activityId, progress);
-      updateLibraryActivityStatus(progress, {live: true, clear: false});
+      updateLibraryActivityStatus(activityText(progress), {activityId, live: true, clear: false});
       try {
         const res = await fetch("/api/paper-files/arxiv", {
           method: "POST",
@@ -46593,9 +46697,9 @@ INDEX_HTML = """<!doctype html>
             ? `arXiv ${existing.map((value) => `v${value}`).join(", ")} already downloaded.`
             : "arXiv versions checked.";
         const message = failed.length ? `${versionLabel} ${failed.length} version${failed.length === 1 ? "" : "s"} failed.` : versionLabel;
-        updateLibraryActivityStatus(message, {delay: failed.length ? 4800 : 3000});
+        updateLibraryActivityStatus(activityText(message), {activityId, failed: Boolean(failed.length), delay: failed.length ? 4800 : 3000});
       } catch (error) {
-        updateLibraryActivityStatus(error.message || "arXiv download failed", {delay: 4800});
+        updateLibraryActivityStatus(activityText(error.message || "arXiv download failed"), {activityId, failed: true, delay: 4800});
         if (button && document.body.contains(button)) button.disabled = false;
       } finally {
         clearMyPublicationActivity(activityId);
@@ -50747,6 +50851,7 @@ INDEX_HTML = """<!doctype html>
       const status = $("libraryDetailStatus");
       const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
       const activityId = `pdf:${paper.paper_id}`;
+      const activityText = text => `${text} · ${paper.title || paper.storage_key || paper.paper_id}`;
       buttons.forEach((button) => button.disabled = true);
       if (status) {
         status.textContent = options.force ? "Refreshing PDF..." : "Downloading PDF...";
@@ -50755,7 +50860,7 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryTab === "my-publications") {
         setMyPublicationActivity(activityId, options.force ? "Refreshing PDF..." : "Downloading PDF...");
       }
-      updateLibraryActivityStatus(options.force ? "Refreshing PDF..." : "Downloading PDF...", {live: true, clear: false});
+      updateLibraryActivityStatus(activityText(options.force ? "Refreshing PDF..." : "Downloading PDF..."), {activityId, live: true, clear: false});
       try {
         const payload = {...libraryPdfContextPayload(paper.paper_id), force: Boolean(options.force)};
         const data = await requestPaperPdfDownload(payload);
@@ -50767,10 +50872,10 @@ INDEX_HTML = """<!doctype html>
         }
         if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
-        updateLibraryActivityStatus(options.force ? "PDF refreshed." : "PDF downloaded.", {delay: 2600});
+        updateLibraryActivityStatus(activityText(options.force ? "PDF refreshed." : "PDF downloaded."), {activityId, delay: 2600});
       } catch (error) {
         const message = error.message || "download failed";
-        updateLibraryActivityStatus(`PDF download failed: ${message}`, {delay: 4200});
+        updateLibraryActivityStatus(activityText(`PDF download failed: ${message}`), {activityId, failed: true, delay: 4200});
         if (status) {
           status.textContent = message;
           status.className = "library-detail-status err";

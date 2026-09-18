@@ -2005,6 +2005,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
     NSMenuItem *userGuideItem = [helpMenu addItemWithTitle:@"User Guide" action:@selector(openUserGuide:) keyEquivalent:@"?"];
     userGuideItem.target = self;
+    NSMenuItem *contactItem = [helpMenu addItemWithTitle:@"Contact Us" action:@selector(contactUs:) keyEquivalent:@""];
+    contactItem.target = self;
     helpMenuItem.submenu = helpMenu;
 
     NSApp.mainMenu = mainMenu;
@@ -2315,6 +2317,20 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 - (void)openAboutProjectWebsite:(id)sender {
     NSURL *url = [NSURL URLWithString:@"https://github.com/LKong92/Gewu-Insight"];
     if (url) [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+- (void)contactUs:(id)sender {
+    NSURLComponents *components = [NSURLComponents componentsWithString:@"mailto:konglingyuan@westlake.edu.cn"];
+    components.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"subject" value:@"Gewu Insight — Feedback and Support"]
+    ];
+    // Let Launch Services choose the user's default email application.
+    if ([[NSWorkspace sharedWorkspace] openURL:components.URL]) return;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Could not open your email app";
+    alert.informativeText = @"Set a default email app on your Mac, or contact konglingyuan@westlake.edu.cn directly.";
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
 }
 
 - (void)showAboutWindow {

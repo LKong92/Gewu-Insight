@@ -5,6 +5,22 @@ import unittest
 from paper_monitor.ui_server import INDEX_HTML
 
 
+ACTIVITY_DOM_STUB = r'''
+class ActivityNode {
+  constructor(){this.children=[];this.dataset={};this.attributes={};this.textContent='';this.title='';this.className='';this.hidden=false;}
+  setAttribute(key,value){this.attributes[key]=value;}
+  querySelectorAll(){return [];}
+  get firstElementChild(){return this.children[0];}
+  appendChild(node){this.insertBefore(node,null);}
+  insertBefore(node,before){node.remove();const index=before?this.children.indexOf(before):this.children.length;this.children.splice(index,0,node);node.parent=this;}
+  remove(){if(this.parent){const siblings=this.parent.children;siblings.splice(siblings.indexOf(this),1);this.parent=null;}}
+}
+const nodes=new Map();
+function $(id){if(!nodes.has(id))nodes.set(id,new ActivityNode());return nodes.get(id);}
+const document={createElement(){return new ActivityNode();}};
+'''
+
+
 def js_function(name: str) -> str:
     marker = f"function {name}"
     start = INDEX_HTML.rfind("\n", 0, INDEX_HTML.index(marker)) + 1
@@ -53,15 +69,13 @@ class LibraryImportProgressRuntimeTests(unittest.TestCase):
         import subprocess
         import tempfile
         from pathlib import Path
-        names=['metadataBatchActivityText','metadataRefreshActivityText','libraryActivityStatusText','libraryActivityStatusClass','renderLibraryActivityStatus',
+        names=['metadataBatchActivityText','metadataRefreshActivityText','libraryActivityStatusItems','libraryActivityStatusText','libraryActivityStatusClass','renderLibraryActivityStatus',
                'updateLibraryActivityStatus','libraryDroppedImportActivityText','updateLibraryDroppedImportActivity',
                'refreshLibraryImportJob','stopLibraryImportPolling','loaderStatusText','openLibraryLoader']
         script='\n'.join(js_function(name) for name in names)
-        harness=r'''
+        harness=ACTIVITY_DOM_STUB+r'''
 const assert=require('node:assert/strict');
 const paperMetadataRequests=new Map();
-const nodes=new Map();
-function $(id) { if (!nodes.has(id)) nodes.set(id,{textContent:'',title:'',className:'',hidden:false}); return nodes.get(id); }
 const timeouts=[]; let refreshes=0, stopped=0, nativeOpens=0, drafts=0, renders=0;
 const window={clearTimeout(){},setTimeout(fn){timeouts.push(fn);return timeouts.length},clearInterval(){stopped++},
   webkit:{messageHandlers:{libraryLoaderWindow:{postMessage(){nativeOpens++}}}}};
