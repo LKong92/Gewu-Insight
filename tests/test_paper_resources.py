@@ -20,7 +20,7 @@ from paper_monitor.storage import STORAGE_SCHEMA_VERSION, Storage
 class PaperResourceStorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.db_path = self.root / "data" / "paper_monitor.sqlite"
         self.library_root = self.root / "data" / "Library"
         self.spaces_root = self.root / "data" / "Spaces"
@@ -858,7 +858,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
         self.assertEqual(int(promoted["id"]), int(preprint["id"]))
 
-    def test_add_file_classification_moves_default_to_main_in_both_workspaces(self) -> None:
+    def test_unknown_file_already_has_main_location_before_classification(self) -> None:
         for workspace in ("library", "my-publications"):
             with self.subTest(workspace=workspace):
                 paper_id = "classify-" + workspace
@@ -876,7 +876,7 @@ class PaperResourceStorageTests(unittest.TestCase):
                     added_via="paper_details_native_chooser",
                 )
                 old_path = Path(resource["stored_path"])
-                self.assertTrue(old_path.is_relative_to(self.associated_root))
+                self.assertEqual(old_path, main_root / (paper_id + ".pdf"))
                 key = self.storage.get_paper(paper_id)["storage_key"]
                 ui_server.update_paper_resource_role(self.storage, paper_id, resource["id"], "published_version")
                 paper = self.storage.get_paper(paper_id)
@@ -887,7 +887,7 @@ class PaperResourceStorageTests(unittest.TestCase):
                 self.assertEqual(paper["main_pdf_path"], paper["merged_pdf_path"])
                 self.assertEqual(current["stored_path"], paper["main_pdf_path"])
                 self.assertEqual(Path(current["stored_path"]).read_bytes(), content)
-                self.assertFalse(old_path.exists())
+                self.assertTrue(old_path.exists())
                 # Repeating classification is idempotent; explicit pinning is available
                 # even when automatic selection already resolves to this same resource.
                 ui_server.update_paper_resource_role(self.storage, paper_id, resource["id"], "published_version")
@@ -945,13 +945,15 @@ class PaperResourceStorageTests(unittest.TestCase):
         paper_id = "physical-default-move-failure"
         self.add_paper(paper_id)
         self.storage.add_my_publication(paper_id=paper_id)
+        old = ui_server.attach_file_to_paper(self.storage, paper_id=paper_id, filename="original.pdf",
+            content=self.valid_pdf_bytes("original"), file_type="unknown")
         resource = ui_server.attach_file_to_paper(self.storage, paper_id=paper_id, filename="blocked.pdf",
             content=self.valid_pdf_bytes("blocked"), file_type="unknown")
         with patch.object(ui_server.shutil, "move", side_effect=PermissionError("fixture")):
             with self.assertRaises(PermissionError):
                 ui_server.update_paper_resource_role(self.storage, paper_id, resource["id"], "published_version")
         self.assertEqual(self.storage.get_paper_resource(resource["id"])["file_type"], "unknown")
-        self.assertFalse(self.storage.get_paper(paper_id)["main_pdf_path"])
+        self.assertEqual(self.storage.get_paper(paper_id)["main_pdf_path"], old["stored_path"])
         self.assertEqual(Path(resource["stored_path"]).read_bytes(), self.valid_pdf_bytes("blocked"))
 
     def test_default_copies_external_and_shared_bytes_without_overwriting_names(self) -> None:
@@ -1109,6 +1111,8 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.add_paper("target-work")
         self.add_paper("standalone-file")
         target_item = self.storage.add_library_item(paper_id="target-work", folder_id=1)
+        ui_server.attach_file_to_paper(self.storage, paper_id="target-work", filename="target.pdf",
+                                      content=self.valid_pdf_bytes("target"), file_type="published_version")
         source_folder = self.storage.create_library_folder(name="Data", parent_id=1)
         source_item = self.storage.add_library_item(
             paper_id="standalone-file",

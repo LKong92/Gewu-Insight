@@ -282,7 +282,12 @@ class LibraryNavigationUiTests(unittest.TestCase):
 
         self.assertIn('application/x-paper-monitor-library', drag_start)
         self.assertNotIn("armNativeLibraryItemDrop", drag_start)
-        self.assertIn("armNativeLibraryItemDrop", mouse_down)
+        # File-icon gestures now carry the same typed payload as DOM drags.
+        # This replaced the separate bridge in the September 17 drag fix.
+        self.assertIn("prepareNativeFileDrag(handle)", mouse_down)
+        native_prepare = INDEX_HTML.split("function prepareNativeFileDrag(handle)", 1)[1].split("function armNativeFolderDrag", 1)[0]
+        self.assertIn('type: "item"', native_prepare)
+        self.assertIn("library_payload: payload", native_prepare)
 
     def test_remote_avatar_fallbacks_do_not_access_a_removed_parent(self) -> None:
         self.assertNotIn("this.remove(); this.parentElement", INDEX_HTML)

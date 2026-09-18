@@ -4,6 +4,7 @@ import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
+from paper_monitor import finder_alias
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
@@ -102,7 +103,7 @@ class RecycleDeletionTests(TestCase):
         self.delete([{'type':'folder','id':fid}])
         after = self.storage.get_paper('a'); kept = Path(after['merged_pdf_path'])
         self.assertTrue(kept.is_file()); self.assertNotIn('Recycle',kept.parts)
-        self.assertEqual(kept.read_bytes(),b'fixture a'); self.assertEqual(alias.read_bytes(),b'fixture a')
+        self.assertEqual(kept.read_bytes(),b'fixture a'); self.assertEqual(finder_alias.resolve(alias).read_bytes(),b'fixture a')
         self.assertEqual(self.tree(self.trash/'Selected'),original)
         for field in ('storage_key','primary_resource_id','preferred_resource_id','preferred_resource_manual'):
             self.assertEqual(after[field],before[field])

@@ -571,6 +571,7 @@ def execute_import(
                             result["library_items_created"] += 1
                         else:
                             result["library_items_existing"] += 1
+                    reconcile_imported_layout(storage, paper_id, target_root, result)
                     emit_progress(progress_callback, stage="import",
                                   message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
                                   current=index + 1, total=total, paper_id=paper_id,
@@ -611,6 +612,7 @@ def execute_import(
                         result["library_items_created"] += 1
                     else:
                         result["library_items_existing"] += 1
+                reconcile_imported_layout(storage, paper_id, target_root, result)
                 emit_progress(progress_callback, stage="import",
                               message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
                               current=index + 1, total=total, paper_id=paper_id,
@@ -655,6 +657,7 @@ def execute_import(
                             result["library_items_created"] += 1
                         else:
                             result["library_items_existing"] += 1
+                    reconcile_imported_layout(storage, paper_id, target_root, result)
                     emit_progress(progress_callback, stage="import",
                                   message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
                                   current=index + 1, total=total, paper_id=paper_id,
@@ -694,6 +697,7 @@ def execute_import(
                         result["library_items_created"] += 1
                     else:
                         result["library_items_existing"] += 1
+                reconcile_imported_layout(storage, paper_id, target_root, result)
                 emit_progress(progress_callback, stage="import",
                               message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
                               current=index + 1, total=total, paper_id=paper_id,
@@ -712,6 +716,22 @@ def execute_import(
         result["errors"].append(f"Import failed{f' at {label}' if label else ''}: {exc}")
         finish_import_batch(storage, batch_id=batch_id, result=result, status="failed")
         emit_progress(progress_callback, stage="import", message=result["errors"][-1], current=result["processed_files"], total=total)
+
+
+def reconcile_imported_layout(storage, paper_id, target_root, result):
+    # CLI imports to arbitrary external destinations must not relocate into the
+    # running application's Library. The App configures these managed roots.
+    from .. import ui_server as ui
+    from ..file_layout import reconcile
+    if not any(Path(target_root).resolve().is_relative_to(root.resolve()) for root in
+               (ui.LIBRARY_LOCAL_COPY_ROOT, ui.SPACES_LOCAL_COPY_ROOT, ui.MY_PUBLICATIONS_LOCAL_COPY_ROOT)):
+        return
+    try:
+        reconcile(storage, paper_id)
+    except Exception as exc:
+        # Import bytes/identity have been saved. Keep them, expose the failure,
+        # and allow a later repair instead of silently losing a completed file.
+        result["warnings"].append(f"File layout needs attention for {paper_id}: {exc}")
 
 
 def matched_import_paper(storage, record, existing, dedupe_keys):
@@ -989,6 +1009,9 @@ def mime_type_for_kind(kind: str, extension: str) -> str | None:
 
 
 def is_probable_mac_alias(path: Path) -> bool:
+    from ..finder_alias import is_alias
+    if is_alias(path):
+        return True
     try:
         if path.is_symlink() or path.is_dir() or path.stat().st_size > 1024 * 1024:
             return False

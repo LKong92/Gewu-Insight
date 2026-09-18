@@ -5,6 +5,7 @@ import inspect
 import tempfile
 import unittest
 from pathlib import Path
+from paper_monitor import finder_alias
 from subprocess import CompletedProcess
 from unittest.mock import patch
 
@@ -620,8 +621,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         full_sync.assert_not_called()
         self.assertTrue(source_pdf.exists())
         self.assertIsNotNone(target_path)
-        self.assertTrue(target_path.is_symlink())
-        self.assertEqual(target_path.resolve(), source_pdf.resolve())
+        self.assertTrue(finder_alias.is_alias(target_path))
+        self.assertEqual(finder_alias.resolve(target_path), source_pdf.resolve())
 
     def test_alias_only_library_item_move_does_not_run_global_sync(self) -> None:
         owner_folder = self.storage.create_library_folder(parent_id=1, name="Owner")
@@ -675,8 +676,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertFalse(canonical_moved)
         self.assertFalse(source_alias.exists())
         self.assertEqual(int(moved["folder_id"]), int(target_folder["id"]))
-        self.assertTrue(target_alias.is_symlink())
-        self.assertEqual(target_alias.resolve(), source_pdf.resolve())
+        self.assertTrue(finder_alias.is_alias(target_alias))
+        self.assertEqual(finder_alias.resolve(target_alias), source_pdf.resolve())
 
     def test_canonical_item_move_relocates_the_associated_work_directory(self) -> None:
         source_folder = self.storage.create_library_folder(parent_id=1, name="Source")
@@ -932,8 +933,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         )
         self.assertTrue(canonical.exists())
         self.assertFalse(source_pdf.exists())
-        self.assertTrue(shortcut.is_symlink())
-        self.assertEqual(shortcut.resolve(), canonical.resolve())
+        self.assertTrue(finder_alias.is_alias(shortcut))
+        self.assertEqual(finder_alias.resolve(shortcut), canonical.resolve())
         self.assertEqual(paper["main_pdf_path"], paper["merged_pdf_path"])
         audit = ui_server.audit_library_pdf_names(self.storage)
         self.assertEqual(audit["mismatched_real_files"], 0)
@@ -1020,6 +1021,8 @@ class LibraryFileOperationTests(unittest.TestCase):
             merged_pdf_path=str(primary),
         )
         self.storage.ensure_primary_pdf_resource("complete-export-paper")
+        self.storage.conn.execute("UPDATE resources SET file_type='published_version',version_role='version_of_record' WHERE paper_id='complete-export-paper'")
+        self.storage.conn.commit()
         self.storage.add_library_item(
             paper_id="complete-export-paper",
             folder_id=int(folder["id"]),
@@ -1128,7 +1131,7 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(Path(paper["merged_pdf_path"]).name, "Real Name.pdf")
         self.assertTrue((real_dir / "Real Name.pdf").exists())
         self.assertFalse((shortcut_dir / "Old Shortcut.pdf").exists())
-        self.assertTrue((shortcut_dir / "New Shortcut.pdf").is_symlink())
+        self.assertTrue(finder_alias.is_alias((shortcut_dir / "New Shortcut.pdf")))
 
     def test_shortcut_name_collision_is_numbered_without_overwrite(self) -> None:
         real_folder = self.storage.create_library_folder(parent_id=1, name="Real")
@@ -1176,7 +1179,7 @@ class LibraryFileOperationTests(unittest.TestCase):
 
         self.assertEqual(occupied.read_bytes(), b"%PDF existing")
         self.assertEqual(adjusted["display_name"], "Shared Name 2")
-        self.assertTrue((shortcut_dir / "Shared Name 2.pdf").is_symlink())
+        self.assertTrue(finder_alias.is_alias((shortcut_dir / "Shared Name 2.pdf")))
 
     def test_shared_real_pdf_rename_updates_every_paper_path(self) -> None:
         folder = self.storage.create_library_folder(parent_id=1, name="Shared")
@@ -1223,8 +1226,8 @@ class LibraryFileOperationTests(unittest.TestCase):
 
         self.assertTrue(renamed_path.exists())
         self.assertFalse(source_pdf.exists())
-        self.assertTrue(shortcut_path.is_symlink())
-        self.assertEqual(shortcut_path.resolve(), renamed_path.resolve())
+        self.assertTrue(finder_alias.is_alias(shortcut_path))
+        self.assertEqual(finder_alias.resolve(shortcut_path), renamed_path.resolve())
         self.assertEqual(Path(first["merged_pdf_path"]).resolve(), renamed_path.resolve())
         self.assertEqual(Path(second["merged_pdf_path"]).resolve(), renamed_path.resolve())
 
@@ -1282,7 +1285,7 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(moved_path.resolve(), (dir_b / "paper.pdf").resolve())
         self.assertTrue(moved_path.exists())
         self.assertFalse(moved_path.is_symlink())
-        self.assertTrue((dir_c / "paper.pdf").is_symlink())
+        self.assertTrue(finder_alias.is_alias((dir_c / "paper.pdf")))
 
     def test_delete_moves_pdf_to_recycle_when_no_remaining_non_recycle_link(self) -> None:
         folder = self.storage.create_library_folder(parent_id=1, name="Only")

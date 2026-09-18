@@ -3184,7 +3184,8 @@ class Storage:
             existing = self.conn.execute(
                 """
                 SELECT id FROM resources
-                WHERE paper_id = ? AND (stored_path = ? OR source_path = ?)
+                WHERE paper_id = ? AND (stored_path = ? OR
+                    (COALESCE(stored_path, '') = '' AND source_path = ?))
                 ORDER BY id ASC LIMIT 1
                 """,
                 (paper_id, path_text, path_text),
@@ -3487,16 +3488,21 @@ class Storage:
         )
         if automatic:
             return automatic[0]
-        # Browser Save can establish the first main PDF before its version is
-        # known. This fallback never outranks a recognized publication version
-        # or a manual Default, and does not adopt ordinary Unknown attachments.
-        primary = by_id.get(int(paper.get("primary_resource_id") or 0))
-        if (primary and primary.get("exists")
-                and primary.get("added_via") == "browser_capture"
-                and normalize_paper_file_type(primary.get("file_type")) == "unknown"
-                and Storage.resource_is_pdf(primary)):
-            return primary
-        return None
+        # A work still needs a stable main file before classification. Keep an
+        # existing main/primary when possible, then choose the earliest PDF,
+        # then the earliest other file. Never infer a publication type or take
+        # an unreviewed identifier-conflict file as the Default.
+        fallback = [r for r in resources if r.get("exists")
+                    and normalize_paper_file_type(r.get("file_type")) in {"unknown", "other"}
+                    and (r.get("added_via") != "inventory_conflict" or r.get("file_type_override"))]
+        primary_id = int(paper.get("primary_resource_id") or 0)
+        main_paths = {str(paper.get(k) or "") for k in ("merged_pdf_path", "main_pdf_path")} - {""}
+        fallback.sort(key=lambda r: (
+            0 if int(r.get("id") or 0) == primary_id or Storage.resource_local_path(r) in main_paths else 1,
+            0 if Storage.resource_is_pdf(r) else 1,
+            str(r.get("created_at") or ""), int(r.get("id") or 0),
+        ))
+        return fallback[0] if fallback else None
 
     def resolve_default_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
         paper_id = self.resolve_paper_id(paper_id)

@@ -39,6 +39,8 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
+from . import finder_alias
+from .file_layout import normalize_files, sync_associated_aliases, finish_aliases, bundle_name
 from . import search_matching, author_profile_retry
 from .library_destination import active_folders, default_add_destination, save_default_add_folder
 from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
@@ -456,6 +458,9 @@ def run_ui_server(
         configure_semantic_scholar_api_key(
             credential_storage.get_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, "")
         )
+        if not documentation_mode:
+            from .file_layout_migration import migrate
+            migrate(credential_storage)
     finally:
         credential_storage.close()
     prewarm_author_monitor_photo_cache(db_path)
@@ -8666,7 +8671,7 @@ def cache_file_entries(root: Path) -> tuple[int, list[tuple[float, int, Path]]]:
     entries: list[tuple[float, int, Path]] = []
     for path in root.rglob("*"):
         try:
-            if path.is_symlink() or not path.is_file():
+            if finder_alias.is_alias(path) or not path.is_file():
                 continue
             stat = path.stat()
         except OSError:
@@ -17809,14 +17814,14 @@ def clear_publication_export_format(export_format: str) -> None:
         for path in PUBLICATION_EXPORT_DIR.glob(pattern):
             if export_format == "tex" and path.name.endswith("_pdf.tex"):
                 continue
-            if path.is_file() or path.is_symlink():
+            if path.is_file() or finder_alias.is_alias(path):
                 path.unlink(missing_ok=True)
 
 
 def clear_publication_export_dir() -> None:
     PUBLICATION_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     for path in PUBLICATION_EXPORT_DIR.glob("publication_list_*"):
-        if path.is_file() or path.is_symlink():
+        if path.is_file() or finder_alias.is_alias(path):
             path.unlink(missing_ok=True)
 
 
@@ -17845,7 +17850,7 @@ def copy_publication_export_to_desktop(path: Path) -> Path:
     desktop = Path.home() / "Desktop"
     desktop.mkdir(parents=True, exist_ok=True)
     for old_path in desktop.glob("publication_list_*_overleaf.zip"):
-        if old_path.is_file() or old_path.is_symlink():
+        if old_path.is_file() or finder_alias.is_alias(old_path):
             old_path.unlink(missing_ok=True)
     target = desktop / path.name
     shutil.copy2(path, target)
@@ -21492,7 +21497,7 @@ def associated_work_dir_for_paper(storage: Storage, paper_id: str) -> Path:
             current /= part
             if current.name.endswith(marker):
                 return current
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     scope = associated_scope_for_path(canonical) if canonical else None
     if scope:
         scope_name, relative = scope
@@ -21507,7 +21512,7 @@ def associated_work_dir_for_paper(storage: Storage, paper_id: str) -> Path:
         else:
             mirrored_parent = ASSOCIATED_FILES_ROOT / "Library"
         title_stem = clean_text(paper.get("title") or "Paper")
-    folder_name = finder_safe_name(f"{title_stem} [{storage_key}]", f"Paper [{storage_key}]")
+    folder_name = bundle_name(finder_safe_name(title_stem, 'Paper'), storage_key)
     return mirrored_parent / folder_name
 
 
@@ -21549,12 +21554,12 @@ def relocate_associated_work_dir(
         ASSOCIATED_FILES_ROOT
         / scope_name
         / relative.parent
-        / finder_safe_name(f"{canonical.stem} [{storage_key}]", f"Paper [{storage_key}]")
+        / bundle_name(finder_safe_name(canonical.stem, 'Paper'), storage_key)
     )
     if source.resolve() == destination.resolve():
         return source
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() or destination.is_symlink():
+    if destination.exists() or finder_alias.is_alias(destination):
         destination = unique_path_in_dir(destination)
     old_source = source
     path_moves: dict[Path, tuple[Path, list[str]]] = {}
@@ -21811,7 +21816,8 @@ def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> 
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
         raise KeyError(int(resource_id))
-    if int(paper.get("primary_resource_id") or 0) == int(resource_id):
+    if (int(paper.get("primary_resource_id") or 0) == int(resource_id)
+            or int(parse_raw_json(paper).get("file_layout", {}).get("default_resource_id") or 0) == int(resource_id)):
         raise ValueError("The current default file cannot be deleted. Select another version first.")
 
     stored_text = clean_text(resource.get("stored_path") or "")
@@ -21861,6 +21867,7 @@ def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> 
         raise
     if managed_file and stored_path and not shared_file:
         cleanup_local_copy_empty_parents([str(stored_path)])
+    sync_associated_aliases(storage, str(paper_id))
     return {
         "resource_id": int(resource_id),
         "name": clean_text(resource.get("display_name") or "") or (stored_path.name if stored_path else "Attached File"),
@@ -22408,6 +22415,14 @@ def attach_file_to_paper(
         temporary.unlink(missing_ok=True)
         target.unlink(missing_ok=True)
         raise
+    # MCP analysis writes remain append-only; they must not trigger relocation
+    # of other files. Ordinary App attachment writes reconcile the work.
+    if added_via not in {"ai_analysis", "browser_capture"}:
+        from .file_layout import reconcile_after_write
+        reconcile_after_write(storage, str(paper_id))
+        resource = storage.get_paper_resource(int(resource["id"])) or resource
+    elif added_via == "ai_analysis":
+        sync_associated_aliases(storage, str(paper_id))
     resource["duplicate"] = False
     return resource
 
@@ -22600,11 +22615,12 @@ def synchronize_default_pdf_location(storage: Storage, paper_id: str) -> dict[st
     """Keep the resolved PDF Default and managed primary path in agreement."""
     paper_id = storage.resolve_paper_id(paper_id)
     resolved = storage.resolve_default_paper_resource(str(paper_id))
-    if not resolved or not storage.resource_is_pdf(resolved):
+    if not resolved:
         return resolved
-    return promote_paper_resource(
-        storage, str(paper_id), int(resolved["id"]), allow_any_pdf=True,
-    )
+    if storage.resource_is_pdf(resolved):
+        promote_paper_resource(storage, str(paper_id), int(resolved["id"]), allow_any_pdf=True)
+    sync_all_pdf_aliases_for_paper(storage, str(paper_id), preserve_canonical_name=True)
+    return storage.get_paper_resource(int(resolved["id"]))
 
 
 def set_preferred_paper_file(storage: Storage, paper_id: str, resource_id: int | None) -> None:
@@ -22634,7 +22650,7 @@ def paper_resource_path_is_shared(storage: Storage, path: Path, paper_id: str, r
             values.add(f"/private{value}")
     for value in values:
         if storage.conn.execute(
-            "SELECT 1 FROM resources WHERE id != ? AND (stored_path = ? OR source_path = ?) LIMIT 1",
+            "SELECT 1 FROM resources WHERE id != ? AND (stored_path = ? OR (COALESCE(stored_path, '') = '' AND source_path = ?)) LIMIT 1",
             (int(resource_id), value, value),
         ).fetchone():
             return True
@@ -22712,7 +22728,7 @@ def promote_paper_resource(
             else:
                 shutil.copy2(current_path, archived_path)
         if candidate_path != target_path:
-            if target_path.exists() or target_path.is_symlink():
+            if target_path.exists() or finder_alias.is_alias(target_path):
                 target_path = unique_path_in_dir(target_path)
             if candidate_private:
                 shutil.move(str(candidate_path), str(target_path))
@@ -22860,7 +22876,7 @@ def preferred_local_pdf_dir_for_paper(storage: Storage, paper_id: str) -> Path |
     directories = active_local_pdf_dirs_for_paper(storage, paper_id)
     if not directories:
         return None
-    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    canonical = canonical_file_path_for_paper(storage.get_paper(paper_id))
     if canonical:
         canonical_parent = canonical.parent.resolve()
         for directory in directories:
@@ -23212,15 +23228,26 @@ def canonical_pdf_path_for_paper(paper: dict[str, Any] | None) -> Path | None:
     return None
 
 
+def canonical_file_path_for_paper(paper: dict[str, Any] | None) -> Path | None:
+    pdf = canonical_pdf_path_for_paper(paper)
+    if pdf:
+        return pdf
+    layout = parse_raw_json(paper).get("file_layout", {})
+    raw = layout.get("canonical_path") if isinstance(layout, dict) else ""
+    if raw and Path(raw).is_file():
+        return Path(raw).resolve()
+    return None
+
+
 def unique_path_in_dir(path: Path) -> Path:
-    if not path.exists() and not path.is_symlink():
+    if not path.exists() and not finder_alias.is_alias(path):
         return path
     parent = path.parent
     stem = path.stem
     suffix = path.suffix
     for index in range(2, 1000):
         candidate = parent / f"{stem} {index}{suffix}"
-        if not candidate.exists() and not candidate.is_symlink():
+        if not candidate.exists() and not finder_alias.is_alias(candidate):
             return candidate
     raise FileExistsError(str(path))
 
@@ -23411,7 +23438,7 @@ def library_folder_export_relative_paths(folders: list[dict[str, Any]], root_fol
 def library_item_real_file_for_export(paper: dict[str, Any] | None) -> Path | None:
     if not paper:
         return None
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if canonical:
         return canonical
     raw = parse_raw_json(paper)
@@ -23507,6 +23534,10 @@ def update_paper_file_path_references(
     if stored_matches_old:
         imported["stored_path"] = new_value
         raw["import"] = imported
+        updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
+    layout = raw.get("file_layout", {})
+    if isinstance(layout, dict) and layout.get("canonical_path") == old_value:
+        layout["canonical_path"] = new_value
         updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
     # Update the file registration in the same transaction, including the case
     # where only a resource still refers to the old name. Source provenance for
@@ -23755,10 +23786,10 @@ def remove_symlinks_to(target: Path, roots: list[Path]) -> list[str]:
         if not root.exists():
             continue
         for candidate in root.rglob("*"):
-            if not candidate.is_symlink():
+            if not finder_alias.is_alias(candidate):
                 continue
             try:
-                if candidate.resolve() == target_resolved:
+                if finder_alias.points_to(candidate, target_resolved):
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
@@ -23776,10 +23807,10 @@ def remove_direct_symlinks_to(target: Path, folders: list[Path]) -> list[str]:
         if not folder.exists() or not folder.is_dir():
             continue
         for candidate in folder.iterdir():
-            if not candidate.is_symlink():
+            if not finder_alias.is_alias(candidate):
                 continue
             try:
-                if candidate.resolve() == target_resolved:
+                if finder_alias.points_to(candidate, target_resolved):
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
@@ -23792,6 +23823,8 @@ def library_item_pdf_filename(
     paper: dict[str, Any],
     canonical_path: Path | None = None,
 ) -> str:
+    if canonical_path and canonical_path.suffix.lower() != ".pdf":
+        return library_item_export_filename(item, canonical_path)
     display_name = clean_text(item.get("display_name") or "")
     if not display_name:
         if canonical_path:
@@ -23818,7 +23851,7 @@ def library_item_local_pdf_path(
     paper: dict[str, Any] | None = None,
 ) -> Path | None:
     paper = paper or storage.get_paper(str(item.get("paper_id") or ""))
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not canonical:
         return None
     target_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
@@ -23826,9 +23859,9 @@ def library_item_local_pdf_path(
         return None
     desired_name = library_item_pdf_filename(item, paper, canonical)
     desired_path = target_dir / desired_name
-    if desired_path.exists() or desired_path.is_symlink():
+    if desired_path.exists() or finder_alias.is_alias(desired_path):
         try:
-            if desired_path.resolve() == canonical:
+            if finder_alias.resolve(desired_path) == canonical:
                 return desired_path
         except OSError:
             pass
@@ -23840,10 +23873,10 @@ def library_item_local_pdf_path(
     ):
         return canonical
     for candidate in target_dir.iterdir():
-        if not candidate.is_symlink():
+        if not finder_alias.is_alias(candidate):
             continue
         try:
-            if candidate.resolve() == canonical:
+            if finder_alias.resolve(candidate) == canonical:
                 return candidate
         except OSError:
             continue
@@ -23858,22 +23891,15 @@ def create_pdf_alias(
     canonical = canonical_path.expanduser().resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
     desired_name = finder_safe_name(filename or canonical.name, canonical.name)
-    if not desired_name.lower().endswith(".pdf"):
-        desired_name = f"{desired_name}.pdf"
+    suffix = canonical.suffix
+    if suffix and not desired_name.lower().endswith(suffix.lower()):
+        desired_name = f"{desired_name}{suffix}"
     desired_path = target_dir / desired_name
-    if canonical.parent.resolve() == target_dir.resolve() and desired_path == canonical:
+    if desired_path == canonical:
         return canonical
-    if target_dir.exists():
-        for candidate in target_dir.iterdir():
-            if candidate.is_symlink():
-                try:
-                    if candidate.name == desired_name and candidate.resolve() == canonical:
-                        return candidate
-                except OSError:
-                    continue
-    alias_path = unique_path_in_dir(desired_path)
-    os.symlink(str(canonical), str(alias_path))
-    return alias_path
+    if finder_alias.points_to(desired_path, canonical):
+        return finder_alias.ensure(canonical, desired_path)
+    return finder_alias.create(canonical, unique_path_in_dir(desired_path))
 
 
 def sync_alias_for_library_item(
@@ -23907,32 +23933,37 @@ def sync_alias_for_library_item(
         ).fetchone()
         item = dict(row) if row else None
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    if paper and not canonical_file_path_for_paper(paper):
+        normalize_files(storage, paper_id)
+        paper = storage.get_paper(paper_id)
+    canonical = canonical_file_path_for_paper(paper)
     if not item or not paper or not canonical:
         return None
     old_target = rescue_active_original(storage, paper_id)
     if old_target:
         sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target)
         paper = storage.get_paper(paper_id)
-        canonical = canonical_pdf_path_for_paper(paper)
+        canonical = canonical_file_path_for_paper(paper)
     target_dir = local_copy_dir_for_library_folder(storage, folder_id).resolve()
     alias = create_pdf_alias(
         canonical,
         target_dir,
         library_item_pdf_filename(item, paper, canonical),
     )
+    sync_associated_aliases(storage, paper_id)
     return alias or library_item_local_pdf_path(storage, item, paper)
 
 
 def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
     paper_id = storage.resolve_paper_id(paper_id)
     old_target = rescue_active_original(storage, paper_id)
-    if old_target:
-        sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target)
-    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target, preserve_canonical_name=True)
+    canonical = canonical_file_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return None
-    return create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT, canonical.name)
+    alias = create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT, canonical.name)
+    sync_associated_aliases(storage, paper_id)
+    return alias
 
 
 def sync_all_pdf_aliases_for_paper(
@@ -23943,13 +23974,16 @@ def sync_all_pdf_aliases_for_paper(
     preserve_canonical_name: bool = False,
 ) -> dict[str, Any]:
     paper_id = storage.resolve_paper_id(paper_id)
+    normalized = normalize_files(storage, paper_id)
+    if normalized.get("old_target") and not old_target:
+        old_target = normalized["old_target"]
     rescued_target = rescue_active_original(storage, paper_id)
     if rescued_target:
         if old_target:
             remove_symlinks_to(old_target, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
         old_target = rescued_target
     paper = storage.get_paper(str(paper_id))
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not paper or not canonical:
         return {"paper_id": str(paper_id), "canonical_renamed": False, "aliases_updated": 0}
     shared_paper_ids = paper_ids_referencing_pdf_path(storage, canonical)
@@ -24022,9 +24056,9 @@ def sync_all_pdf_aliases_for_paper(
         desired_name = library_item_pdf_filename(naming_owner, owner_paper, canonical)
         target_path = canonical.with_name(desired_name)
         if target_path != canonical:
-            if target_path.is_symlink():
+            if finder_alias.is_alias(target_path):
                 try:
-                    if target_path.resolve() == canonical:
+                    if finder_alias.resolve(target_path) == canonical:
                         target_path.unlink()
                 except OSError:
                     pass
@@ -24094,10 +24128,10 @@ def sync_all_pdf_aliases_for_paper(
         before = None
         if MY_PUBLICATIONS_LOCAL_COPY_ROOT.exists():
             for candidate in MY_PUBLICATIONS_LOCAL_COPY_ROOT.iterdir():
-                if not candidate.is_symlink():
+                if not finder_alias.is_alias(candidate):
                     continue
                 try:
-                    if candidate.resolve() == canonical:
+                    if finder_alias.resolve(candidate) == canonical:
                         before = candidate
                         break
                 except OSError:
@@ -24137,15 +24171,18 @@ def sync_all_pdf_aliases_for_paper(
         if not target_dir.exists():
             continue
         for candidate in target_dir.iterdir():
-            if not candidate.is_symlink() or candidate.name in valid_names:
+            if not finder_alias.is_alias(candidate) or candidate.name in valid_names:
                 continue
             try:
-                if candidate.resolve() == canonical:
+                if finder_alias.resolve(candidate) == canonical:
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
                 continue
     cleanup_local_copy_empty_parents(removed)
+    for referenced_paper_id in shared_paper_ids:
+        sync_associated_aliases(storage, referenced_paper_id)
+        finish_aliases(storage, referenced_paper_id)
     return {
         "paper_id": str(paper_id),
         "canonical_renamed": canonical_renamed,
@@ -24205,7 +24242,7 @@ def reconcile_all_library_pdf_names(storage: Storage) -> dict[str, Any]:
     for row in rows:
         paper_id = str(row["paper_id"] or "")
         result["papers_checked"] += 1
-        if not canonical_pdf_path_for_paper(storage.get_paper(paper_id)):
+        if not canonical_file_path_for_paper(storage.get_paper(paper_id)):
             continue
         result["papers_with_files"] += 1
         try:
@@ -24251,7 +24288,7 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
             continue
         paper = dict(paper_row)
         papers[paper_id] = paper
-        canonical = canonical_pdf_path_for_paper(paper)
+        canonical = canonical_file_path_for_paper(paper)
         if canonical:
             canonical_paper_ids.setdefault(str(canonical), []).append(paper_id)
     canonical_owner_ids = {
@@ -24264,7 +24301,7 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
         item = dict(row)
         paper_id = str(item.get("paper_id") or "")
         paper = papers.get(paper_id)
-        canonical = canonical_pdf_path_for_paper(paper)
+        canonical = canonical_file_path_for_paper(paper)
         result["items_checked"] += 1
         if not paper or not canonical:
             continue
@@ -24309,7 +24346,7 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
 
 def remove_pdf_aliases_for_paper_in_folders(storage: Storage, paper_id: str, folder_ids: list[int]) -> list[str]:
     paper_id = storage.resolve_paper_id(paper_id)
-    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    canonical = canonical_file_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return []
     folders = [local_copy_dir_for_library_folder(storage, int(folder_id or 0)) for folder_id in dict.fromkeys(folder_ids)]
@@ -24359,7 +24396,7 @@ def reconcile_paper_pdf_storage(
         return bool(old_target)
     changed = move_monitor_pdf_into_context_if_needed(storage, paper_id, target) or bool(old_target)
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not paper or not canonical:
         return changed
     if canonical.parent.resolve() != target.expanduser().resolve():
@@ -24382,7 +24419,7 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
     """
     paper_id = str(item.get("paper_id") or "")
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not paper or not canonical:
         return False
     source_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
@@ -24468,7 +24505,7 @@ def folder_tree_pdf_move_plan(storage: Storage, folder_id: int) -> list[dict[str
         if paper_id not in papers:
             papers[paper_id] = storage.get_paper(paper_id)
         paper = papers[paper_id]
-        canonical = canonical_pdf_path_for_paper(paper)
+        canonical = canonical_file_path_for_paper(paper)
         if not paper or not canonical:
             continue
         item_folder_id = int(item.get("folder_id") or 1)
@@ -24589,7 +24626,7 @@ def first_outside_reference_item(
 def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> None:
     paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     target_dir = first_outside_reference_dir(storage, paper_id, recycle_folder_id)
     if not paper or not canonical or not target_dir:
         return
@@ -24812,6 +24849,12 @@ def library_file_paths_for_delete(storage: Storage, paper: dict[str, Any]) -> li
             path = daiqo_copy_path(str(row["stored_path"] or ""))
             if path:
                 paths.append(path)
+    # Folder aliases are files in Finder, never the attachment directory they
+    # point at. Include only this work's managed projections in final cleanup.
+    for value in parse_raw_json(paper).get("file_layout", {}).get("associated_aliases", []):
+        path = Path(value).expanduser().absolute()
+        if path.is_relative_to(ASSOCIATED_FILES_ROOT.resolve()) and finder_alias.is_alias(path):
+            paths.append(path)
     unique: list[Path] = []
     seen: set[str] = set()
     for path in paths:
@@ -24870,7 +24913,7 @@ def library_recycle_orphan_paths(storage: Storage, recycle_folder_id: int) -> li
             referenced.add(str(path))
     orphans: list[Path] = []
     for candidate in recycle_root.rglob("*"):
-        if not candidate.is_file() and not candidate.is_symlink():
+        if not candidate.is_file() and not finder_alias.is_alias(candidate):
             continue
         try:
             resolved = candidate.expanduser().resolve()

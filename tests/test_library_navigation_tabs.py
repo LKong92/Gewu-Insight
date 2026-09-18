@@ -17,12 +17,19 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.storage = Storage(self.root / "paper_monitor.sqlite")
         self.original_spaces_root = ui_server.SPACES_LOCAL_COPY_ROOT
         self.original_library_root = ui_server.LIBRARY_LOCAL_COPY_ROOT
+        self.extra_roots = [patch.object(ui_server, name, self.root / subdir) for name, subdir in (
+            ('ASSOCIATED_FILES_ROOT', 'Associated Files'),
+            ('MY_PUBLICATIONS_LOCAL_COPY_ROOT', 'My Publications'), ('DEFAULT_PDF_DIR', 'pdfs'))]
+        for active_patch in self.extra_roots:
+            active_patch.start()
         ui_server.SPACES_LOCAL_COPY_ROOT = self.root / "Spaces"
         ui_server.LIBRARY_LOCAL_COPY_ROOT = self.root / "Library"
 
     def tearDown(self) -> None:
         ui_server.SPACES_LOCAL_COPY_ROOT = self.original_spaces_root
         ui_server.LIBRARY_LOCAL_COPY_ROOT = self.original_library_root
+        for active_patch in reversed(self.extra_roots):
+            active_patch.stop()
         self.storage.close()
         self.tmp.cleanup()
 
@@ -512,9 +519,10 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.assertEqual(Path(paper["source_path"]).resolve(), (target_dir / "paper.pdf").resolve())
         self.assertEqual(
             [Path(path).resolve() for path in json.loads(paper["supplement_pdf_paths"])],
-            [(target_dir / "supplement.pdf").resolve()],
+            [Path(resource["stored_path"]).resolve()],
         )
-        self.assertEqual(Path(resource["stored_path"]).resolve(), (target_dir / "supplement.pdf").resolve())
+        self.assertTrue(Path(resource["stored_path"]).resolve().is_relative_to(ui_server.ASSOCIATED_FILES_ROOT.resolve()))
+        self.assertEqual(Path(resource["stored_path"]).read_bytes(), b"%PDF-1.4\n")
         self.assertTrue((target_dir / "paper.pdf").exists())
 
 

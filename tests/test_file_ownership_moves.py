@@ -32,6 +32,8 @@ class FileOwnershipMoveTests(unittest.TestCase):
     def target(self):
         self.add_paper('target')
         self.storage.add_library_item(paper_id='target', folder_id=1)
+        ui.attach_file_to_paper(self.storage, paper_id='target', filename='target.pdf',
+            content=fixtures.PaperResourceStorageTests.valid_pdf_bytes(self, 'target'), file_type='published_version')
         return self.storage.get_paper('target')
 
     def test_drag_and_menu_round_trip_preserve_one_file_and_new_identity(self):

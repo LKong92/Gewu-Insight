@@ -14,7 +14,7 @@ from paper_monitor.storage import Storage
 class ManualPdfAttachmentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.storage = Storage(self.root / "paper_monitor.sqlite")
         self.library_root = self.root / "data" / "Library"
         self.spaces_root = self.root / "data" / "Spaces"

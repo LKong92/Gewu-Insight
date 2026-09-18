@@ -10,6 +10,7 @@ from pathlib import Path
 from .storage import Storage
 from .text import clean_text
 from .time_utils import now_iso
+from . import finder_alias
 
 
 def reassign_paper_file(storage: Storage, paper_id: str, resource_id: int, *,
@@ -123,8 +124,8 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
                 if not directory_with_alias.is_dir() or not any(directory_with_alias.resolve().is_relative_to(root) for root in managed_roots):
                     continue
                 for candidate in directory_with_alias.iterdir():
-                    if candidate.is_symlink() and candidate.resolve() == physical and not any(c[0] == candidate for c in alias_changes):
-                        alias_changes.append((candidate, os.readlink(candidate)))
+                    if finder_alias.points_to(candidate, physical) and not any(c[0] == candidate for c in alias_changes):
+                        alias_changes.append((candidate, finder_alias.snapshot(candidate)))
             operation = {"source": physical, "destination": destination, "move": managed, "done": False}
             operations.append(operation)
             if managed:
@@ -159,6 +160,12 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
                 VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),0)+1 FROM library_items WHERE folder_id=?))""",
                 (folder_id, target_id, destination.name, stamp, folder_id))
         if retire_source:
+            # The former work's attachment-folder projections retire with its
+            # last file. Store their bookmark bytes for transaction rollback.
+            for value in json.loads(source.get("raw_json") or "{}").get("file_layout", {}).get("associated_aliases", []):
+                alias = Path(value)
+                if finder_alias.is_alias(alias) and alias not in [a for a, _ in alias_changes]:
+                    alias_changes.append((alias, finder_alias.snapshot(alias)))
             storage.conn.execute("DELETE FROM papers WHERE paper_id=?", (paper_id,))
         # An emptied standalone source leaves no folder row or Finder alias.
         # If other files remain, aliases follow that source's remaining Default.
@@ -170,15 +177,15 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
         for alias, _old in alias_changes:
             alias.unlink(missing_ok=True)
             if replacement_path:
-                os.symlink(replacement_path, alias)
+                finder_alias.create(Path(replacement_path), alias)
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
         for alias, old in reversed(alias_changes):
-            if alias.is_symlink():
+            if finder_alias.is_alias(alias):
                 alias.unlink()
             if not alias.exists():
-                os.symlink(old, alias)
+                finder_alias.restore(alias, old)
         for operation in reversed(operations):
             source_path, destination = operation["source"], operation["destination"]
             if operation["move"] and destination.exists() and not source_path.exists():
@@ -191,11 +198,14 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
             except OSError:
                 pass
         raise
+    from .file_layout import reconcile_after_write
+    for pid in ([target_id] if retire_source else [paper_id, target_id]):
+        reconcile_after_write(storage, pid)
     return {"resource_id": selected[0]["id"], "resource_ids": [r["id"] for r in selected],
             "source_paper_id": paper_id, "target_paper_id": target_id,
             "source_removed": retire_source, "removed_item_ids": [p["id"] for p in placements] if retire_source else [],
             "target_gewu_key": target["storage_key"], "created_paper": bool(new_title), "folder_id": folder_id,
-            "files": [str(o["destination"]) for o in operations]}
+            "files": [storage.resource_local_path(storage.get_paper_resource(r["id"])) for r in selected]}
 
 
 def _repair_source_pointers(storage, source, resource):
@@ -220,6 +230,10 @@ def _repair_source_pointers(storage, source, resource):
     if source.get("source_path") in removed_paths:
         updates["source_path"] = ""
     raw = json.loads(source.get("raw_json") or "{}")
+    if raw.get("file_layout", {}).get("canonical_path") in removed_paths:
+        raw["file_layout"].pop("canonical_path", None)
+        raw["file_layout"].pop("default_resource_id", None)
+        updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
     imported = raw.get("import") or {}
     if imported.get("stored_path") in removed_paths or source.get("source_path") in removed_paths:
         remaining = storage.list_paper_resources(source["paper_id"], ensure_primary=False)

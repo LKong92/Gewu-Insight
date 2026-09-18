@@ -566,7 +566,7 @@ class BrowserCaptureTests(unittest.TestCase):
         self.storage.conn.commit()
         failed = self.save(capture, include_pdf=True)
         self.assertFalse(failed['ok'])
-        self.assertIsNone(self.storage.resolve_default_paper_resource('first'))
+        self.assertIsNone(self.storage.get_paper('first')['primary_resource_id'])
         first = self.storage.list_paper_resources('first')[0]
         self.assertEqual(Path(first['stored_path']).read_bytes(), capture.path.read_bytes())
         self.storage.conn.execute('DROP TRIGGER fail_primary'); self.storage.conn.commit()
@@ -584,7 +584,7 @@ class BrowserCaptureTests(unittest.TestCase):
             content=content, file_type='unknown', added_via='browser_capture')
         old_path = Path(original['stored_path'])
         self.assertTrue(old_path.resolve().is_relative_to(ui.ASSOCIATED_FILES_ROOT.resolve()))
-        self.assertIsNone(self.storage.resolve_default_paper_resource('first'))
+        self.assertIsNone(self.storage.get_paper('first')['primary_resource_id'])
         capture = self.begin(); self.upload(capture, content=content); self.review(capture)
         result = self.save(capture, include_pdf=True)
         self.assertTrue(result['ok']); self.assertTrue(result['duplicate_file'])

@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 
+from . import finder_alias
 from .download import paper_download_lock
 from .publication_jobs import MUTATION_LOCK
 
@@ -27,7 +28,7 @@ def within(path, directory):
 def _selection(storage, entries, recycle_id, empty):
     from . import ui_server as ui
     root = lexical_path(ui.local_copy_dir_for_library_folder(storage, recycle_id))
-    if root.is_symlink():
+    if finder_alias.is_alias(root):
         raise ValueError("The Recycle directory is a shortcut. Restore its local folder before emptying it.")
     folder_ids, item_ids, directories = set(), set(), []
     if empty:
@@ -101,7 +102,7 @@ def _references(storage):
 def _minimal_paths(paths):
     result = []
     for path in sorted(set(paths), key=lambda p: (len(p.parts), str(p))):
-        if exists(path) and not any(p.is_dir() and not p.is_symlink() and within(path, p) for p in result):
+        if exists(path) and not any(p.is_dir() and not finder_alias.is_alias(p) and within(path, p) for p in result):
             result.append(path)
     return result
 
@@ -126,9 +127,9 @@ def _plan(storage, entries, recycle_id, empty):
             continue
         directory = lexical_path(ui.local_copy_dir_for_library_folder(storage, item["folder_id"]))
         paper_paths = {r[-1] for r in refs if r[2] == item["paper_id"]}
-        if directory.is_dir() and not directory.is_symlink():
+        if directory.is_dir() and not finder_alias.is_alias(directory):
             for path in directory.iterdir():
-                if path.is_symlink() and path.resolve() in paper_paths:
+                if finder_alias.is_alias(path) and finder_alias.resolve(path) in paper_paths:
                     paths.append(path)
     plan.update(paths=_minimal_paths(paths), refs=refs)
     return plan
@@ -137,7 +138,7 @@ def _plan(storage, entries, recycle_id, empty):
 def _affected(ref, paths):
     raw, resolved = ref[-2:]
     for path in paths:
-        if path.is_symlink():
+        if finder_alias.is_alias(path):
             if raw == path:
                 return True
         elif raw == path or resolved == path or (path.is_dir() and (within(raw, path) or within(resolved, path))):
@@ -147,7 +148,7 @@ def _affected(ref, paths):
 
 def preview_recycle_selection(storage, entries, *, recycle_id, empty=False):
     plan = _plan(storage, entries, recycle_id, empty)
-    folders = [str(p) for p in plan["paths"] if p.is_dir() and not p.is_symlink()]
+    folders = [str(p) for p in plan["paths"] if p.is_dir() and not finder_alias.is_alias(p)]
     files = [str(p) for p in plan["paths"] if str(p) not in folders]
     return {"requires_confirmation": bool(plan["items"] or plan["folders"] or plan["paths"]),
             "metadata_paper_count": len(plan["deleting"]),
@@ -176,7 +177,7 @@ def delete_recycle_selection(storage, entries, *, recycle_id, empty=False, confi
                 if not source.is_file():
                     continue  # An already missing file cannot be restored by deleting an alias.
                 if source not in replacements:
-                    physically_removed = any(not p.is_symlink() and (source == p or (p.is_dir() and within(source, p))) for p in plan["paths"])
+                    physically_removed = any(not finder_alias.is_alias(p) and (source == p or (p.is_dir() and within(source, p))) for p in plan["paths"])
                     if not physically_removed:
                         replacements[source] = source
                     else:
@@ -222,9 +223,9 @@ def delete_recycle_selection(storage, entries, *, recycle_id, empty=False, confi
                 if not directory.is_dir():
                     continue
                 for path in directory.iterdir():
-                    if path.is_symlink() and path.resolve() in replacements and path.resolve() != replacements[path.resolve()]:
-                        old_link, target = os.readlink(path), replacements[path.resolve()]
-                        path.unlink(); relinked.append((path, old_link)); path.symlink_to(target)
+                    if finder_alias.is_alias(path) and finder_alias.resolve(path) in replacements and finder_alias.resolve(path) != replacements[finder_alias.resolve(path)]:
+                        old_link, target = finder_alias.snapshot(path), replacements[finder_alias.resolve(path)]
+                        path.unlink(); relinked.append((path, old_link)); finder_alias.create(target, path)
             for (table, identity, field), value in updates.items():
                 row_id = "paper_id" if table == "papers" else "id"
                 storage.conn.execute(f"UPDATE {table} SET {field}=? WHERE {row_id}=?", (json.dumps(value) if isinstance(value, (dict, list)) else value, identity))
@@ -272,10 +273,10 @@ def delete_recycle_selection(storage, entries, *, recycle_id, empty=False, confi
                     original.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(str(destination), str(original))
             for path, old_link in reversed(relinked):
-                if path.is_symlink():
+                if finder_alias.is_alias(path):
                     path.unlink()
                 if not exists(path):
-                    path.symlink_to(old_link)
+                    finder_alias.restore(path, old_link)
             for path in reversed(copied):
                 path.unlink(missing_ok=True)
             for directory in reversed(created_dirs):

@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import json
 from pathlib import Path
+from paper_monitor import finder_alias
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -63,9 +64,9 @@ class FilePlacementTests(unittest.TestCase):
         for row in c.s.conn.execute("SELECT * FROM library_items WHERE paper_id='fixture'"):
             alias = ui.library_item_local_pdf_path(c.s, dict(row), paper)
             self.assertIsNotNone(alias, dict(row))
-            self.assertEqual(alias.resolve(), path)
+            self.assertEqual(finder_alias.resolve(alias), path)
         if ui.paper_has_my_publication_reference(c.s, "fixture"):
-            self.assertTrue(any(p.resolve() == path for p in ui.MY_PUBLICATIONS_LOCAL_COPY_ROOT.iterdir()))
+            self.assertTrue(any(finder_alias.resolve(p) == path for p in ui.MY_PUBLICATIONS_LOCAL_COPY_ROOT.iterdir()))
         self.assertEqual(c.s.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
         return path
 
@@ -255,7 +256,7 @@ class FilePlacementTests(unittest.TestCase):
                 placement.move_original(c.s, "fixture", c.original, alias.parent)
             self.assertEqual(dict(c.s.get_paper("fixture")), before)
             self.assertEqual([dict(r) for r in c.s.conn.execute("SELECT * FROM resources")], resources)
-            self.assertTrue(alias.is_symlink())
+            self.assertTrue(finder_alias.is_alias(alias))
             self.assert_file_and_aliases(c)
 
     def test_failed_filesystem_move_leaves_registered_paths_unchanged(self):

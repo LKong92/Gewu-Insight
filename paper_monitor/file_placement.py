@@ -2,6 +2,7 @@
 from pathlib import Path
 import os
 import shutil
+from . import finder_alias
 
 
 def in_recycle(path):
@@ -62,8 +63,8 @@ def move_original(storage, paper_id, source, target_dir, *, filename=None, exclu
             return source
         target_dir.mkdir(parents=True, exist_ok=True)
         destination = target_dir / ui.finder_safe_name(filename or source.name, source.name)
-        if destination.is_symlink() and destination.resolve() == source:
-            displaced_alias = (destination, os.readlink(destination))
+        if finder_alias.points_to(destination, source):
+            displaced_alias = (destination, finder_alias.snapshot(destination))
             destination.unlink()
         destination = ui.unique_path_in_dir(destination)
         shutil.move(str(source), str(destination))
@@ -79,7 +80,7 @@ def move_original(storage, paper_id, source, target_dir, *, filename=None, exclu
             source.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(destination), str(source))
         if displaced_alias and not os.path.lexists(displaced_alias[0]):
-            os.symlink(displaced_alias[1], displaced_alias[0])
+            finder_alias.restore(displaced_alias[0], displaced_alias[1])
         raise
     return destination.resolve()
 
@@ -91,7 +92,7 @@ def rescue_active_original(storage, paper_id):
     and Associated Files without changing Key, resource IDs or Default.
     """
     from . import ui_server as ui
-    source = ui.canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    source = ui.canonical_file_path_for_paper(storage.get_paper(paper_id))
     if not source or not in_recycle(source):
         return None
     # Passing the existing Recycle directory invokes the same ownership rule

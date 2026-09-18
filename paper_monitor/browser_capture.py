@@ -506,7 +506,7 @@ class BrowserCaptureService:
                         resource = ui.promote_paper_resource(storage, paper_id, resource["id"])
                     elif (resource.get("file_type") == "unknown"
                             and resource.get("added_via") == "browser_capture"
-                            and storage.resolve_default_paper_resource(paper_id) is None
+                            and int((storage.resolve_default_paper_resource(paper_id) or {}).get("id") or 0) == resource["id"]
                             and ui.canonical_pdf_path_for_paper(storage.get_paper(paper_id)) is None):
                         # Saving the first article PDF establishes a reading copy
                         # even when its publication version is not yet known.
@@ -520,6 +520,7 @@ class BrowserCaptureService:
             # Use the existing folder/alias workflow, preserving every peer file
             # and the user's selected Default. Failure remains explicit/retryable.
             try:
+                ui.sync_all_pdf_aliases_for_paper(storage, paper_id, preserve_canonical_name=True)
                 ui.reconcile_paper_pdf_storage(storage, paper_id)
             except Exception as exc:
                 return {"ok": False, "metadata_saved": True, "paper_id": paper_id,
