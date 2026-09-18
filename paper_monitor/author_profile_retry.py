@@ -10,6 +10,18 @@ SETTING = "author_profile_network_retry_v1"
 BACKOFF_SECONDS = (5 * 60, 15 * 60, 60 * 60)
 BATCH_SIZE = 3
 _LOCK = threading.RLock()
+PROFILE_ERROR = "Google Scholar publication list could not be read"
+
+
+class ProfileResponseError(RuntimeError):
+    """The response is not a usable publication list, not evidence of no papers."""
+
+
+def profile_failure(error):
+    text = str(error or "").lower()
+    return isinstance(error, ProfileResponseError) or any(s in text for s in (
+        PROFILE_ERROR.lower(), "no publication rows were found on this scholar profile",
+    ))
 
 
 def network_failure(error):
@@ -61,7 +73,8 @@ def _time(value, now):
 
 
 def retryable(author):
-    return author.get("status") == "error" and network_failure(author.get("message"))
+    return author.get("status") == "error" and (
+        network_failure(author.get("message")) or profile_failure(author.get("message")))
 
 
 def provider_ready(state, author, now):
@@ -79,7 +92,7 @@ def due(state, author, now):
     )
 
 
-def failed(storage, author, now):
+def failed(storage, author, now, *, profile_error=False):
     with _LOCK:
         state = read(storage)
         key = provider(author)
@@ -89,6 +102,20 @@ def failed(storage, author, now):
         except (ValueError, TypeError):
             failures = 0
         count = min(max(0, failures) + 1, len(BACKOFF_SECONDS))
+        if profile_error:
+            # An unexpected page can affect every Scholar author. Probe at most
+            # three times per day, then leave it until the next daily check.
+            same_day = isinstance(entry, dict) and entry.get('profile_day') == now.date().isoformat()
+            try:
+                attempts = max(0, int(entry.get('profile_attempts') or 0)) + 1 if same_day else 1
+            except (ValueError, TypeError):
+                attempts = 1
+            until = (now + timedelta(hours=1) if attempts < 3 else
+                     now.replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1))
+            state[key] = {'failures': count, 'retry_at': until.isoformat(timespec='seconds'),
+                          'profile_day': now.date().isoformat(), 'profile_attempts': attempts}
+            storage.set_setting(SETTING, json.dumps(state, sort_keys=True))
+            return
         state[key] = {"failures": count, "retry_at": (
             now + timedelta(seconds=BACKOFF_SECONDS[count - 1])
         ).isoformat(timespec="seconds")}

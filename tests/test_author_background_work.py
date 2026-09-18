@@ -147,5 +147,88 @@ class AuthorBackgroundTests(unittest.TestCase):
         self.assertEqual(result['finished_at'], previous['finished_at'])
         self.assertIn('last_scheduler_check_at', result)
 
+    def test_snapshot_recounts_during_quota_pause_without_starting_work(self):
+        self.add(2)
+        now = datetime.now().astimezone()
+        work.save(self.storage, {'day': now.date().isoformat(), 'used': 80,
+            'eligible': 8738, 'status': 'daily_limit',
+            'next_run_at': (now + timedelta(days=1)).isoformat()})
+        with patch.object(ui, 'run_author_monitor_enrichment_job') as run:
+            self.assertEqual(work.snapshot(self.storage)['eligible'], 2)
+            for pid in ['p0', 'p1']:
+                self.storage.conn.execute('UPDATE papers SET doi=?, abstract=? WHERE paper_id=?',
+                    ('10.1234/' + pid, 'Filled by an explicit refresh', pid))
+            self.storage.conn.commit()
+            result = work.snapshot(self.storage)
+            self.assertEqual(result['eligible'], 0)
+            self.assertEqual(result['status'], 'complete')
+            self.assertEqual(result['used'], 80)
+            run.assert_not_called()
+
+    def test_automatic_attempt_limit_survives_reopen_but_manual_lookup_remains_available(self):
+        self.add(1)
+        old = (datetime.now().astimezone() - timedelta(days=8)).isoformat()
+        with patch.object(ui, 'resolve_google_scholar_candidate_to_identifier', return_value=None) as resolve:
+            for attempt in range(work.MAX_ATTEMPTS):
+                job = ui.create_author_monitor_enrichment_job(automatic=True)
+                ui.run_author_monitor_enrichment_job(job_id=job, db_path=self.path, paper_ids=['p0'])
+                row = self.storage.get_paper('p0')
+                raw = ui.parse_raw_json(row)
+                self.assertEqual(raw['author_monitor_enrichment']['automatic_attempts'], attempt + 1)
+                raw['author_monitor_enrichment']['attempted_at'] = old
+                self.storage.update_paper_raw_json('p0', raw)
+            reopened = Storage(self.path)
+            try:
+                status = work.snapshot(reopened)
+                self.assertEqual((status['eligible'], status['waiting_retry'], status['needs_manual']), (0, 0, 1))
+            finally: reopened.close()
+            job = ui.create_author_monitor_enrichment_job(automatic=True)
+            ui.run_author_monitor_enrichment_job(job_id=job, db_path=self.path, paper_ids=['p0'])
+            self.assertEqual(resolve.call_count, 3)
+            job = ui.create_author_monitor_enrichment_job()
+            ui.run_author_monitor_enrichment_job(job_id=job, db_path=self.path, paper_ids=['p0'], force=True)
+            self.assertEqual(resolve.call_count, 4)
+            self.assertEqual(work.attempt_count(self.storage.get_paper('p0'), ui), 3)
+
+    def test_legacy_marker_and_shared_author_membership_do_not_duplicate_work(self):
+        a, b = self.add(1)
+        self.storage.add_author_monitor_paper(author_monitor_id=b, paper_id='p0')
+        old = (datetime.now().astimezone() - timedelta(days=8)).isoformat()
+        self.storage.update_paper_raw_json('p0', {'author_monitor_enrichment': {'attempted_at': old}})
+        self.assertEqual(work.attempt_count(self.storage.get_paper('p0'), ui), 1)
+        self.assertEqual(work.snapshot(self.storage)['eligible'], 1)
+
+    def test_author_paper_completed_elsewhere_is_not_periodically_refreshed(self):
+        self.add(1)
+        self.storage.add_library_item(paper_id='p0')
+        self.storage.conn.execute('UPDATE papers SET doi=?, abstract=? WHERE paper_id=?',
+            ('10.1234/example', 'Already complete', 'p0'))
+        self.storage.conn.commit()
+        with patch.object(ui, 'publication_metrics_metadata_from_doi') as refresh:
+            work.run_slice(self.path)
+            refresh.assert_not_called()
+        self.assertEqual(work.snapshot(self.storage)['eligible'], 0)
+
+    def test_live_count_cache_observes_edits_from_another_connection(self):
+        self.add(1)
+        self.assertEqual(work.snapshot(self.storage)['eligible'], 1)
+        other = Storage(self.path)
+        try:
+            other.conn.execute('UPDATE papers SET doi=?, abstract=? WHERE paper_id=?',
+                ('10.1234/complete', 'Abstract', 'p0'))
+            other.conn.commit()
+        finally: other.close()
+        self.assertEqual(work.snapshot(self.storage)['eligible'], 0)
+
+    def test_completion_projection_preserves_identifier_rules(self):
+        self.add(1)
+        self.storage.conn.execute('UPDATE papers SET doi=?, abstract=? WHERE paper_id=?',
+            ('10.invalid/not-a-doi', 'Abstract', 'p0'))
+        self.storage.conn.commit()
+        self.storage.update_paper_raw_json('p0', {'manual_preprint_identifier_override': True,
+            'manual_preprint_identifier': '2601.01234'})
+        self.assertFalse(ui.author_monitor_paper_needs_enrichment(self.storage.get_paper('p0')))
+        self.assertEqual(work.snapshot(self.storage)['eligible'], 0)
+
 
 if __name__ == '__main__': unittest.main()

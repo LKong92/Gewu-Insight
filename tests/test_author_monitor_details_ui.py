@@ -15,6 +15,29 @@ def ui_function(name):
 
 
 class AuthorDetailsLayoutTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Node required')
+    def test_completion_footer_has_explicit_scope_and_separate_states(self):
+        script = ui_function('authorMonitorIdleActivity') + r'''
+const assert = require('node:assert/strict');
+const state = {authorMonitorMetadataWork: {eligible: 4, waiting_retry: 2,
+  needs_manual: 3, status: 'daily_limit', next_run_at: 'tomorrow'}};
+function autoStatusTime(value) { return value; }
+let result = authorMonitorIdleActivity('secondary');
+assert.equal(result.live, false);
+assert.match(result.text, /Author metadata · All authors/);
+assert.match(result.text, /Daily limit reached · 4 ready/);
+assert.match(result.text, /3 need manual lookup/);
+state.authorMonitorMetadataWork = {status:'running', eligible:4, current:1, total:2};
+assert.equal(authorMonitorIdleActivity('secondary').live, true);
+state.authorMonitorMetadataWork = {status:'waiting_retry', waiting_retry:2};
+assert.match(authorMonitorIdleActivity('secondary').text, /2 waiting for retry/);
+state.authorMonitorMetadataWork = {status:'needs_manual', needs_manual:3};
+assert.match(authorMonitorIdleActivity('secondary').text, /Automatic attempts finished/);
+state.authorMonitorMetadataWork = {status:'complete'};
+assert.match(authorMonitorIdleActivity('secondary').text, /No missing information queued/);
+'''
+        subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
     def test_no_redundant_header_or_forced_second_action_group(self):
         self.assertNotIn("author-monitor-detail-head", INDEX_HTML)
         detail = ui_function("renderAuthorMonitorPaperDetail")

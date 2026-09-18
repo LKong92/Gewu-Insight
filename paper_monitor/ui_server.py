@@ -9746,7 +9746,7 @@ def run_auto_author_monitor_once(
             force=False,
         )
         results.append(result)
-        if result.get("network_retryable") or result.get("status") in {"cooldown", "global-cooldown"}:
+        if result.get("network_retryable") or result.get("profile_retryable") or result.get("status") in {"cooldown", "global-cooldown"}:
             # One failed probe is enough for this provider. Do not walk the
             # entire author list while disconnected or after a restriction.
             unavailable_providers.add(source)
@@ -14402,13 +14402,17 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "sort_order": int(row.get("sort_order") or 0),
         "status": clean_text(row.get("status") or "idle"),
         "message": (
+            "Google Scholar publication list unavailable; saved papers retained"
+            if row.get("status") == "error" and author_profile_retry.profile_failure(row.get("message"))
+            else
             "Google Scholar temporarily unavailable"
             if author_profile_retry.retryable(row) and source_type == "google_scholar"
             else "Publication source temporarily unavailable"
             if author_profile_retry.retryable(row)
             else clean_text(row.get("message") or "")
         ),
-        "network_retryable": author_profile_retry.retryable(row),
+        "network_retryable": row.get("status") == "error" and author_profile_retry.network_failure(row.get("message")),
+        "profile_retryable": row.get("status") == "error" and author_profile_retry.profile_failure(row.get("message")),
         "error_detail": clean_text(row.get("message") or "") if row.get("status") == "error" else "",
         "paper_count": int(row.get("paper_count") or 0),
         "unread_count": int(row.get("unread_count") or 0),
@@ -15063,6 +15067,7 @@ def refresh_author_monitor_for_db(
         except Exception as exc:
             message = clean_text(str(exc)) or "Author refresh failed"
             network_error = author_profile_retry.network_failure(exc)
+            profile_error = author_profile_retry.profile_failure(exc)
             if network_error and not author_profile_retry.network_failure(message):
                 message = f"Network connection interrupted: {message}"
             storage.update_author_monitor(
@@ -15071,14 +15076,15 @@ def refresh_author_monitor_for_db(
                 message=message,
                 last_checked_at=now_iso(),
             )
-            if network_error:
-                author_profile_retry.failed(storage, monitor, datetime.now(local_timezone()))
+            if network_error or profile_error:
+                author_profile_retry.failed(storage, monitor, datetime.now(local_timezone()), profile_error=profile_error)
             return {
                 "author_id": author_monitor_id,
                 "status": "error",
                 "added": 0,
                 "message": message,
                 "network_retryable": network_error,
+                "profile_retryable": profile_error,
             }
     finally:
         storage.close()
@@ -15766,7 +15772,7 @@ def google_scholar_request_with_spacing(
             # No retry inside this critical section may bypass a new cooldown.
             kwargs["max_retries"] = 1
             response = request_with_retries(method, url, **kwargs)
-            if is_google_scholar_block_page(response.text, response.url):
+            if getattr(response, 'status_code', 200) in {403, 429} or is_google_scholar_block_page(response.text, response.url):
                 raise GoogleScholarBlockedError(google_scholar_block_message())
             return response
         except Exception as exc:
@@ -15863,21 +15869,29 @@ def fetch_google_scholar_profile_payload(
                 raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
             raise
         html = response.text
-        if is_google_scholar_block_page(html, response.url):
+        if getattr(response, 'status_code', 200) in {403, 429} or is_google_scholar_block_page(html, response.url):
             raise GoogleScholarBlockedError(google_scholar_block_message())
         soup = BeautifulSoup(html, "html.parser")
         if start == 0:
             profile.update(google_scholar_profile_page_metadata(soup, response.url, user_id))
-        rows = soup.select("tr.gsc_a_tr")
+        rows = soup.select(".gsc_a_tr")
         if not rows:
-            if start == 0:
-                raise RuntimeError("No publication rows were found on this Scholar profile")
-            break
+            # Only an explicit empty list is a valid empty response. A login,
+            # consent or changed page must not be reported as a successful check.
+            if soup.select_one("#gsc_a_b #gsc_a_nn") and (start or profile.get("name")):
+                break
+            raise author_profile_retry.ProfileResponseError(
+                author_profile_retry.PROFILE_ERROR +
+                ". The site returned an unexpected page or requires browser access. "
+                "Saved publications are unchanged; automatic checks will retry later."
+            )
         before = len(candidates)
+        parsed_rows = 0
         for row in rows:
             candidate = google_scholar_row_to_publication(row)
             if not candidate:
                 continue
+            parsed_rows += 1
             paper = candidate["paper"]
             key = "|".join(
                 [
@@ -15892,7 +15906,11 @@ def fetch_google_scholar_profile_payload(
             candidates.append(candidate)
             if len(candidates) >= limit:
                 break
-        if len(candidates) >= limit or len(rows) < page_size or len(candidates) == before:
+        if not parsed_rows or len(candidates) == before:
+            raise author_profile_retry.ProfileResponseError(
+                author_profile_retry.PROFILE_ERROR + ". The publication list was incomplete or unreadable."
+            )
+        if len(candidates) >= limit or len(rows) < page_size:
             break
     return {"profile": profile, "candidates": candidates}
 
@@ -15962,18 +15980,24 @@ def is_google_scholar_block_error(error: Exception) -> bool:
         or "sorry/index" in text
         or "google.com/sorry" in text
         or "403 client error" in text
+        or "429 client error" in text
+        or "http 429" in text
+        or "http 403" in text
         or "forbidden" in text
     )
 
 
 def is_google_scholar_block_page(html: str, url: str = "") -> bool:
-    text = f"{url}\n{html[:5000]}".lower()
-    return (
-        "google.com/sorry" in text
-        or "/sorry/index" in text
-        or "unusual traffic" in text
-        or "recaptcha" in text
-    )
+    address = url.lower()
+    if "google.com/sorry" in address or "/sorry/index" in address:
+        return True
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.select_one('.g-recaptcha, #recaptcha, form[action*="/sorry/"], iframe[src*="recaptcha"], script[src*="recaptcha"]'):
+        return True
+    # Scholar's HTML can have more than 5 KB of scripts before its error text.
+    # Publication titles containing these words are not access restrictions.
+    return not soup.select_one('.gsc_a_at') and any(marker in soup.get_text(' ', strip=True).lower()
+        for marker in ('unusual traffic', 'not a robot', 'automated queries', 'recaptcha'))
 
 
 def google_scholar_block_message() -> str:
@@ -19522,14 +19546,17 @@ def record_author_monitor_enrichment_attempt(
     *,
     status: str,
     message: str = "",
+    automatic: bool = False,
 ) -> dict[str, Any] | None:
     paper_id = storage.resolve_paper_id(paper_id)
     current = storage.get_paper(paper_id) or paper
     raw = parse_raw_json(current)
+    attempts = author_metadata_work.attempt_count(current, sys.modules[__name__])
     raw["author_monitor_enrichment"] = {
         "status": status,
         "message": clean_text(message),
         "attempted_at": now_iso(),
+        "automatic_attempts": attempts + int(automatic),
     }
     return storage.update_paper_raw_json(paper_id, raw)
 
@@ -19545,7 +19572,6 @@ def run_author_monitor_enrichment_job(
     max_papers: int = 0,
     paper_ids: list[str] | None = None,
     time_budget_seconds: float = 0,
-    publication_paper_ids: list[str] | None = None,
 ) -> None:
     storage = Storage(db_path)
     matched = 0
@@ -19562,15 +19588,16 @@ def run_author_monitor_enrichment_job(
                 paper for paper in rows
                 if clean_text(paper.get("paper_id") or "") == selected_paper_id
             ]
-        publication_ids = {storage.resolve_paper_id(pid) for pid in (publication_paper_ids or [])}
+        automatic = bool((get_author_monitor_enrichment_job(job_id) or {}).get("automatic"))
         pending = [
             paper for paper in rows
-            if paper["paper_id"] in publication_ids or ((
+            if (
                 (not author_monitor_paper_has_identifier(paper))
                 if identifiers_only
                 else author_monitor_paper_needs_enrichment(paper)
             )
-            and (force or not author_monitor_enrichment_recently_attempted(paper)))
+            and (force or not author_monitor_enrichment_recently_attempted(paper))
+            and (not automatic or author_metadata_work.attempt_count(paper, sys.modules[__name__]) < author_metadata_work.MAX_ATTEMPTS)
         ]
         if int(max_papers or 0) > 0:
             pending = pending[: int(max_papers)]
@@ -19628,6 +19655,9 @@ def run_author_monitor_enrichment_job(
                 continue
             paper = storage.get_paper(paper_id) or paper
             processed_ids.add(paper_id)
+            if automatic and not author_monitor_paper_needs_enrichment(paper):
+                skipped += 1
+                continue  # A concurrent explicit refresh already completed it.
             index += 1
             title = clean_text(paper.get("title") or paper_id or "Untitled paper")
             update_author_monitor_enrichment_job(
@@ -19641,14 +19671,6 @@ def run_author_monitor_enrichment_job(
                 doi = normalize_publication_doi(str(paper.get("doi") or ""))
                 arxiv_id = arxiv_identifier_for_paper(paper)
                 normalized: dict[str, Any] | None = None
-                if paper_id in publication_ids:
-                    result = metadata_refresh.refresh(storage, paper_id, detailed=False, origin="automatic")
-                    matched += bool(result["metadata_refresh"]["changed_fields"])
-                    enriched += bool(result["paper"].get("abstract"))
-                    update_author_monitor_enrichment_job(job_id, current=index, matched=matched, enriched=enriched)
-                    if work_queue:
-                        time.sleep(AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS)
-                    continue
                 if looks_like_doi(doi):
                     normalized = publication_metrics_metadata_from_doi(doi, timeout=12, max_retries=1)
                 elif arxiv_id:
@@ -19682,6 +19704,7 @@ def run_author_monitor_enrichment_job(
                         updated,
                         status="complete",
                         message="Identifier metadata refreshed",
+                        automatic=automatic,
                     )
                 else:
                     unresolved += 1
@@ -19691,6 +19714,7 @@ def run_author_monitor_enrichment_job(
                         paper,
                         status="unresolved",
                         message="No confident DOI or arXiv match",
+                        automatic=automatic,
                     )
             except Exception as exc:
                 unresolved += 1
@@ -19702,6 +19726,7 @@ def run_author_monitor_enrichment_job(
                     paper,
                     status="error",
                     message=str(exc),
+                    automatic=automatic,
                 )
             update_author_monitor_enrichment_job(
                 job_id,
@@ -53439,13 +53464,18 @@ INDEX_HTML = """<!doctype html>
         const work = state.authorMonitorMetadataWork || {};
         const pending = Number(work.eligible || 0);
         const waiting = Number(work.waiting_retry || 0);
+        const manual = Number(work.needs_manual || 0);
+        const label = "Author metadata · All authors";
+        const manualText = manual ? ` · ${manual} need manual lookup` : "";
+        const waitingText = waiting ? ` · ${waiting} waiting for retry` : "";
         const retry = work.retry_at ? ` · Retry after ${autoStatusTime(work.retry_at)}` : "";
-        if (work.status === "running") return {text: `Paper metadata · ${Number(work.current || 0)} / ${Number(work.total || 0)} · ${pending} pending`, live: true};
-        if (work.status === "daily_limit") return {text: `Paper metadata · Daily limit reached · ${pending} pending · Continue ${autoStatusTime(work.next_run_at)}`, live: false};
-        if (work.status === "error") return {text: `Paper metadata check failed · Retry ${autoStatusTime(work.next_run_at)}`, live: false};
-        if (pending) return {text: `Paper metadata · ${pending} pending · ${waiting} waiting for retry · Continue ${autoStatusTime(work.next_run_at)}`, live: false};
-        if (waiting) return {text: `Paper metadata · ${waiting} waiting for retry${retry}`, live: false};
-        return {text: work.status === "complete" ? "Paper metadata · No checks currently due." : "Paper metadata · Waiting for background check", live: false};
+        if (work.status === "running") return {text: `${label} · ${Number(work.current || 0)} / ${Number(work.total || 0)} · ${pending} ready${waitingText}${manualText}`, live: true};
+        if (work.status === "daily_limit" && pending) return {text: `${label} · Daily limit reached · ${pending} ready${waitingText} · Continue ${autoStatusTime(work.next_run_at)}${manualText}`, live: false};
+        if (work.status === "error") return {text: `${label} · Check failed · Retry ${autoStatusTime(work.next_run_at)}`, live: false};
+        if (pending) return {text: `${label} · ${pending} ready · ${waiting} waiting for retry${manualText}`, live: false};
+        if (waiting) return {text: `${label} · ${waiting} waiting for retry${retry}${manualText}`, live: false};
+        if (manual) return {text: `${label} · ${manual} need manual lookup · Automatic attempts finished`, live: false};
+        return {text: `${label} · No missing information queued`, live: false};
       }
       const authors = state.authorMonitors || [];
       const selected = selectedAuthorMonitor();
@@ -53454,7 +53484,7 @@ INDEX_HTML = """<!doctype html>
       const active = scope.find(authorMonitorIsBackgroundScholarJob);
       if (active) return {text: `${active.name || "Author"} · ${active.message || "Checking publications..."}`, live: true};
       const failed = scope.find(a => ["error", "cooldown"].includes(a.status));
-      if (failed?.network_retryable) return {
+      if (failed?.network_retryable || failed?.profile_retryable) return {
         text: failed.message,
         detail: `${failed.name || "Author"}\n${failed.error_detail || failed.message}\nLast attempt: ${autoStatusTime(failed.last_checked_at)}\nAutomatic retry pending`,
         live: false, waiting: true

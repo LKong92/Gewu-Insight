@@ -258,7 +258,7 @@ class MetadataRefreshTests(unittest.TestCase):
         self.assertEqual(handler.result['paper']['preprint_id'], ARXIV)
         self.assertIn('checked_at', handler.result['metadata_refresh'])
 
-    def test_shared_scheduler_honors_saved_paper_budget_without_scholar(self):
+    def test_author_scheduler_does_not_refresh_saved_library_or_publication_papers(self):
         from paper_monitor import author_metadata_work as scheduler
         self.storage.add_library_item(paper_id=self.pid)
         self.storage.add_my_publication(paper_id=self.pid)
@@ -266,9 +266,10 @@ class MetadataRefreshTests(unittest.TestCase):
         scheduler.save(self.storage, {'day': now.date().isoformat(), 'used': 79})
         with patch.dict(ui.AUTHOR_MONITOR_ENRICHMENT_JOBS, {}, clear=True), patch.object(ui, 'google_scholar_request_with_spacing', side_effect=AssertionError('No Scholar traffic')):
             scheduler.run_slice(self.path, now=now)
-            self.assertEqual(scheduler.read(self.storage)['used'], 80)
+            self.assertEqual(scheduler.read(self.storage)['used'], 79)
             scheduler.run_slice(self.path, now=now + timedelta(minutes=10))
-            self.assertEqual(self.mocks['fetch_arxiv_by_id'].call_count, 1)
+            self.assertEqual(self.mocks['fetch_arxiv_by_id'].call_count, 0)
+            self.assertEqual(scheduler.snapshot(self.storage)['eligible'], 0)
 
     def test_raw_manual_metadata_survives_remote_payload(self):
         raw = ui.parse_raw_json(self.storage.get_paper(self.pid))

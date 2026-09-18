@@ -4965,6 +4965,27 @@ class Storage:
             current["author_unread"] = bool(current.get("author_unread")) or bool(item.get("author_unread"))
         return [merged[paper_id] for paper_id in order]
 
+    def list_author_monitor_enrichment_candidates(self) -> list[dict[str, Any]]:
+        """Small, author-only projection for completion planning and live counts.
+
+        Aggregate memberships first so shared papers appear once. Avoid loading
+        file/placement columns. Keep raw identifiers for the same recognition
+        rules used by explicit completion, including manual arXiv overrides.
+        """
+        rows = self.conn.execute("""
+            WITH monitored AS (
+                SELECT paper_id, MIN(author_monitor_id) AS author_monitor_id,
+                       MAX(first_seen_at) AS author_first_seen_at
+                FROM author_monitor_papers GROUP BY paper_id
+            )
+            SELECT p.paper_id, p.doi, p.abstract, p.url,
+                   p.landing_url, p.pdf_url, p.journal, p.publication_date,
+                   m.author_monitor_id, m.author_first_seen_at,
+                   p.raw_json, p.semantic_scholar_json
+            FROM monitored m JOIN papers p ON p.paper_id = m.paper_id
+        """).fetchall()
+        return [dict(row, author_monitor_ids=[row['author_monitor_id']]) for row in rows]
+
     def list_author_monitor_card_cache_candidates(
         self,
         *,
