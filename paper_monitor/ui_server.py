@@ -40,6 +40,7 @@ from pypdf import PdfReader, PdfWriter
 import requests
 
 from . import finder_alias
+from . import folder_rename
 from .file_layout import normalize_files, sync_associated_aliases, finish_aliases, bundle_name
 from . import search_matching, author_profile_retry
 from .library_destination import active_folders, default_add_destination, save_default_add_folder
@@ -465,6 +466,7 @@ def run_ui_server(
             # Only replay unfinished move journals before workers can touch the
             # same files. No Library scan, layout migration or database backup.
             from .file_layout_journal import recover
+            folder_rename.recover(credential_storage)
             recover(credential_storage)
     finally:
         credential_storage.close()
@@ -3275,26 +3277,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             folder_api: dict[str, Any] = {}
+            rename_result: dict[str, Any] = {}
             tabs = library_workspace_tabs(storage)
             index = library_navigation_tab_index(tabs, payload)
             label = " ".join(str(payload.get("label") or "").split()) or str(tabs[index].get("label") or f"Space {index + 1}")
             tabs[index]["label"] = label[:80]
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if root_folder_id:
-                pdf_move_plan = folder_tree_pdf_move_plan(storage, root_folder_id)
-                folder = storage.rename_library_folder(folder_id=root_folder_id, name=label[:80])
-                apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
+                folder, rename_result = folder_rename.rename(storage, root_folder_id, label[:80], workspace_tabs=tabs)
                 tabs[index]["root_folder_id"] = int(folder.get("id") or root_folder_id)
                 tabs[index]["label"] = str(folder.get("name") or label)[:80]
                 folder_api = library_folder_to_api(folder, storage=None, include_native_path=False)
-            save_library_workspace_tabs(storage, tabs)
+            else:
+                save_library_workspace_tabs(storage, tabs)
             snapshot = library_navigation_snapshot(storage)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"folder": folder_api, **snapshot})
+        self.send_json({"folder": folder_api, **rename_result, **snapshot})
 
     def handle_add_library_workspace_doi(self, payload: dict[str, Any]) -> None:
         self.handle_add_library_navigation_paper({**payload, "tab_type": "workspace"})
@@ -3732,17 +3734,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
-            pdf_move_plan = folder_tree_pdf_move_plan(storage, folder_id) if storage.get_library_folder(folder_id) else []
-            folder = storage.rename_library_folder(folder_id=folder_id, name=name)
-            apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
+            folder, rename_result = folder_rename.rename(storage, folder_id, name)
             snapshot = library_snapshot(storage) if include_snapshot else {}
             folder_api = library_folder_to_api(folder, storage)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"folder": folder_api, **snapshot})
+        self.send_json({"folder": folder_api, **rename_result, **snapshot})
 
     def handle_color_library_folder(self, payload: dict[str, Any]) -> None:
         folder_id = int(payload.get("folder_id") or 0)
@@ -35971,6 +35971,7 @@ INDEX_HTML = """<!doctype html>
       libraryLoadingPromise: null,
       libraryRefreshPromise: null,
       libraryPaperDetailRequests: {},
+      libraryPathRevision: 0,
       aiAccessEnabled: false,
       paperFilesByPaperId: {},
       paperFileRequests: {},
@@ -37574,14 +37575,17 @@ INDEX_HTML = """<!doctype html>
       if (!id) return Promise.resolve(null);
       if (libraryFolderLoaded(id) && !options.force) return Promise.resolve(null);
       if (state.libraryFolderLoadPromises[id] && !options.force) return state.libraryFolderLoadPromises[id];
+      const pathRevision = state.libraryPathRevision;
       state.libraryFolderLoadPromises[id] = fetch(`/api/library/folder?folder_id=${encodeURIComponent(id)}`)
         .then(async (res) => {
           const data = await res.json();
+          if (pathRevision !== state.libraryPathRevision) return;
           if (!res.ok) throw new Error(data.error || "Could not load Library folder");
           applyLibraryFolderChildren(data);
           return data;
         })
         .finally(() => {
+          if (pathRevision !== state.libraryPathRevision) return;
           delete state.libraryFolderLoadPromises[id];
         });
       return state.libraryFolderLoadPromises[id];
@@ -38625,6 +38629,44 @@ INDEX_HTML = """<!doctype html>
       cancelLibraryEntryRename();
     }
 
+    function applyFolderRenameResult(data) {
+      const paths = data.renamed_paths || [];
+      if (!paths.length) return;
+      state.libraryPathRevision += 1;
+      const remap = (value) => {
+        if (typeof value !== "string" || !value) return value;
+        const pair = paths.find(({old}) => value === old || value.startsWith(`${old}/`));
+        return pair ? pair.new + value.slice(pair.old.length) : value;
+      };
+      const affected = new Set(data.renamed_paper_ids || []);
+      affected.forEach((paperId) => {
+        delete state.paperFilesByPaperId[paperId];
+        delete state.paperFileRequests[paperId];
+        delete state.libraryPaperDetailRequests[paperId];
+      });
+      const lists = [state.papers, state.themePapers, state.authorMonitorPapers,
+        ...Object.values(state.reportCache).map((report) => report?.papers),
+        ...Object.values(state.themePapersByDate),
+        state.libraryItems.map((item) => item.paper), state.myPublications.map((item) => item.paper)];
+      lists.forEach((papers) => (papers || []).forEach((paper) => {
+        if (!paper || !affected.has(paper.paper_id)) return;
+        ["main_pdf_path", "merged_pdf_path", "source_path", "analysis_path", "native_file_path"].forEach((key) => {
+          const value = remap(paper[key]);
+          if (value === paper[key]) return;
+          paper[key] = value;
+          if (key === "merged_pdf_path") paper.merged_pdf_url = `/files?path=${encodeURIComponent(value)}`;
+          if (key === "analysis_path") paper.analysis_url = `/files?path=${encodeURIComponent(value)}`;
+        });
+      }));
+      state.libraryFolders.forEach((folder) => {
+        if (folder.native_folder_path) folder.native_folder_path = remap(folder.native_folder_path);
+      });
+      // Responses started before the rename must not reinstall obsolete paths.
+      state.libraryFolderLoadPromises = {};
+      state.libraryPaperDetailRequests = {};
+      resetRemoteLibrarySearch();
+    }
+
     async function commitLibraryEntryRename(type, id, name) {
       const entryId = Number(id || 0);
       if (!entryId) return;
@@ -38642,6 +38684,7 @@ INDEX_HTML = """<!doctype html>
         upsertLibraryItemLocal(data.item);
         if (data.paper) updatePaperState(data.paper.paper_id || data.item.paper_id, data.paper);
       } else {
+        applyFolderRenameResult(data);
         upsertLibraryFolderLocal(data.folder);
       }
       state.libraryRenamingFolderId = 0;
@@ -44335,6 +44378,7 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename space");
+      applyFolderRenameResult(data);
       applyLibraryNavigationSnapshot(data);
       updateLibraryActivityStatus("Space renamed.", {live: false});
       state.libraryTab = `workspace-${index}`;
@@ -47496,9 +47540,11 @@ INDEX_HTML = """<!doctype html>
     async function loadLibraryItemPaperDetail(item) {
       if (!item?.paper_id || item.paper?.full_detail) return;
       if (state.libraryPaperDetailRequests[item.paper_id]) return state.libraryPaperDetailRequests[item.paper_id];
+      const pathRevision = state.libraryPathRevision;
       state.libraryPaperDetailRequests[item.paper_id] = fetch(`/api/paper?paper_id=${encodeURIComponent(item.paper_id)}`)
         .then(async (res) => {
           const data = await res.json();
+          if (pathRevision !== state.libraryPathRevision) return;
           if (!res.ok) throw new Error(data.error || "Could not load paper details");
           if (data.paper) {
             updatePaperState(item.paper_id, data.paper);
@@ -47513,6 +47559,7 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .catch((error) => {
+          if (pathRevision !== state.libraryPathRevision) return;
           if (
             state.mode === "library"
             && state.libraryTab !== "my-publications"
@@ -47527,6 +47574,7 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .finally(() => {
+          if (pathRevision !== state.libraryPathRevision) return;
           delete state.libraryPaperDetailRequests[item.paper_id];
         });
       return state.libraryPaperDetailRequests[item.paper_id];
@@ -47536,9 +47584,11 @@ INDEX_HTML = """<!doctype html>
       const paperId = publication?.paper_id || publication?.paper?.paper_id || "";
       if (!paperId || publication?.paper?.full_detail) return;
       if (state.libraryPaperDetailRequests[paperId]) return state.libraryPaperDetailRequests[paperId];
+      const pathRevision = state.libraryPathRevision;
       state.libraryPaperDetailRequests[paperId] = fetch(`/api/paper?paper_id=${encodeURIComponent(paperId)}`)
         .then(async (res) => {
           const data = await res.json();
+          if (pathRevision !== state.libraryPathRevision) return;
           if (!res.ok) throw new Error(data.error || "Could not load paper details");
           const paper = data.paper || null;
           if (!paper) return;
@@ -47549,6 +47599,7 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .catch((error) => {
+          if (pathRevision !== state.libraryPathRevision) return;
           const status = $("libraryDetailStatus");
           if (status) {
             status.textContent = error.message || "Could not load paper details";
@@ -47556,6 +47607,7 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .finally(() => {
+          if (pathRevision !== state.libraryPathRevision) return;
           delete state.libraryPaperDetailRequests[paperId];
         });
       return state.libraryPaperDetailRequests[paperId];

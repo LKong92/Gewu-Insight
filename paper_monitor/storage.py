@@ -3930,7 +3930,7 @@ class Storage:
             return dict(row)
         return self.create_library_folder(parent_id=parent_id, name=clean_name)
 
-    def rename_library_folder(self, *, folder_id: int, name: str) -> dict[str, Any]:
+    def rename_library_folder(self, *, folder_id: int, name: str, commit: bool = True) -> dict[str, Any]:
         folder_id = int(folder_id)
         if folder_id == 1:
             raise ValueError("Root folder cannot be renamed")
@@ -3950,7 +3950,8 @@ class Storage:
             """,
             (clean_name, now_iso(), folder_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(folder_id) or {}
 
     def set_library_folder_color(self, *, folder_id: int, color: str) -> dict[str, Any]:
