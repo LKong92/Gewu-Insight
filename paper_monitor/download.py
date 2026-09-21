@@ -22,6 +22,7 @@ from .http import request_with_retries
 from .pdf_utils import is_valid_pdf_file as structurally_valid_pdf_file, merge_pdfs
 from .sources.openalex import openalex_request
 from .sources.publisher import request_aps_page
+from .science_pdf import is_science_supplement_reference, science_main_pdf_rejection, merge_science_pdfs
 from .storage import Storage
 from .text import safe_slug
 
@@ -98,6 +99,7 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
         }
 
     candidates = collect_pdf_candidates(paper)
+    is_science = normalize_doi(paper.get("doi") or "").startswith("10.1126/")
     preserved_main_pdf_path = existing_science_main_only_pdf_path(paper) if force else None
     main_pdf_path: Path | None = preserved_main_pdf_path
     main_pdf_url = ""
@@ -107,10 +109,13 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
     if not main_pdf_path:
         for index, url in enumerate(candidates["main"]):
             path = work_dir / "main.pdf"
-            if try_download_pdf(url, path, messages):
+            response_metadata: dict[str, str] = {}
+            options = {"science_main": True, "response_metadata": response_metadata} if is_science else {}
+            if try_download_pdf(url, path, messages, **options):
                 main_pdf_path = path
-                main_pdf_url = url
+                main_pdf_url = response_metadata.get("url") or url
                 break
+    main_messages = list(messages)
 
     for index, url in enumerate(candidates["supplements"], start=1):
         path = work_dir / f"supplement_{index}.pdf"
@@ -136,7 +141,7 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
 
     if not main_pdf_path:
         status = "failed"
-        failure_detail = "; ".join(messages[-5:]) or "no downloadable main PDF found"
+        failure_detail = "; ".join(main_messages[-5:]) or "no downloadable main PDF found"
         if supplement_paths:
             message = (
                 f"main PDF unavailable; downloaded {len(supplement_paths)} PDF supplement(s); "
@@ -182,7 +187,11 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
     downloaded_pdf_replaced = False
     try:
         merge_inputs = [main_pdf_path] + supplement_paths
-        merge_pdfs(merge_inputs, working_merged_path)
+        if is_science:
+            merged_count = merge_science_pdfs(main_pdf_path, supplement_paths, working_merged_path)
+        else:
+            merge_pdfs(merge_inputs, working_merged_path)
+            merged_count = len(supplement_paths)
         if not structurally_valid_pdf_file(working_merged_path):
             raise ValueError("merged output is not a complete PDF")
         if replacing_existing_pdf:
@@ -190,8 +199,8 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
         else:
             merged_path = publish_new_download(working_merged_path, merged_path)
         downloaded_pdf_replaced = True
-        status = "success" if supplement_paths else "partial"
-        message = "downloaded and merged; temporary PDFs removed" if supplement_paths else "main PDF saved as merged PDF; no PDF supplement found"
+        status = "success" if merged_count else "partial"
+        message = "downloaded and merged; temporary PDFs removed" if merged_count else "main PDF saved as merged PDF; no PDF supplement found"
     except Exception as exc:
         if working_merged_path != merged_path:
             working_merged_path.unlink(missing_ok=True)
@@ -270,6 +279,8 @@ def existing_science_main_only_pdf_path(paper: dict[str, Any]) -> Path | None:
         path = Path(raw).expanduser()
         try:
             if not structurally_valid_pdf_file(path):
+                continue
+            if science_main_pdf_rejection(path):
                 continue
             return path.resolve()
         except OSError:
@@ -370,7 +381,7 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
                 marker = f"{href} {label}".lower()
                 if is_probable_word_supplement(marker):
                     supplement_documents.append(href)
-                elif is_probable_supplement(marker):
+                elif is_probable_supplement(marker) or (doi.startswith("10.1126/") and is_science_supplement_reference(marker)):
                     supplements.append(href)
                 elif is_probable_non_article_pdf(marker):
                     continue
@@ -380,6 +391,9 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
             pass
 
     main = dedup(main)
+    if doi.startswith("10.1126/"):
+        supplements.extend(url for url in main if is_science_supplement_reference(url))
+        main = [url for url in main if not is_science_supplement_reference(url)]
     if doi.startswith("10.1038/"):
         main = [url for url in main if not is_nature_reference_pdf_url(url)] + [
             url for url in main if is_nature_reference_pdf_url(url)
@@ -731,6 +745,8 @@ def try_download_pdf(
     messages: list[str],
     *,
     request_max_retries: int | None = None,
+    science_main: bool = False,
+    response_metadata: dict[str, str] | None = None,
 ) -> bool:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.part")
     try:
@@ -741,6 +757,10 @@ def try_download_pdf(
         if request_max_retries is not None:
             request_options["max_retries"] = max(1, int(request_max_retries))
         response = request_with_retries("GET", url, **request_options)
+        if science_main and is_science_supplement_reference(response.url):
+            messages.append(f"main PDF redirected to supplementary material: {url} -> {response.url}")
+            response.close()
+            return False
         content_type = response.headers.get("content-type", "").lower()
         guessed_type = mimetypes.guess_type(urlparse(response.url).path)[0] or ""
         if "pdf" not in content_type and "pdf" not in guessed_type and not response.url.lower().endswith(".pdf"):
@@ -754,6 +774,17 @@ def try_download_pdf(
             messages.append(f"invalid or incomplete PDF payload: {url}")
             temporary.unlink(missing_ok=True)
             return False
+        if science_main:
+            rejection = science_main_pdf_rejection(
+                temporary, url=response.url,
+                filename=response.headers.get("content-disposition", ""),
+            )
+            if rejection:
+                messages.append(f"{rejection}: {response.url}")
+                temporary.unlink(missing_ok=True)
+                return False
+        if response_metadata is not None:
+            response_metadata["url"] = response.url
         temporary.replace(path)
         return True
     except Exception as exc:

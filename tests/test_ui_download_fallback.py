@@ -17,7 +17,8 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
             {
                 "kind": "aaas-published-pdf",
                 "publisher": "aaas",
-                "url": "https://www.science.org/doi/pdf/10.1126/sciadv.adw9449?download=true",
+                "url": "https://www.science.org/doi/10.1126/sciadv.adw9449",
+                "target_url": "https://www.science.org/doi/pdf/10.1126/sciadv.adw9449?download=true",
                 "referer": "https://www.science.org/doi/10.1126/sciadv.adw9449",
                 "followup": {
                     "kind": "aaas-supplement-discovery",

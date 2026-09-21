@@ -293,6 +293,9 @@ class ManualPdfAttachmentTests(unittest.TestCase):
         self.add_paper("paper-science")
         main = self.write_pdf("data/pdfs/paper-science/Main.pdf")
         supplement = self.write_pdf("native-temp/Science Supplement.pdf")
+        writer = PdfWriter()
+        writer.add_blank_page(width=201, height=200)
+        writer.write(str(supplement))
         self.storage.update_download_status(
             "paper-science",
             status="partial",

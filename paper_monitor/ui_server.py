@@ -82,6 +82,7 @@ from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .pdf_utils import is_valid_pdf_bytes, is_valid_pdf_file, merge_pdfs
+from .science_pdf import science_main_pdf_rejection, merge_science_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import (
@@ -1849,6 +1850,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "source_path is required")
             return
         storage = Storage(self.configured_db_path)
+        publisher_main_resource_id = 0
         try:
             publisher_download_kind = clean_text(str(payload.get("publisher_download_kind") or ""))
             if publisher_download_kind in {"aaas-supplement-pdf", "publisher-supplement-file"}:
@@ -1876,6 +1878,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 )
             files_snapshot = paper_files_state_payload(storage, paper_id)
             paper = storage.get_paper(paper_id)
+            if publisher_download_kind == "aaas-published-pdf":
+                for resource in storage.list_paper_resources(paper_id, ensure_primary=False):
+                    path = storage.resource_local_path(resource)
+                    if path and Path(path).expanduser().resolve() == target_path:
+                        publisher_main_resource_id = int(resource["id"])
+                        break
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
@@ -1891,7 +1899,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None, "paper_files": [files_snapshot]})
+        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None, "paper_files": [files_snapshot], "publisher_main_resource_id": publisher_main_resource_id})
 
     def handle_library(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
@@ -9888,7 +9896,8 @@ def published_pdf_browser_fallback(
         return {
             "kind": "aaas-published-pdf",
             "publisher": "aaas",
-            "url": f"https://www.science.org/doi/pdf/{doi}?download=true",
+            "url": f"https://www.science.org/doi/{doi}",
+            "target_url": f"https://www.science.org/doi/pdf/{doi}?download=true",
             "referer": f"https://www.science.org/doi/{doi}",
             "followup": supplement,
         }
@@ -22465,6 +22474,7 @@ def convert_library_item_to_paper_attachment(
     return attach_library_item(storage, int(source_item_id), str(target_paper_id))
 
 
+@serialize_paper_file_writes
 def attach_downloaded_publisher_pdf_to_paper(
     storage: Storage,
     *,
@@ -22485,13 +22495,23 @@ def attach_downloaded_publisher_pdf_to_paper(
 
     publisher_kind = clean_text(context.get("publisher_download_kind") or "")
     source_url = clean_text(
-        context.get("publisher_download_target_url")
+        context.get("publisher_download_final_url")
+        or context.get("publisher_download_target_url")
         or context.get("publisher_download_referer")
         or paper.get("pdf_url")
         or ""
     )
+    original_name = Path(clean_text(context.get("publisher_download_filename") or "") or source.name).name
+    if publisher_kind == "aaas-published-pdf" or normalize_doi(paper.get("doi") or "").startswith("10.1126/"):
+        rejection = science_main_pdf_rejection(source, url=source_url, filename=original_name)
+        if rejection:
+            raise ValueError(f"{rejection}. The main article was not saved; check article access with Open Website.")
+    # A native staging name is never a durable Paper Files title. Use the
+    # publisher's name, or the existing metadata naming preference as fallback.
+    if re.match(r"^(?:daiqo-published|gewu-publisher)-", original_name, re.I) or not original_name.lower().endswith(".pdf"):
+        original_name = pdf_rename_filename_for_paper(paper, pdf_rename_template(storage), Path("paper.pdf"))
     classification_text = " ".join(
-        [publisher_kind, source.name, source_url, clean_text(context.get("publisher_download_referer") or "")]
+        [publisher_kind, original_name, source_url, clean_text(context.get("publisher_download_referer") or "")]
     ).casefold()
     if re.search(r"\b(correction|erratum|corrigendum)\b", classification_text):
         publisher_file_type = "correction_notice"
@@ -22508,7 +22528,7 @@ def attach_downloaded_publisher_pdf_to_paper(
     resource = attach_file_to_paper(
         storage,
         paper_id=str(paper_id),
-        filename=source.name,
+        filename=original_name,
         content=source.read_bytes(),
         file_role=projected_role,
         version_role=projected_version,
@@ -22570,6 +22590,25 @@ def attach_downloaded_publisher_pdf_to_paper(
 
     refreshed = storage.get_paper(str(paper_id)) or paper
     is_primary = int(refreshed.get("primary_resource_id") or 0) == resource_id
+    if is_primary:
+        # Old native downloads also persisted their temporary UUID name in
+        # Library placements. Repair those names before a later supplement or
+        # alias sync can rename the valid publisher PDF back to its staging name.
+        # A custom placement name or a manually preferred other version wins.
+        placements = storage.conn.execute(
+            "SELECT id, display_name FROM library_items WHERE paper_id = ? AND trashed_at IS NULL",
+            (str(paper_id),),
+        ).fetchall()
+        for placement in placements:
+            if re.fullmatch(
+                r"(?:daiqo-published|gewu-publisher)-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:\.pdf)?",
+                clean_text(placement["display_name"] or ""), re.I,
+            ):
+                rename_library_item_and_sync_files(
+                    storage, item_id=int(placement["id"]),
+                    name=library_item_display_name_for_synced_filename(dict(placement), original_name),
+                )
+        resource = storage.get_paper_resource(resource_id) or resource
     message = (
         "published Science main PDF saved; supplementary PDF pending"
         if publisher_kind == "aaas-published-pdf"
@@ -23162,6 +23201,106 @@ def attach_manual_pdf_to_paper(
     return target_path, updated
 
 
+def attach_science_supplement_to_paper(
+    storage: Storage, *, paper_id: str, context: dict[str, Any], supplement_path: Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Merge into the downloaded Science version, retaining any manual Default."""
+    paper = storage.get_paper(paper_id)
+    requested_id = int(context.get("publisher_main_resource_id") or 0)
+    resource = storage.get_paper_resource(requested_id) if requested_id else None
+    if requested_id and (not resource or resource.get("paper_id") != paper_id or resource.get("file_type") != "published_version"):
+        raise ValueError("The downloaded Science main paper file is no longer available")
+    path_text = storage.resource_local_path(resource) if resource else ""
+    main_path = Path(path_text).expanduser().resolve() if path_text else canonical_pdf_path_for_paper(paper)
+    if not main_path or not is_valid_pdf_file(main_path):
+        raise ValueError("The main PDF must be downloaded before its supplementary PDF")
+    rejection = science_main_pdf_rejection(main_path)
+    if rejection:
+        raise ValueError("The saved PDF contains supplementary material without the Science main article. Refresh the main PDF before merging supplements.")
+    is_canonical = main_path == canonical_pdf_path_for_paper(paper)
+    if not resource:
+        resource = next((item for item in storage.list_paper_resources(paper_id, ensure_primary=False)
+                         if storage.resource_local_path(item)
+                         and Path(storage.resource_local_path(item)).expanduser().resolve() == main_path), None)
+    can_replace = (is_allowed_file(main_path, allowed_pdf_roots())
+                   and not pdf_path_referenced_by_other_paper(storage, main_path, paper_id)
+                   and (not resource or resource.get("storage_mode") != "linked"))
+    if can_replace:
+        target = main_path
+    else:
+        target_dir = local_copy_dir_for_download_context(storage, context) or (DEFAULT_PDF_DIR / paper_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = unique_path_in_dir(target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_merged.pdf")
+    working = target.with_name(f".{target.stem}-supplement-{uuid.uuid4().hex}.pdf")
+    backup = working.with_suffix(".original")
+    published = False
+    committed = False
+    try:
+        if not merge_science_pdfs(main_path, [supplement_path], working):
+            return main_path, paper
+        fingerprint = fingerprint_file(working)
+        page_count = len(PdfReader(str(working)).pages)
+        if can_replace:
+            shutil.copy2(main_path, backup)
+        storage.conn.execute("SAVEPOINT science_supplement")
+        try:
+            if not resource:
+                resource = storage.ensure_primary_pdf_resource(paper_id, commit=False)
+            if not resource:
+                raise ValueError("The Science main paper file could not be registered")
+            working.replace(target)
+            published = True
+            storage.conn.execute(
+                """UPDATE resources SET stored_path = ?, storage_mode = 'managed',
+                    display_name = ?, sha256 = ?, content_sha256 = ?, size_bytes = ?,
+                    page_count = ?, modified_at = ?, annotation_count = ?,
+                    is_annotated = CASE WHEN COALESCE(annotation_override, 0) = 1 THEN is_annotated ELSE ? END,
+                    annotation_state = CASE WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state ELSE ? END,
+                    missing_status = '', updated_at = ? WHERE id = ? AND paper_id = ?""",
+                (str(target), resource.get("display_name") if target == main_path else target.name,
+                 fingerprint.sha256, fingerprint.content_sha256, fingerprint.size_bytes, page_count,
+                 fingerprint.modified_at, fingerprint.annotation_count, int(fingerprint.is_annotated),
+                 "annotated" if fingerprint.is_annotated else "unannotated", now_iso(), resource["id"], paper_id),
+            )
+            storage.conn.execute(
+                """UPDATE papers SET download_status = 'success', download_message = ?, downloaded_at = ?,
+                    main_pdf_path = COALESCE(?, main_pdf_path), merged_pdf_path = COALESCE(?, merged_pdf_path),
+                    supplement_pdf_paths = CASE WHEN ? THEN '[]' ELSE supplement_pdf_paths END
+                    WHERE paper_id = ?""",
+                ("downloaded and merged Science supplementary PDF; temporary PDF removed", now_iso(),
+                 str(target) if is_canonical else None, str(target) if is_canonical else None,
+                 is_canonical, paper_id),
+            )
+            storage.conn.execute("RELEASE science_supplement")
+            storage.conn.commit()
+            committed = True
+        except Exception:
+            try:
+                storage.conn.execute("ROLLBACK TO science_supplement")
+                storage.conn.execute("RELEASE science_supplement")
+            except sqlite3.Error:
+                storage.conn.rollback()
+            if published:
+                if can_replace:
+                    backup.replace(main_path)
+                else:
+                    target.unlink(missing_ok=True)
+                published = False
+            raise
+    finally:
+        working.unlink(missing_ok=True)
+        # If restoring bytes itself fails, retain the recovery copy.
+        if not published or committed:
+            backup.unlink(missing_ok=True)
+    if is_canonical:
+        try:
+            sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=main_path if target != main_path else None)
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Science PDF saved; shortcut sync incomplete for %s", paper_id)
+    return target, storage.get_paper(paper_id)
+
+
+@serialize_paper_file_writes
 def attach_publisher_supplement_pdf_to_paper(
     storage: Storage,
     *,
@@ -23173,8 +23312,9 @@ def attach_publisher_supplement_pdf_to_paper(
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
+    is_science = clean_text(context.get("publisher_download_kind") or "") == "aaas-supplement-pdf"
     main_path = canonical_pdf_path_for_paper(paper)
-    if not main_path:
+    if not main_path and not is_science:
         raise ValueError("The main PDF must be downloaded before its supplementary PDF")
     source_supplement_path = source_path.expanduser().resolve()
     if not source_supplement_path.exists() or not source_supplement_path.is_file():
@@ -23194,6 +23334,15 @@ def attach_publisher_supplement_pdf_to_paper(
             raise
     else:
         raise ValueError("Publisher supplement must be a valid PDF, DOC, or DOCX file")
+
+    if is_science:
+        try:
+            return attach_science_supplement_to_paper(
+                storage, paper_id=str(paper_id), context=context, supplement_path=supplement_path,
+            )
+        finally:
+            if converted_path:
+                converted_path.unlink(missing_ok=True)
 
     main_is_shared = pdf_path_referenced_by_other_paper(storage, main_path, str(paper_id))
     can_replace_in_place = is_allowed_file(main_path, allowed_pdf_roots()) and not main_is_shared
@@ -50933,12 +51082,16 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "download failed");
       if (data.browser_fallback) {
         if (data?.paper && payload?.paper_id) updatePaperState(payload.paper_id, data.paper);
+        if (data.browser_fallback.kind === "aaas-supplement-discovery") {
+          return downloadScienceSupplementaryPdfs(data.browser_fallback, payload);
+        }
         let downloaded = await downloadPublishedPdfInBackground(data.browser_fallback, payload);
         if (downloaded?.paper && payload?.paper_id) updatePaperState(payload.paper_id, downloaded.paper);
         if (data.browser_fallback.followup) {
-          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, payload);
-        } else if (data.browser_fallback.kind === "aaas-supplement-discovery") {
-          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback, payload);
+          const followupContext = downloaded?.publisher_main_resource_id
+            ? {...payload, publisher_main_resource_id: downloaded.publisher_main_resource_id}
+            : payload;
+          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, followupContext);
         }
         return downloaded;
       }
