@@ -123,6 +123,28 @@ class AIAccessTests(unittest.TestCase):
         self.assertEqual(self.request('/api/paper?paper_id=one', token=self.token, headers={'Cookie': cookie})[0], 401)
         self.assertEqual(self.request('/api/browser-capture-file', {}, token=self.token)[0], 400)
 
+    def test_markdown_revalidation_keeps_the_workspace_boundary(self):
+        note = self.root / 'preview.md'
+        note.write_text('# Current')
+        from urllib.parse import urlencode
+        route = '/api/markdown-preview?' + urlencode({'path': str(note)})
+        status, content, headers = self.request(route, workspace=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(content['text'], '# Current')
+        validation = {'If-None-Match': headers['ETag']}
+        status, content, _ = self.request(route, workspace=True, headers=validation)
+        self.assertEqual((status, content), (304, b''))
+        for token in (None, self.token):
+            self.assertEqual(self.request(route, token=token, headers=validation)[0], 401)
+        note.write_text('# Edited')
+        status, content, _ = self.request(route, workspace=True, headers=validation)
+        self.assertEqual(status, 200)
+        self.assertEqual(content['text'], '# Edited')
+        note.unlink()
+        self.assertEqual(self.request(route, workspace=True, headers=validation)[0], 404)
+        for asset in ('/markdown-preview-worker.js', '/markdown-it.min.js', '/js-yaml.min.js'):
+            self.assertEqual(self.request(asset, workspace=True)[0], 200)
+
     def test_host_origin_checks_apply_even_with_valid_credentials(self):
         for headers in ({'Origin': 'https://example.org'}, {'Sec-Fetch-Site': 'cross-site'}, {'Host': 'attacker.example'}):
             self.assertEqual(self.request('/api/v1/capabilities', token=self.token, headers=headers)[0], 403)

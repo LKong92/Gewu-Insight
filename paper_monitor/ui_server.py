@@ -575,10 +575,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 content_type = "text/javascript; charset=utf-8" if filename.endswith(".js") else "text/css; charset=utf-8"
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type=content_type)
                 return
-            if parsed.path in {"/markdown-preview-worker.js", "/markdown-it.min.js"}:
+            if parsed.path in {"/markdown-preview-worker.js", "/markdown-it.min.js", "/js-yaml.min.js"}:
                 filename = {
                     "/markdown-preview-worker.js": "markdown_preview_worker.js",
                     "/markdown-it.min.js": "vendor/markdown-it/markdown-it.min.js",
+                    "/js-yaml.min.js": "vendor/js-yaml/js-yaml.min.js",
                 }[parsed.path]
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type="text/javascript; charset=utf-8")
                 return
@@ -5585,7 +5586,25 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not requested.is_file():
             self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
             return
-        self.send_json(markdown_preview_payload(requested))
+        # Revalidate each open, including permission/existence checks above. The
+        # UI may reuse parsed HTML only for this exact on-disk file revision.
+        etag = markdown_preview_etag(requested.stat())
+        unchanged = getattr(self, "headers", {}).get("If-None-Match") == etag
+        data = b"" if unchanged else json.dumps(markdown_preview_payload(requested), ensure_ascii=False).encode("utf-8")
+        if not unchanged and markdown_preview_etag(requested.stat()) != etag:
+            etag = ""  # A concurrent edit must not seed a reusable preview.
+        self.send_response(HTTPStatus.NOT_MODIFIED if unchanged else HTTPStatus.OK)
+        self.send_header("Cache-Control", "no-store")
+        if etag:
+            self.send_header("ETag", etag)
+        if not unchanged:
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def handle_pdf_info(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
@@ -25365,6 +25384,13 @@ def file_type_icon_glyph(kind: str, accent: str) -> str:
 MARKDOWN_PREVIEW_MAX_BYTES = 256 * 1024
 
 
+def markdown_preview_etag(stat: os.stat_result) -> str:
+    # ctime/inode also detect same-length replacements with a preserved mtime.
+    return 'W/"md1-' + '-'.join(format(value, "x") for value in (
+        stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+    )) + '"'
+
+
 def markdown_preview_payload(path: Path) -> dict[str, Any]:
     """Read a bounded, disposable preview without changing the original file."""
     with path.open("rb") as handle:
@@ -26876,7 +26902,10 @@ INDEX_HTML = """<!doctype html>
       padding: 0;
       background: #fff;
     }
-    .library-file-preview.markdown { display: block; place-items: initial; padding: 24px 30px 40px; box-sizing: border-box; }
+    .library-quicklook.markdown-preview .library-quicklook-body { grid-template-columns: minmax(0, 1fr); }
+    .library-quicklook.markdown-preview .library-quicklook-thumbs { display: none; }
+    .library-quicklook.markdown-preview .library-quicklook-pages { display: block; overflow-x: hidden; }
+    .library-file-preview.markdown { display: block; place-items: initial; min-width: 0; max-width: 100%; padding: 24px clamp(12px, 3vw, 30px) 40px; box-sizing: border-box; }
     .library-markdown-document { width: 100%; min-width: 0; max-width: 850px; margin: 0 auto; color: #253344; line-height: 1.65; font-size: 15px; overflow-wrap: anywhere; }
     .library-markdown-document > :first-child { margin-top: 0; }
     .library-markdown-document h1, .library-markdown-document h2, .library-markdown-document h3,
@@ -26888,14 +26917,26 @@ INDEX_HTML = """<!doctype html>
     .library-markdown-document ul, .library-markdown-document ol { padding-left: 1.8em; }
     .library-markdown-document blockquote { margin: 1em 0; padding: .1em 1em; border-left: 3px solid #94abc4; color: #566579; background: #f5f7fa; }
     .library-markdown-document code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef2f6; padding: .12em .3em; border-radius: 3px; }
-    .library-markdown-document pre { white-space: pre; overflow: auto; padding: 14px; background: #f3f5f8; border-radius: 6px; }
+    .library-markdown-document pre { white-space: pre; overflow: auto; max-width: 100%; box-sizing: border-box; padding: 14px; background: #f3f5f8; border-radius: 6px; }
     .library-markdown-document pre code { padding: 0; background: none; }
-    .library-markdown-document table { display: block; width: max-content; max-width: 100%; overflow: auto; border-collapse: collapse; margin: 1em 0; }
-    .library-markdown-document th, .library-markdown-document td { padding: 7px 12px; border: 1px solid #dce2e9; }
+    .library-markdown-table { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 1em 0; }
+    .library-markdown-document table { display: table; width: max-content; min-width: 100%; border-collapse: collapse; margin: 0; }
+    .library-markdown-document th, .library-markdown-document td { padding: 7px 12px; border: 1px solid #dce2e9; white-space: normal; }
     .library-markdown-document th { background: #f1f5f9; }
     .library-markdown-document a[data-markdown-url] { color: #245e87; cursor: pointer; text-decoration: underline; }
     .library-markdown-document img { max-width: 100%; height: auto; }
     .library-markdown-document hr { border: 0; border-top: 1px solid #dce2e9; margin: 1.4em 0; }
+    .library-markdown-properties { min-width: 0; margin: 0 0 16px; padding: 10px 14px; border: 1px solid #dce2e9; border-radius: 8px; background: #f8fafc; font-size: 13px; }
+    .library-markdown-properties summary { cursor: pointer; color: #536579; font-weight: 600; }
+    .library-markdown-properties-grid { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr); gap: 7px 16px; margin: 12px 0 0; }
+    .library-markdown-properties-grid dt { min-width: 0; color: #687587; overflow-wrap: anywhere; }
+    .library-markdown-properties-grid dd { min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .library-markdown-properties-grid dd > dl { margin-top: 0; grid-template-columns: minmax(0, 1fr); }
+    .library-markdown-document ul.library-markdown-property-list { display: flex; flex-wrap: wrap; gap: 4px 7px; list-style: none; padding: 0; margin: 0; }
+    .library-markdown-property-list > li { min-width: 0; max-width: 100%; padding: 1px 6px; border-radius: 4px; background: #e9eff5; }
+    .library-markdown-property-empty { color: #8b96a4; }
+    .library-markdown-document pre.library-markdown-properties-source { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 0; }
+    @media (max-width: 620px) { .library-markdown-properties-grid { grid-template-columns: minmax(0, 1fr); gap: 3px; } .library-markdown-properties-grid dd { margin-bottom: 8px; } }
     .library-markdown-truncated { color: #667085; font-style: italic; }
     .library-file-preview-text {
       min-height: 100%;
@@ -50543,7 +50584,7 @@ INDEX_HTML = """<!doctype html>
       const overlay = $("libraryQuickLook");
       const pages = $("libraryQuickLookPages");
       if (overlay) {
-        overlay.classList.remove("open", "compact");
+        overlay.classList.remove("open", "compact", "markdown-preview");
         overlay.setAttribute("aria-hidden", "true");
       }
       if (pages) pages.innerHTML = "";
@@ -50639,54 +50680,122 @@ INDEX_HTML = """<!doctype html>
 
     let libraryMarkdownWorker = null;
     let libraryMarkdownRequest = null;
+    const libraryMarkdownCache = new Map();
+    let libraryMarkdownCacheChars = 0;
 
     function cancelLibraryMarkdownPreview() {
-      if (!libraryMarkdownRequest) return;
+      const pending = libraryMarkdownRequest;
       libraryMarkdownRequest = null;
-      libraryMarkdownWorker?.postMessage({cancel: true});
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      pending.controller.abort();
+      // A stale synchronous parse cannot consume the next selection's worker.
+      if (pending.parsing && libraryMarkdownWorker) {
+        libraryMarkdownWorker.terminate();
+        libraryMarkdownWorker = null;
+      }
     }
 
-    function renderLibraryMarkdownPreview(paper, token) {
+    function isCurrentLibraryMarkdownPreview(data) {
+      return libraryMarkdownRequest?.token === data.token
+        && libraryMarkdownRequest?.path === data.path
+        && state.libraryQuickLookOpen && state.libraryQuickLookKind === "file"
+        && data.token === state.libraryQuickLookRenderToken
+        && data.path === state.libraryQuickLookPath;
+    }
+
+    function cacheLibraryMarkdownPreview(path, value) {
+      const previous = libraryMarkdownCache.get(path);
+      if (previous) libraryMarkdownCacheChars -= previous.html.length;
+      libraryMarkdownCache.delete(path);
+      if (value?.etag) {
+        libraryMarkdownCache.set(path, value);
+        libraryMarkdownCacheChars += value.html.length;
+      }
+      // Memory only: at most eight recent notes and one million HTML characters.
+      while (libraryMarkdownCache.size > 8 || libraryMarkdownCacheChars > 1000000) {
+        const oldest = libraryMarkdownCache.keys().next().value;
+        libraryMarkdownCacheChars -= libraryMarkdownCache.get(oldest).html.length;
+        libraryMarkdownCache.delete(oldest);
+      }
+    }
+
+    function finishLibraryMarkdownPreview(data) {
+      if (!isCurrentLibraryMarkdownPreview(data)) return;
+      const pending = libraryMarkdownRequest;
+      libraryMarkdownRequest = null;
+      clearTimeout(pending.timeout);
+      const root = $("libraryQuickLookPages");
+      cacheLibraryMarkdownPreview(data.path, data.error ? null : {
+        etag: pending.etag, html: data.html, truncated: data.truncated
+      });
+      if (data.error) {
+        pending.controller.abort();
+        renderLibraryFilePreviewCard(root, pending.paper, data.error);
+        return;
+      }
+      root.innerHTML = `<div class="library-file-preview markdown"><article class="library-markdown-document">${data.html}${data.truncated ? '<p class="library-markdown-truncated">[Preview truncated]</p>' : ""}</article></div>`;
+      root.querySelectorAll("[data-markdown-url]").forEach((link) => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openWebsite(link.dataset.markdownUrl);
+        });
+      });
+    }
+
+    function ensureLibraryMarkdownWorker() {
+      if (libraryMarkdownWorker) return libraryMarkdownWorker;
+      const worker = new Worker("/markdown-preview-worker.js");
+      libraryMarkdownWorker = worker;
+      worker.onmessage = ({data}) => {
+        if (libraryMarkdownWorker === worker) finishLibraryMarkdownPreview(data);
+      };
+      worker.onerror = () => {
+        if (libraryMarkdownWorker !== worker) return;
+        worker.terminate();
+        libraryMarkdownWorker = null;
+        const pending = libraryMarkdownRequest;
+        if (pending) finishLibraryMarkdownPreview({...pending, error: "Markdown preview could not be loaded. Close and reopen to retry."});
+      };
+      return worker;
+    }
+
+    async function renderLibraryMarkdownPreview(paper, token) {
       const path = paperNativePath(paper || {});
       const root = $("libraryQuickLookPages");
       root.innerHTML = `<div class="library-file-preview text"><p>Loading Markdown...</p></div>`;
-      libraryMarkdownRequest = {paper, token, path};
-      const isCurrent = (data) => state.libraryQuickLookOpen
-        && state.libraryQuickLookKind === "file"
-        && data.token === state.libraryQuickLookRenderToken
-        && data.path === state.libraryQuickLookPath;
+      const pending = {paper, token, path, controller: new AbortController(), etag: "", parsing: false};
+      libraryMarkdownRequest = pending;
+      pending.timeout = setTimeout(() => {
+        if (!isCurrentLibraryMarkdownPreview(pending)) return;
+        libraryMarkdownWorker?.terminate();
+        libraryMarkdownWorker = null;
+        finishLibraryMarkdownPreview({...pending, error: "Markdown preview took too long. Close and reopen to retry, or open the file directly."});
+      }, 15000);
+      const cached = libraryMarkdownCache.get(path);
       try {
-        if (!libraryMarkdownWorker) {
-          libraryMarkdownWorker = new Worker("/markdown-preview-worker.js");
-          libraryMarkdownWorker.onmessage = ({data}) => {
-            if (!isCurrent(data)) return;
-            const selectedPaper = libraryMarkdownRequest?.paper;
-            libraryMarkdownRequest = null;
-            if (data.error) {
-              renderLibraryFilePreviewCard(root, selectedPaper, data.error);
-              return;
-            }
-            root.innerHTML = `<div class="library-file-preview markdown"><article class="library-markdown-document">${data.html}${data.truncated ? '<p class="library-markdown-truncated">[Preview truncated]</p>' : ""}</article></div>`;
-            root.querySelectorAll("[data-markdown-url]").forEach((link) => {
-              link.addEventListener("click", (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                openWebsite(link.dataset.markdownUrl);
-              });
-            });
-          };
-          libraryMarkdownWorker.onerror = () => {
-            const pending = libraryMarkdownRequest;
-            libraryMarkdownWorker?.terminate();
-            libraryMarkdownWorker = null;
-            libraryMarkdownRequest = null;
-            if (pending && isCurrent(pending)) renderLibraryFilePreviewCard(root, pending.paper, "Markdown preview could not be loaded.");
-          };
+        // Worker scripts and file I/O start together. A validated cached note
+        // needs neither a document transfer nor another Markdown/YAML parse.
+        if (!cached) ensureLibraryMarkdownWorker();
+        const response = await fetch(`/api/markdown-preview?path=${encodeURIComponent(path)}`, {
+          signal: pending.controller.signal, cache: "no-store",
+          headers: cached ? {"If-None-Match": cached.etag} : {}
+        });
+        if (!isCurrentLibraryMarkdownPreview(pending)) return;
+        if (response.status === 304 && cached) {
+          pending.etag = cached.etag;
+          finishLibraryMarkdownPreview({...cached, token, path});
+          return;
         }
-        libraryMarkdownWorker.postMessage({path, token});
+        const content = await response.json();
+        if (!isCurrentLibraryMarkdownPreview(pending)) return;
+        if (!response.ok) throw new Error(content.error || "Markdown preview failed.");
+        pending.etag = response.headers.get("ETag") || "";
+        pending.parsing = true;
+        ensureLibraryMarkdownWorker().postMessage({path, token, content});
       } catch (error) {
-        libraryMarkdownRequest = null;
-        if (isCurrent({path, token})) renderLibraryFilePreviewCard(root, paper, error.message || "Markdown preview failed.");
+        if (error.name !== "AbortError") finishLibraryMarkdownPreview({path, token, error: error.message || "Markdown preview failed."});
       }
     }
 
@@ -50826,11 +50935,13 @@ INDEX_HTML = """<!doctype html>
       setNativePdfQuickLookActive(false);
       if (title) title.textContent = libraryPreviewPathTitle(path, libraryFilePreviewTitle(paper));
       renderLibraryQuickLookFileThumb(paper);
+      const isMarkdown = libraryFilePreviewKind(paper) === "markdown";
+      overlay.classList.toggle("markdown-preview", isMarkdown);
       overlay.classList.remove("compact");
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
       if (!state.libraryQuickLookManualFrame || !state.libraryQuickLookFrameRect) {
-        applyLibraryQuickLookFrame(defaultLibraryQuickLookFrame());
+        applyLibraryQuickLookFrame(isMarkdown ? defaultLibraryMarkdownQuickLookFrame() : defaultLibraryQuickLookFrame());
       } else {
         applyLibraryQuickLookFrame();
       }
@@ -51282,7 +51393,7 @@ INDEX_HTML = """<!doctype html>
       const overlay = $("libraryQuickLook");
       const pages = $("libraryQuickLookPages");
       if (overlay) {
-        overlay.classList.remove("open", "compact");
+        overlay.classList.remove("open", "compact", "markdown-preview");
         overlay.setAttribute("aria-hidden", "true");
       }
       if (pages) pages.innerHTML = "";
@@ -51352,6 +51463,12 @@ INDEX_HTML = """<!doctype html>
       return true;
     }
 
+    function defaultLibraryMarkdownQuickLookFrame() {
+      const width = Math.min(1000, window.innerWidth - 32);
+      const height = Math.min(760, window.innerHeight - 96);
+      return {left: (window.innerWidth - width) / 2, top: 56, width, height};
+    }
+
     function defaultLibraryQuickLookFrame() {
       const columns = $("libraryColumns");
       const rect = columns?.getBoundingClientRect();
@@ -51389,10 +51506,16 @@ INDEX_HTML = """<!doctype html>
       const rect = frameRect || state.libraryQuickLookFrameRect || defaultLibraryQuickLookFrame();
       const minWidth = options.compact ? 220 : 320;
       const minHeight = options.compact ? 74 : 300;
-      const width = Math.max(minWidth, Math.min(rect.width, Math.max(2200, window.innerWidth * 1.8)));
-      const height = Math.max(minHeight, Math.min(rect.height, Math.max(2000, window.innerHeight * 1.8)));
-      const left = Math.max(80 - width, Math.min(rect.left, window.innerWidth - 80));
-      const top = Math.max(36 - height, Math.min(rect.top, window.innerHeight - 36));
+      let width = Math.max(minWidth, Math.min(rect.width, Math.max(2200, window.innerWidth * 1.8)));
+      let height = Math.max(minHeight, Math.min(rect.height, Math.max(2000, window.innerHeight * 1.8)));
+      let left = Math.max(80 - width, Math.min(rect.left, window.innerWidth - 80));
+      let top = Math.max(36 - height, Math.min(rect.top, window.innerHeight - 36));
+      if (overlay.classList.contains("markdown-preview") && !options.compact) {
+        width = Math.min(width, Math.max(240, window.innerWidth - 24));
+        height = Math.min(height, Math.max(200, window.innerHeight - 64));
+        left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
+        top = Math.max(48, Math.min(top, window.innerHeight - height - 12));
+      }
       if (options.persist !== false) state.libraryQuickLookFrameRect = {left, top, width, height};
       overlay.style.left = `${left}px`;
       overlay.style.top = `${top}px`;
@@ -51453,6 +51576,7 @@ INDEX_HTML = """<!doctype html>
           </div>
         </div>
       `;
+      overlay.classList.remove("markdown-preview");
       overlay.classList.add("open", "compact");
       overlay.setAttribute("aria-hidden", "false");
       applyLibraryQuickLookFrame(defaultLibraryQuickLookCompactFrame(), {compact: true, persist: false});
@@ -51694,7 +51818,7 @@ INDEX_HTML = """<!doctype html>
         paper.merged_pdf_path,
         paper.original_filename || paper.citation_label || paper.title || "PDF Preview"
       );
-      overlay.classList.remove("compact");
+      overlay.classList.remove("compact", "markdown-preview");
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
       if (!state.libraryQuickLookManualFrame || !state.libraryQuickLookFrameRect) {
@@ -59459,6 +59583,7 @@ INDEX_HTML = """<!doctype html>
       if (!event.target.closest?.(".publication-export-menu")) closePublicationExportMenu();
     });
     window.addEventListener("resize", () => {
+      if (state.libraryQuickLookOpen && $("libraryQuickLook")?.classList.contains("markdown-preview")) applyLibraryQuickLookFrame();
       if (state.mode === "library") resizeLibraryViewport();
       if (state.mode === "report") {
         revealActiveReportTab();

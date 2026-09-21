@@ -15,10 +15,10 @@ const note = '# Research notes\n\n## 分析结果\n\nA **strong result**, *empha
 let workerLoads = 0;
 const server = http.createServer((req,res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname === '/markdown-preview-worker.js' || url.pathname === '/markdown-it.min.js') {
+  if (url.pathname === '/markdown-preview-worker.js' || url.pathname === '/markdown-it.min.js' || url.pathname === '/js-yaml.min.js') {
     workerLoads++;
     res.setHeader('Content-Type','text/javascript');
-    res.end(fs.readFileSync(path.join(root,'paper_monitor',url.pathname.includes('worker') ? 'markdown_preview_worker.js' : 'vendor/markdown-it/markdown-it.min.js')));
+    res.end(fs.readFileSync(path.join(root,'paper_monitor',url.pathname.includes('worker') ? 'markdown_preview_worker.js' : url.pathname.includes('yaml') ? 'vendor/js-yaml/js-yaml.min.js' : 'vendor/markdown-it/markdown-it.min.js')));
   } else if (url.pathname === '/api/markdown-preview') {
     const file = url.searchParams.get('path');
     const reply = () => {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({text:file.includes('large') ? note.repeat(550) : note.replace('Research notes', file.includes('new') ? 'Latest note' : 'Research notes'), truncated:false}));};
@@ -44,11 +44,13 @@ const server = http.createServer((req,res) => {
       window.paperFileAnnotationLabel=()=> 'Unannotated'; window.paperFileAnnotationOptions=()=> '<option>Unannotated</option>';
       window.paperFileSourceLabel=()=> 'User import'; window.paperFileSourceOptions=()=> '<option>User import</option>';
       window.fileSizeLabel=()=> '1.2 KB'; window.setLibraryPaperResourceSelection=()=>{};
+      // File imports are covered by the drop probe; this fixture only previews.
+      window.wireLibraryPaperFilesDropTarget=()=>{};
       window.openWebsite=url=>window.openedWebsite=url;
       window.renderLibraryFilePreviewCard=(root,paper,message)=>root.textContent=message;
       window.nativeDrags=[];window.webkit={messageHandlers:{nativeFileDrag:{postMessage:p=>nativeDrags.push(p)}}};
     });
-    const functions = ['libraryNativeFileDragAttrs','prepareNativeFileDrag','libraryPaperResourcesColumnMarkup','wireLibraryResourceInteractions','libraryFileExtension','libraryFilePreviewKind','nativeFilePreviewUrl','libraryFilePreviewTitle'];
+    const functions = ['libraryNativeFileDragAttrs','libraryDragToken','prepareNativeFileDrag','orderedLibraryPaperResources','libraryPaperResourcesColumnMarkup','wireLibraryResourceInteractions','libraryFileExtension','libraryFilePreviewKind','nativeFilePreviewUrl','libraryFilePreviewTitle'];
     await page.addScriptTag({content:functions.map(fn).join('\n')+'\n'+html.split('    let libraryMarkdownWorker = null;')[1].split('    async function quickLookLibraryFile')[0].replace(/^/,'let libraryMarkdownWorker = null;')});
     await page.evaluate(() => {
       const shell=$('cards'); shell.innerHTML=libraryPaperResourcesColumnMarkup({paper_id:'fixture',paper:{title:'Analysis results'}});
@@ -94,7 +96,7 @@ const server = http.createServer((req,res) => {
     await page.screenshot({path:'/private/tmp/gewu-library-ui-refinements.png'});
     await page.evaluate(()=>{window.longTasks=[];window.observer=new PerformanceObserver(list=>longTasks.push(...list.getEntries().map(e=>e.duration)));try{observer.observe({type:'longtask',buffered:false});}catch(_){};showNote('/tmp/large.md');});
     await page.waitForSelector('.library-markdown-document table');
-    assert.equal(workerLoads,2,'one worker and one parser for all file switches');
+    assert.equal(workerLoads,3,'one worker and both offline parsers for all file switches');
     assert.deepEqual(errors,[]);
     console.log('Library preview UI checks passed: open focus ring, arrows, both drag handles, rendered Markdown, obsolete replies, PDF transition, three widths; long tasks (ms):',await page.evaluate(()=>longTasks));
   } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
