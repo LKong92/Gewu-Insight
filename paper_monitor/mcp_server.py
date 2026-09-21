@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 
 VERSION = '2025-11-25'
@@ -41,6 +41,16 @@ INSTRUCTIONS = ('Gewu Insight provides authorized research records. Use Gewu Key
     'Use get_file_delivery_status to inspect remaining temporary bytes/files and active delivery IDs. '
     'If delivery quota is full, release finished copies and retry; never release files still in use. '
     'Save new Markdown analyses only when requested; use a stable request_id when retrying. '
+    'Write tools are separately granted and restricted to writable folders. Import metadata must be supplied by the AI. '
+    'If required metadata is missing, research it yourself outside Gewu and retry. NEVER call resolve_paper to prepare, complete or follow up an import. '
+    'resolve_paper is solely for an independently requested task on an existing paper. Imports never extract DOI/arXiv from PDFs, query metadata services or queue enrichment. '
+    'Use import_file for standalone non-PDF documents, import_paper for a PDF with full supplied metadata, and add_paper_file for an existing Gewu Key. '
+    'An exact DOI/arXiv identity reuses its existing key and adds the requested folder placement; a different incoming PDF is appended while the existing Default is preserved. '
+    'Upload files with upload_file first, using a stable upload request_id and then a separate stable import request_id. '
+    'Process each file end to end: upload ONE file, immediately import/register that file, then proceed to the next. Never upload an entire collection before registering it. '
+    'Each successful file import immediately releases THAT file’s staging; there is no batch completion barrier or total collection-size quota. '
+    'Release abandoned uploads; inspect get_upload_status. If full, register already-ready uploads or release unused ones, then resume the remaining files. '
+    'After finishing every delivered read copy, call release_paper_file. Never accumulate finished copies or solve full temporary quota by restarting. '
     'This connection cannot delete papers, overwrite files, browse credentials or execute commands.')
 
 
@@ -92,10 +102,48 @@ TOOLS.extend([
      'inputSchema': schema({**PAGING, 'folder_id': {'type': 'integer', 'minimum': 1},
          'recursive': {'type': 'boolean', 'default': False}}, ['folder_id'])},
 ])
+from .ai_contract import WRITE_SCOPES, UPLOAD_SCOPES, REQUEST_ID, METADATA_FIELDS, METADATA_REQUIRED
+UPLOAD_ID = {'type': 'string', 'pattern': '^upload_[0-9a-f]{32}$'}
+FOLDER_ID = {'type': 'integer', 'minimum': 1}
+FILE_TYPE = {'type': 'string', 'description': 'Existing Paper Files classification, e.g. published_version, preprint, supplementary_material, source_data, other or unknown. Omit to use Unknown (PDF) / Other.'}
+TOOLS.extend([
+    {'name':'upload_file','description':'Upload ONE AI-prepared regular file from this MCP client computer to private Gewu staging. Immediately import/register this file using the returned upload_id BEFORE uploading the next file; do not stage an entire collection. Each successful file import releases its own staging immediately, independently of other files. Preserves any filename/format. No server-side arbitrary path reads. Up to 256 MiB per file, 512 MiB / 16 currently staged files per connection, not a total collection limit. Stable request_id and same bytes safely retry. Use release_upload for unused uploads. Never upload Gewu-managed originals by bypassing get_paper_file.',
+     'inputSchema':schema({'local_path':{'type':'string'},'request_id':REQUEST_ID},['local_path','request_id'])},
+    {'name':'get_upload_status','description':'Show reusable upload staging quota and active upload IDs. Process ready uploads or release unused ones before retrying a full quota; no restart needed.', 'inputSchema':schema({})},
+    {'name':'release_upload','description':'Release only this connection’s unused staged upload, never registered Paper Files. Repeated release is safe. Active transfers cannot be released.', 'inputSchema':schema({'upload_id':UPLOAD_ID},['upload_id'])},
+    {'name':'create_space','description':'Create a Space and grant this connection access to that new root. Does not grant access to other existing Spaces. Requires spaces:create.',
+     'inputSchema':schema({'name':{'type':'string','minLength':1,'maxLength':80},'request_id':REQUEST_ID},['name','request_id'])},
+    {'name':'create_folder','description':'Create a child folder under an explicitly writable Library/Space folder. Returns its stable folder_id. Requires folders:create.',
+     'inputSchema':schema({'parent_id':FOLDER_ID,'name':{'type':'string','minLength':1,'maxLength':80},'request_id':REQUEST_ID},['parent_id','name','request_id'])},
+    {'name':'import_paper','description':'Import an uploaded PDF and AI-supplied metadata into folder_id. All required metadata must be researched and provided by the caller. Genuine absent DOI/arXiv is null. NEVER use Resolve to satisfy or follow up import. No PDF identifier extraction, online metadata lookup or enrichment queue. Same DOI/arXiv reuses an authorized existing Gewu Key, adds placement and appends different bytes to Paper Files, preserving its Default. Exact bytes reuse the file. Requires papers:import.',
+     'inputSchema':schema({'folder_id':FOLDER_ID,'upload_id':UPLOAD_ID,'metadata':schema(METADATA_FIELDS,METADATA_REQUIRED),'file_type':FILE_TYPE,'request_id':REQUEST_ID},['folder_id','upload_id','metadata','request_id'])},
+    {'name':'import_file','description':'Import an uploaded standalone ordinary file into a writable folder. No DOI or paper metadata required. Non-PDF files keep ordinary-file UI semantics; internal storage keys remain unchanged. Use add_paper_file instead when the file belongs to an existing paper. Requires files:import.',
+     'inputSchema':schema({'folder_id':FOLDER_ID,'upload_id':UPLOAD_ID,'file_type':FILE_TYPE,'request_id':REQUEST_ID},['folder_id','upload_id','request_id'])},
+    {'name':'add_paper_file','description':'Append an uploaded file of any format to an authorized writable Gewu Key. Keep the existing Default; store new attachments in Associated Files. Exact bytes reuse the existing file. Never overwrite content. Requires files:add.',
+     'inputSchema':schema({'gewu_key':KEY,'upload_id':UPLOAD_ID,'file_type':FILE_TYPE,'request_id':REQUEST_ID},['gewu_key','upload_id','request_id'])},
+    {'name':'update_paper_metadata','description':'Fill missing metadata using facts supplied by the AI. Preserve existing values and report disagreements. No identifier extraction, online lookup or Resolve. Requires metadata:write.',
+     'inputSchema':schema({'gewu_key':KEY,'metadata':schema(METADATA_FIELDS,['source_url']),'request_id':REQUEST_ID},['gewu_key','metadata','request_id'])},
+    {'name':'resolve_paper','description':'Start a standalone metadata lookup for one existing writable paper, only for an independently requested Resolve task. NEVER use during, to prepare, or after an import to supply its metadata. Separate papers:resolve permission required; missing identifiers may require PDF reading and files:read. Returns a job immediately. Poll get_resolve_status with the same request_id. Existing values/files/Default are preserved.',
+     'inputSchema':schema({'gewu_key':KEY,'purpose':{'type':'string','enum':['standalone']},'request_id':REQUEST_ID},['gewu_key','purpose','request_id'])},
+    {'name':'get_resolve_status','description':'Read this connection’s standalone Resolve result without blocking imports.', 'inputSchema':schema({'request_id':REQUEST_ID},['request_id'])},
+])
+
+
+def tool_allowed(name, scopes):
+    if name in LOCAL_DELIVERY_TOOLS: return True
+    if scopes is None: return False
+    if name in WRITE_SCOPES: return WRITE_SCOPES[name] in scopes
+    if name in ('upload_file','get_upload_status','release_upload'): return bool(set(scopes).intersection(UPLOAD_SCOPES))
+    if name in ('read_paper','get_paper_file'): return 'files:read' in scopes
+    if name == 'save_analysis': return 'analysis:write' in scopes
+    if name in ('list_folders','list_folder_papers'): return 'folders:read' in scopes
+    return 'papers:read' in scopes
+
+
 for tool in TOOLS:
-    tool['annotations'] = {'readOnlyHint': tool['name'] not in ('save_analysis', 'release_paper_file'),
+    tool['annotations'] = {'readOnlyHint': tool['name'] not in {'save_analysis','release_paper_file','upload_file','release_upload', *WRITE_SCOPES.keys()} or tool['name']=='get_resolve_status',
                            'destructiveHint': tool['name'] == 'release_paper_file',
-                           'idempotentHint': True, 'openWorldHint': False}
+                           'idempotentHint': True, 'openWorldHint': tool['name']=='resolve_paper'}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -255,6 +303,41 @@ class GewuClient:
                 except OSError:
                     pass  # The private session directory is also removed on close.
 
+    def upload_file(self, args):
+        if set(args) != {'local_path','request_id'}:
+            raise ValueError('Provide only a local_path and stable request_id.')
+        from .ai_uploads import MAX_UPLOAD_BYTES
+        if not isinstance(args['request_id'],str) or not re.fullmatch(r'[a-zA-Z0-9_-]{8,100}',args['request_id']):
+            raise ValueError('Provide a stable request_id of 8–100 letters, digits, underscores or hyphens.')
+        if not isinstance(args['local_path'],str) or not args['local_path']:
+            raise ValueError('Provide a client-local file path.')
+        source = Path(args['local_path']).expanduser()
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('Choose a regular client-local file, not a folder or symlink.')
+        scopes = self.request('capabilities')['scopes']
+        if not set(scopes).intersection(UPLOAD_SCOPES):
+            raise ValueError('Enable an import or Add Paper Files permission in AI Access.')
+        with source.open('rb') as stream:
+            before = os.fstat(stream.fileno())
+            if not 0 < before.st_size <= MAX_UPLOAD_BYTES:
+                raise ValueError('Upload one nonempty file of at most 256 MiB.')
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(256*1024), b''): digest.update(chunk)
+            stream.seek(0)
+            request = Request(self.url + '/api/v1/uploads', method='POST', data=stream,
+                headers={'Authorization':'Bearer '+self.token, 'Content-Type':'application/octet-stream',
+                         'Content-Length':str(before.st_size),'X-Gewu-Filename':quote(source.name,safe=''),
+                         'X-Gewu-SHA256':digest.hexdigest(),'X-Gewu-Request-ID':args['request_id']})
+            try:
+                with self.opener.open(request,timeout=60) as response:
+                    return json.loads(response.read(1024*1024))
+            except HTTPError as exc:
+                try: message=json.loads(exc.read(8192)).get('error','Upload failed.')
+                except (ValueError,UnicodeError): message='Upload failed.'
+                raise ValueError(message) from None
+            except (OSError,HTTPException):
+                raise ValueError('Upload interrupted. Retry with the same request_id and unchanged file; no reconnect needed.') from None
+
     def request(self, operation, args=None):
         path = '/api/v1/capabilities' if operation == 'capabilities' else '/api/v1/tools/' + operation
         request = Request(self.url + path, headers={'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'},
@@ -281,8 +364,11 @@ def serve(client, source=sys.stdin, target=sys.stdout):
     for raw in iter(lambda: source.readline(1024 * 1024 + 1), ''):
         if len(raw) > 1024 * 1024:
             # Do not parse a truncated request or process the tail as another one.
-            print('MCP request exceeds 1 MiB.', file=sys.stderr)
-            return 1
+            while raw and not raw.endswith('\n'):
+                raw=source.readline(1024 * 1024 + 1)
+            target.write(json.dumps({'jsonrpc':'2.0','id':None,'error':{'code':-32600,'message':'MCP JSON request exceeds 1 MiB. Use upload_file for binary files; the connection remains available.'}})+'\n')
+            target.flush()
+            continue
         response_id = None
         try:
             request = json.loads(raw)
@@ -298,7 +384,7 @@ def serve(client, source=sys.stdin, target=sys.stdout):
                 version = params.get('protocolVersion')
                 initialized = True
                 result = {'protocolVersion': version if version in SUPPORTED else VERSION,
-                          'capabilities': {'tools': {}}, 'serverInfo': {'name': 'gewu-insight', 'version': '1.3.0'},
+                          'capabilities': {'tools': {}}, 'serverInfo': {'name': 'gewu-insight', 'version': '1.4.0'},
                           'instructions': INSTRUCTIONS}
             elif method == 'ping':
                 result = {}
@@ -309,22 +395,21 @@ def serve(client, source=sys.stdin, target=sys.stdout):
                     scopes = client.request('capabilities')['scopes']
                 except ValueError:
                     scopes = None  # Local cleanup must remain discoverable offline/revoked.
-                result = {'tools': [t for t in TOOLS if t['name'] in LOCAL_DELIVERY_TOOLS or (scopes is not None
-                                   and (t['name'] not in ('read_paper', 'get_paper_file') or 'files:read' in scopes)
-                                   and (t['name'] != 'save_analysis' or 'analysis:write' in scopes)
-                                   and (t['name'] not in ('list_folders', 'list_folder_papers') or 'folders:read' in scopes))]}
+                result = {'tools': [t for t in TOOLS if tool_allowed(t['name'], scopes)]}
             elif method == 'tools/call':
                 name, args = params.get('name'), params.get('arguments', {})
-                if name not in {t['name'] for t in TOOLS} or not isinstance(args, dict):
+                if not isinstance(name,str) or name not in {t['name'] for t in TOOLS} or not isinstance(args, dict):
                     raise ValueError('Unknown tool or invalid arguments.')
                 try:
-                    if name in LOCAL_DELIVERY_TOOLS or name == 'get_paper_file':
+                    if name in LOCAL_DELIVERY_TOOLS or name in ('get_paper_file','upload_file'):
                         data = getattr(client, name)(args)
                     else:
                         data = client.request(name, args)
                     result = {'content': [{'type': 'text', 'text': json.dumps(data, ensure_ascii=False)}], 'isError': False}
                 except ValueError as exc:
                     result = {'content': [{'type': 'text', 'text': str(exc)}], 'isError': True}
+                except OSError:
+                    result = {'content': [{'type': 'text', 'text': 'Local file access failed. Check the file and retry; the MCP connection remains available.'}], 'isError': True}
             else:
                 target.write(json.dumps({'jsonrpc': '2.0', 'id': response_id, 'error': {'code': -32601, 'message': 'Method not found'}}) + '\n')
                 target.flush()

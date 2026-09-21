@@ -31,3 +31,18 @@
 .ai-access-modal #aiRefresh, .ai-access-modal form > button { justify-self: end; }
 .ai-access-modal #aiCreated button { margin: 10px 5px 10px 0; }
 .ai-access-modal #aiMcpConfig { font-family: ui-monospace, monospace; font-size: .8em; }
+.ai-access-modal .ai-connection > div { min-width: 0; flex: 1; }
+.ai-access-modal .ai-write-controls input[type=checkbox] { flex-shrink: 0; }
+.ai-access-modal .ai-write-heading { margin-top: 12px; font-weight: 600; }
+.ai-access-modal .ai-write-collections { display: grid; gap: 5px; margin: 8px 0; }
+.ai-access-modal label.ai-write-destination { margin: 0; padding: 8px 10px; border: 1px solid #d2d5db; border-radius: 6px; background: #fff; cursor: pointer; }
+.ai-access-modal .ai-write-destination > span { flex: 1; min-width: 0; }
+.ai-access-modal .ai-write-destination[data-state=selected] { background: #e4efff; border-color: #397dc5; color: #174e87; }
+.ai-access-modal .ai-write-destination[data-state=selected] small { color: #174e87; }
+.ai-access-modal .ai-write-destination[data-state=partial] { border-style: dashed; }
+.ai-access-modal .ai-write-destination:focus-within { outline: 2px solid #528bc0; outline-offset: 2px; }
+.ai-access-modal .ai-write-badge { margin-left: 10px; font-size: 10.5px; font-weight: 500; color: #7d5800; }
+.ai-access-modal .ai-write-badge[data-state=saved] { color: #247247; }
+.ai-access-modal .ai-write-feedback { margin-top: 6px; color: #247247; font-size: 10.5px; }
+.ai-access-modal .ai-write-feedback[data-state=unsaved] { color: #7d5800; }
+.ai-access-modal .ai-write-feedback.err { color: #ad2424; }

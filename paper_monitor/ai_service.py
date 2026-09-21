@@ -46,7 +46,7 @@ def require_scope(grant, scope):
         fail(403, 'permission_required', f'This connection needs {scope} permission in AI Access.')
 
 
-def selection_sql(grant):
+def _read_selection_sql(grant):
     selection = grant['selection']
     kind = selection['kind']
     if kind == 'papers':
@@ -64,6 +64,22 @@ def selection_sql(grant):
       JOIN active_folders a ON a.id=f.id)
       SELECT 1 FROM library_items i JOIN descendants d ON i.folder_id=d.id
       WHERE i.paper_id=p.paper_id AND COALESCE(i.trashed_at,'')='')''', [selection['folder_id']]
+
+
+def selection_sql(grant):
+    from .ai_contract import WRITE_SCOPES
+    clause, params = _read_selection_sql(grant)
+    roots = grant.get('write_folder_ids', []) if set(grant['scopes']) & set(WRITE_SCOPES.values()) else []
+    if not roots:
+        return clause, params
+    marks = ','.join('?' for _ in roots)
+    return '(' + clause + f''' OR EXISTS (
+      WITH RECURSIVE writable(id) AS (
+        SELECT id FROM active_folders WHERE id IN ({marks}) UNION
+        SELECT f.id FROM library_folders f JOIN writable w ON f.parent_id=w.id
+        JOIN active_folders a ON a.id=f.id)
+      SELECT 1 FROM library_items i JOIN writable w ON i.folder_id=w.id
+      WHERE i.paper_id=p.paper_id AND COALESCE(i.trashed_at,'')=''))''', params + roots
 
 
 def paper_for_key(storage, grant, key):
@@ -254,9 +270,17 @@ def execute(storage, authorization, operation, args):
     try:
         if operation == 'capabilities':
             return {'api_version': '1', 'connection': grant['name'], 'scopes': grant['scopes'],
-                    'selection': grant['selection'], 'expires_at': grant['expires_at']}
+                    'selection': grant['selection'], 'write_folder_ids': grant.get('write_folder_ids', []),
+                    'expires_at': grant['expires_at']}
         require_scope(grant, 'papers:read')
-        if operation == 'search_papers':
+        from .ai_contract import WRITE_SCOPES
+        if operation in WRITE_SCOPES:
+            from .ai_writes import execute_write
+            result = execute_write(storage, authorization, operation, args)
+        elif operation in ('get_upload_status', 'release_upload'):
+            from .ai_uploads import manage_uploads
+            result = manage_uploads(storage, grant, operation, args)
+        elif operation == 'search_papers':
             result = search(storage, grant, args)
         elif operation in ('list_folders', 'list_folder_papers'):
             from .ai_folders import list_collection

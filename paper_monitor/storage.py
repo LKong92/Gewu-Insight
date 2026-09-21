@@ -27,7 +27,7 @@ from .text import (
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 20
+STORAGE_SCHEMA_VERSION = 21
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -770,6 +770,8 @@ class Storage:
                     paper_identity.ensure_schema(self.conn)
                 if schema_version < 20:
                     ensure_resource_dedup_schema(self.conn)
+                if schema_version < 21:
+                    ensure_ai_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -3481,7 +3483,7 @@ class Storage:
             resource
             for resource in resources
             if resource.get("exists")
-            and (resource.get("added_via") != "inventory_conflict" or resource.get("file_type_override"))
+            and (resource.get("added_via") not in {"inventory_conflict", "ai_import_attachment"} or resource.get("file_type_override"))
             and normalize_paper_file_type(resource.get("file_type"))
             in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
         ]
@@ -3506,7 +3508,7 @@ class Storage:
         # an unreviewed identifier-conflict file as the Default.
         fallback = [r for r in resources if r.get("exists")
                     and normalize_paper_file_type(r.get("file_type")) in {"unknown", "other"}
-                    and (r.get("added_via") != "inventory_conflict" or r.get("file_type_override"))]
+                    and (r.get("added_via") not in {"inventory_conflict", "ai_import_attachment"} or r.get("file_type_override"))]
         primary_id = int(paper.get("primary_resource_id") or 0)
         main_paths = {str(paper.get(k) or "") for k in ("merged_pdf_path", "main_pdf_path")} - {""}
         fallback.sort(key=lambda r: (
@@ -3871,7 +3873,7 @@ class Storage:
         )
         self.conn.commit()
 
-    def create_library_folder(self, *, parent_id: int = 1, name: str) -> dict[str, Any]:
+    def create_library_folder(self, *, parent_id: int = 1, name: str, commit: bool = True) -> dict[str, Any]:
         parent_id = int(parent_id or 1)
         clean_name = " ".join(name.strip().split()) or "New Folder"
         clean_name = self._unique_library_folder_name(parent_id, clean_name)
@@ -3884,10 +3886,11 @@ class Storage:
             """,
             (clean_name, parent_id, timestamp, timestamp, sort_order),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(int(cursor.lastrowid)) or {}
 
-    def create_library_root_folder(self, *, name: str) -> dict[str, Any]:
+    def create_library_root_folder(self, *, name: str, commit: bool = True) -> dict[str, Any]:
         clean_name = " ".join(name.strip().split()) or "Space"
         clean_name = self._unique_library_root_folder_name(clean_name)
         timestamp = now_iso()
@@ -3902,7 +3905,8 @@ class Storage:
             """,
             (clean_name, timestamp, timestamp, sort_order),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(int(cursor.lastrowid)) or {}
 
     def get_library_folder(self, folder_id: int) -> dict[str, Any] | None:
@@ -3969,7 +3973,7 @@ class Storage:
         self.conn.commit()
         return self.get_library_folder(folder_id) or {}
 
-    def add_library_item(self, *, paper_id: str, folder_id: int = 1) -> dict[str, Any]:
+    def add_library_item(self, *, paper_id: str, folder_id: int = 1, commit: bool = True) -> dict[str, Any]:
         paper_id = self.resolve_paper_id(paper_id)
         folder_id = int(folder_id or 1)
         sort_order = self._next_library_sort_order("library_items", folder_id)
@@ -3981,7 +3985,8 @@ class Storage:
             """,
             (folder_id, paper_id, timestamp, sort_order),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         row = self.conn.execute(
             """
             SELECT *

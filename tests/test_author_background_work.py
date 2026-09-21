@@ -75,8 +75,13 @@ class AuthorBackgroundTests(unittest.TestCase):
 
     def test_automatic_budget_and_rest_survive_worker_reentry(self):
         self.add(6)
-        now = datetime.now().astimezone()
-        with patch.object(work, 'BATCH_SIZE', 2), patch.object(work, 'DAILY_LIMIT', 3), patch.object(ui, 'resolve_google_scholar_candidate_to_identifier', return_value=None) as resolve, patch.object(ui.time, 'sleep'), patch.object(ui, 'google_scholar_request_with_spacing', side_effect=AssertionError('metadata must not contact Scholar')):
+        # Check a single day's budget even when the suite runs near midnight.
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        class SameDayClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now.astimezone(tz) if tz else now
+        with patch.object(work, 'datetime', SameDayClock), patch.object(work, 'BATCH_SIZE', 2), patch.object(work, 'DAILY_LIMIT', 3), patch.object(ui, 'resolve_google_scholar_candidate_to_identifier', return_value=None) as resolve, patch.object(ui.time, 'sleep'), patch.object(ui, 'google_scholar_request_with_spacing', side_effect=AssertionError('metadata must not contact Scholar')):
             work.run_slice(self.path, now=now)
             self.assertEqual(resolve.call_count, 2)
             self.assertEqual(work.read(self.storage)['used'], 2)

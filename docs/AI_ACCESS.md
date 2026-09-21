@@ -73,6 +73,26 @@ selected collection and other permissions. Disable it there to revoke directory
 access immediately. Reconnect the MCP client to refresh its discovered tools.
 The API cannot enable this permission with an AI token.
 
+Write access is separately opt-in. In **Connections > Edit write permissions**,
+select the operations and **Writable collections**, then **Save Write Access**.
+The picker shows only **Library** and the names of root **Spaces**; it does not
+include My Publications. Click a row to select it in blue, or click again to
+remove it. A selected root includes all its active subfolders.
+
+The **Saved** label remains beside the collapsible editor title. Saved choices
+survive collapsing, reopening Settings and restarting the App. **Unsaved changes**
+means Save Write Access is still required. A failed save shows **Not saved** and
+keeps the draft for retry. Earlier child-folder-only grants appear as **Some
+subfolders only**; they are preserved without silently granting the entire root.
+Selecting that root explicitly replaces the narrower selection when saved.
+
+The token, expiry and existing read collection are preserved. Selected write
+roots and their active descendants also become readable. An empty write-root
+list grants no existing Library or Space folders. **Create Spaces** adds only
+the newly created Space to this connection; it grants no access to other Spaces.
+Existing connections gain no write permissions during an upgrade. Reconnect
+the MCP client after changing permissions so its discovered tools refresh.
+
 The adapter is `scripts/gewu_mcp.py`, requires Python 3.9 or later, and reads
 `GEWU_API_URL` (default `http://127.0.0.1:8765`) and `GEWU_API_TOKEN` from its
 environment. It implements MCP stdio protocol version **2025-11-25**, with
@@ -186,6 +206,15 @@ must also replace the old token in Codex's settings.
 | `release_paper_file` | Release a finished temporary copy by delivery ID and return updated quota | Local session only |
 | `read_paper` | Extract a page range from a PDF or read a text/Markdown chunk | `files:read` |
 | `save_analysis` | Add a new Markdown file to the same paper's Paper Files | `analysis:write` |
+| `create_space` | Create one Space; include that new root in the connection's writable collection | `spaces:create` |
+| `create_folder` | Create a child of an explicitly writable Library/Space folder | `folders:create` |
+| `upload_file` | Stream a client-local file into private temporary staging; return `upload_id` | Any import or Add Paper Files permission |
+| `get_upload_status` / `release_upload` | Inspect staging quota / release an unused upload | Any import or Add Paper Files permission |
+| `import_paper` | Register an uploaded PDF with mandatory AI-supplied metadata | `papers:import` |
+| `import_file` | Import a standalone non-PDF file in any format | `files:import` |
+| `add_paper_file` | Append a file of any format to an existing writable Gewu Key | `files:add` |
+| `update_paper_metadata` | Fill missing fields from supplied facts, preserving existing values | `metadata:write` |
+| `resolve_paper` / `get_resolve_status` | Start / inspect a separately requested Resolve job | `papers:resolve` |
 
 All connections include `papers:read`. File-based analysis provenance also
 requires `files:read`. Tool discovery shows only permitted Library tools; the
@@ -194,6 +223,141 @@ available offline or after revocation/expiry, and cannot retrieve new content.
 Out-of-scope
 paper keys and file IDs return an unavailable response without revealing data.
 Search uses local metadata, not a semantic index or an external service.
+
+## Import a prepared literature collection
+
+The caller prepares files and metadata. Gewu registers their identity, placement
+and ownership. Import does **not** extract DOI/arXiv from a PDF, fetch online
+metadata, enqueue enrichment, or call Resolve. Do not call `resolve_paper` to
+prepare or follow up an import: research missing facts using the AI client's
+own sources before importing. Missing metadata is returned as `metadata_required`
+with the required fields; no formal paper or file is created by that failure.
+
+1. Use `create_space`, then `create_folder` with the returned `folder_id` as
+   `parent_id`. Existing Library/Space destinations must be explicitly writable.
+2. Call `upload_file` with the prepared client-local path and a stable upload
+   `request_id`. Binary bytes are streamed separately from MCP JSON; the server
+   receives no arbitrary filesystem path to read.
+3. Choose ownership explicitly: `import_paper` for a standalone PDF;
+   `import_file` for an independent overview, spreadsheet, image, archive or
+   other non-PDF file; `add_paper_file` with the owning `gewu_key` for an attachment.
+   This avoids guessing which neighboring Markdown file belongs to which paper.
+4. Use a **different**, stable `request_id` for the import. Successful imports
+   reclaim upload staging automatically. Keep returned keys, membership IDs
+   and file IDs, and release uploads you decide not to import.
+
+Complete these upload-and-register steps for **one file at a time**, then move
+to the next file. There is no batch-size definition and no wait for a whole
+folder to finish: each successful file import releases its own staging
+immediately. Do not upload the entire collection before registering files.
+
+An independent Markdown or other non-PDF file retains the existing ordinary-file
+model. It has an internal storage key for database/API addressing, but does not
+gain the public Gewu Key field shown in the App for PDF papers. The existing API
+field `gewu_key` carries that internal handle; `item_kind: file` identifies an
+ordinary-file import. It does not turn an overview into an academic paper.
+
+`import_paper.metadata` requires all of:
+
+| Field | Meaning |
+| --- | --- |
+| `title`, `authors` | Nonempty title and list of author names |
+| `publication_type` | `journal_article`, `preprint`, or `other` |
+| `journal` | Known journal, repository or publication venue |
+| `publication_date` | Known year, `YYYY-MM`, or `YYYY-MM-DD` |
+| `doi`, `arxiv_id` | Known identifier, or explicit `null` when genuinely absent |
+| `source_url` | HTTP(S) source used by the AI for the supplied facts |
+
+Optional fields are `abstract`, `volume`, `issue` and `pages`. Unknown facts
+must not be invented or represented as a supposedly absent identifier. Supplied
+facts are recorded with connection/time/source provenance and are not marked
+as verified by Gewu. The system cannot independently certify an AI's assertions
+without performing the lookup that import deliberately avoids.
+
+Example `import_paper` arguments (replace the illustrative IDs and metadata):
+
+```json
+{
+  "folder_id": 42,
+  "upload_id": "upload_0123456789abcdef0123456789abcdef",
+  "request_id": "paper-import-example-0001",
+  "file_type": "published_version",
+  "metadata": {
+    "title": "Example prepared article",
+    "authors": ["Example Author"],
+    "publication_type": "journal_article",
+    "journal": "Example Journal",
+    "publication_date": "2026",
+    "doi": "10.5555/example",
+    "arxiv_id": null,
+    "source_url": "https://example.org/article"
+  }
+}
+```
+
+### Identity reuse and physical storage
+
+A matching DOI or arXiv identity reuses the **existing Gewu Key**. The requested
+destination receives a placement of that same work. Different incoming PDF
+bytes are retained as another Paper File in **Associated Files**; the existing
+main file and Default are preserved even if the incoming classification has
+higher automatic priority. Exact unchanged bytes reuse the existing resource
+and retain the new import provenance. Newly supplied, nonconflicting DOI/arXiv
+evidence is retained so later imports through either identifier reuse the key.
+Existing bibliography is preserved; use the separately permitted metadata tool
+to fill missing fields. Similar titles alone never merge records.
+
+If DOI and arXiv point to different existing records, return `identity_conflict`
+and preserve both. If a matching work is outside the connection's readable
+collection, import is refused without disclosing that record or adding an
+out-of-scope placement. The user must adjust access through AI Access if needed.
+
+The main file of a new file-backed object is placed in its Library/Space folder.
+Other files use the existing mirrored **Associated Files** bundle and its
+Versions/Supplements/Files subfolders. Multiple placements share that bundle
+and use the existing filesystem aliases. Folder IDs and ownership determine
+those paths; the caller does not have to calculate or send server disk paths.
+External linked originals remain in place. AI imports never overwrite an
+existing file or set a different Default for an existing work.
+
+### Explicit Resolve remains separate
+
+`update_paper_metadata` takes supplied fields plus `source_url`, fills only
+missing values, and reports `preserved_conflicts`. It performs no lookup.
+`resolve_paper` instead starts an independently requested lookup for **one
+existing writable paper**, requires separate `papers:resolve` permission and
+`purpose: "standalone"`, and immediately returns a job/request ID. Poll
+`get_resolve_status` for completion. Known DOI/arXiv is used first; identifier
+extraction from a local PDF requires `files:read`. At most two jobs run at once;
+their network work does not hold up imports. Access is rechecked before applying
+results. Existing metadata values, files and Default are preserved. This tool
+is never called by the import implementation.
+
+### Continuous transfer and retry
+
+Capacity measures **currently retained temporary files**, not lifetime bytes
+transferred. Uploads allow 256 MiB per file, with 512 MiB / 16 staged files per
+connection. Successful import consumes staging; failed transfers remove their
+partials. `get_upload_status` returns used/remaining bytes and slots plus active
+upload IDs. On `upload_capacity`, import ready files or `release_upload` unused
+ones, then retry without reconnecting. Unused ready uploads expire after 24
+hours; active transfers and imports are not evicted. A released/expired upload
+can be uploaded again with the same upload request ID and unchanged bytes.
+
+Read copies keep their separate 64 MiB per-file and 256 MiB / 64-copy session
+limits. Finish every reader/OCR/rendering user before `release_paper_file`.
+Those copies are never automatically evicted. Both workflows can repeat across
+many batches exceeding their temporary capacity in total. Actual disk-full,
+file-size limits, expired permission or a stopped App still return errors;
+there is no promise of unlimited storage or permanent connectivity.
+
+Every create/import/metadata write uses an 8–100-character `request_id` (letters,
+digits, `_`, `-`). Retry an interrupted response with the **same operation and
+identical arguments**; changing a payload requires a new ID. A completed import
+receipt remains usable after its upload staging is gone. Removed formal files
+are not recreated by replay. `layout_pending: true` means the file was saved but
+alias synchronization needs an exact retry. An import failure before commit
+rolls back only its own new files/records; the staged source remains for retry.
 
 ## Directory browsing and paper membership
 
@@ -352,12 +516,14 @@ not bypass new checks. Revocation blocks future retrieval, but cannot recall
 bytes already delivered to a client. Local copies are separate from the managed
 source, with read-only file mode; this is not an OS isolation mechanism.
 
-`get_paper_file` only reads registered files. `save_analysis` is the only tool
-that writes to Paper Files and only appends Markdown. No tool can edit, replace or delete **any**
-existing Paper Files, including an earlier AI note, or change Default, categories,
-folders or paper metadata. Updates require saving a new analysis with a new
-request ID. The server rejects unsupported save arguments and chooses the new
-note's classification rather than trusting client-supplied publication labels.
+`get_paper_file` only reads registered files. `save_analysis` appends Markdown
+analyses; other imports and attachments need their separate permissions.
+No tool can edit, replace or delete **any** existing Paper Files, including an
+earlier AI note, change their classification, or replace an existing Default.
+New analyses require a new request ID. The server rejects unsupported save
+arguments and chooses the note's classification rather than trusting
+client-supplied publication labels. Creating folders and filling missing paper
+metadata are separate, scoped operations described above.
 
 New AI notes are registered with `file_role=note`, `kind=md`,
 `mime_type=text/markdown`, `file_type=other`, `annotation_state=unannotated`,
@@ -397,7 +563,9 @@ File-backed provenance adds `source_file_id`, `source_sha256`, and `pages`.
 The `/tools/…` form also includes `gewu_key` in the JSON body. Text attachments
 use `offset` and return `next_offset`; PDF page numbers start at 1.
 
-Requests are limited to 1 MiB, notes to 256 KiB, and file reads/downloads to
+JSON requests are limited to 1 MiB; binary uploads use `POST /api/v1/uploads`
+with `Content-Length`, percent-encoded `X-Gewu-Filename`, `X-Gewu-SHA256` and
+`X-Gewu-Request-ID` headers. Notes are limited to 256 KiB, and file reads/downloads to
 64 MiB. Original delivery includes every page. PDF text requests through `read_paper` read at most 10 pages (5 by default), extracting at most
 64,000 characters. Text requests return at most 64,000 characters. Two file
 reads can run concurrently; PDF parsing has a 20-second subprocess deadline.

@@ -1,7 +1,44 @@
 # User Guide audit — 1.0.0 / Build 1
 
-Edition reviewed: September 18, 2026. Baseline audit: September 16, 2026. Scope: the installed macOS product and the
+Edition reviewed: September 22, 2026. Baseline audit: September 16, 2026. Scope: the installed macOS product and the
 source on main. This is a current manual audit, not a chronological change log.
+
+## September 22 write-permission presentation
+
+Writable collections now show only Library and root Space names. Clicking a
+row toggles its blue selection and includes all active subfolders. My Publications
+write access is deferred. Saved, unsaved and failed states remain visible beside
+the collapsible editor title; saved values survive reopening and page reload,
+and failed requests preserve drafts. Earlier child-only grants remain partial
+until the user explicitly selects their root; no grant migration is performed.
+
+Validation: 86 scoped AI access, folders, writes and Guide checks pass. The
+synthetic Chrome probe verifies independent multi-selection, three collapse
+cycles, close/reopen, full reload from SQLite, failed-save draft retention,
+unrelated permission updates, unchanged tokens/read scopes and legacy partial
+grants. Six PDF structure checks pass; all nine changed PDF pages (8, 94–101)
+were rendered and reviewed. The PDF remains 116 pages. Existing real-App
+screenshots are retained; no real grants, files or live tasks were changed.
+
+## September 21 MCP write-access follow-up
+
+The AI Access topic now covers the twenty MCP tools, separate write operations
+and writable roots, metadata-first PDF import, ordinary-file versus attachment
+ownership, reuse of DOI/arXiv identities and existing Defaults, and standalone
+Resolve jobs. Transfer guidance is explicitly per file: upload, register,
+immediately reclaim that file's staging, then continue. Whole-collection size
+does not count against the temporary quota. Earlier claims that analysis was
+the only supported write operation were removed.
+
+The existing real-App screenshots are retained as illustrations of basic
+connection and directory access. They do not depict the newly added write
+editor. New editor validation uses a disposable synthetic-library browser
+probe, not a replacement User Guide screenshot or live-user permission edit.
+
+Validation: 1,178 product tests, the synthetic AI Access UI probe and six PDF
+structure checks pass. The 116-page PDF has 356 resolving internal links; 36
+affected or repaginated pages were rendered and reviewed. The source and
+signed App-bundle PDF match, and signature-stripped native code is unchanged.
 
 ## September 18 workflow audit
 

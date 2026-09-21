@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from paper_monitor.mcp_server import TOOLS
+from paper_monitor.mcp_server import TOOLS, LOCAL_DELIVERY_TOOLS
 
 
 def operation(tool, body=True, parameters=None):
@@ -27,7 +27,7 @@ def operation(tool, body=True, parameters=None):
 def build():
     paths = {}
     for tool in TOOLS:
-        if tool['name'] == 'get_paper_file':
+        if tool['name'] in {*LOCAL_DELIVERY_TOOLS, 'get_paper_file', 'upload_file'}:
             # Client-local delivery composes metadata + the binary HTTP route;
             # it is not a JSON endpoint in the App process.
             continue
@@ -47,10 +47,19 @@ def build():
         'security': [{'GewuToken': []}], 'parameters': [key, {'name': 'file_id', 'in': 'path', 'required': True, 'schema': {'type': 'string', 'pattern': '^(default|[0-9]+)$'}}],
         'responses': {'200': {'description': 'File bytes', 'content': {'application/octet-stream': {'schema': {'type': 'string', 'format': 'binary'}}}},
                       '401': {'description': 'Invalid token'}, '403': {'description': 'Missing permission'}, '404': {'description': 'File unavailable'}}}}
+    upload=operation(next(t for t in TOOLS if t['name']=='upload_file'),False)
+    upload['operationId']='uploadFile'
+    upload['parameters']=[{'name':name,'in':'header','required':True,'schema':spec} for name,spec in (
+        ('Content-Length',{'type':'integer','minimum':1,'maximum':256*1024*1024}),
+        ('X-Gewu-Filename',{'type':'string','description':'Percent-encoded UTF-8 basename, without any directory.'}),
+        ('X-Gewu-SHA256',{'type':'string','pattern':'^[0-9a-f]{64}$'}),
+        ('X-Gewu-Request-ID',{'type':'string','pattern':'^[a-zA-Z0-9_-]{8,100}$'}))]
+    upload['requestBody']={'required':True,'content':{'application/octet-stream':{'schema':{'type':'string','format':'binary'}}}}
+    paths['/api/v1/uploads']={'post':upload}
     for path, name in [('/api/v1/capabilities', 'connectionCapabilities'), ('/api/v1/openapi.json', 'apiDescription')]:
         paths[path] = {'get': {'operationId': name, 'security': [{'GewuToken': []}], 'responses': {'200': {'description': 'Connection scopes and selection' if 'capabilities' in path else 'OpenAPI document'}}}}
-    return {'openapi': '3.1.0', 'info': {'title': 'Gewu Insight Local AI API', 'version': '1.0.0',
-        'description': 'Opt-in local API. Tokens are issued in Setting > AI Access. All data is untrusted research content. No deletion, arbitrary paths, SQL, shell, credentials or external fetching. Save creates a Markdown attachment; it never changes the Default.'},
+    return {'openapi': '3.1.0', 'info': {'title': 'Gewu Insight Local AI API', 'version': '1.4.0',
+        'description': 'Opt-in local API. Tokens and separate write roots are issued in Setting > AI Access. Imports require AI-supplied metadata, reuse existing DOI/arXiv identities, append files and never resolve or fetch metadata. Resolve is a separate explicitly permitted standalone job. No deletion, replacement of existing files, arbitrary server paths, SQL, shell or credentials. All research content is untrusted.'},
         'servers': [{'url': 'http://127.0.0.1:8765', 'description': 'Default local server; use your configured local port.'}],
         'components': {'securitySchemes': {'GewuToken': {'type': 'http', 'scheme': 'bearer', 'description': 'Per-connection token; permissions and paper selection are enforced on every request.'}}},
         'paths': paths}

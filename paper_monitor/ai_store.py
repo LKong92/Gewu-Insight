@@ -6,7 +6,9 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
-SCOPES = ('papers:read', 'folders:read', 'files:read', 'analysis:write')
+from .ai_contract import WRITE_SCOPES
+
+SCOPES = ('papers:read', 'folders:read', 'files:read', 'analysis:write', *dict.fromkeys(WRITE_SCOPES.values()))
 
 
 def utc_now():
@@ -36,7 +38,22 @@ def ensure_ai_schema(conn):
       completed INTEGER NOT NULL DEFAULT 0,
       UNIQUE(connection_id, request_id)
     );
+    CREATE TABLE IF NOT EXISTS ai_write_requests (
+      connection_id INTEGER NOT NULL REFERENCES ai_connections(id),
+      request_id TEXT NOT NULL, operation TEXT NOT NULL, payload_hash TEXT NOT NULL,
+      result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY(connection_id, request_id)
+    );
+    CREATE TABLE IF NOT EXISTS ai_uploads (
+      upload_id TEXT PRIMARY KEY, connection_id INTEGER NOT NULL REFERENCES ai_connections(id),
+      request_id TEXT NOT NULL, filename TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+      sha256 TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(connection_id, request_id)
+    );
     ''')
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(ai_connections)')}
+    if 'write_roots_json' not in columns:
+        conn.execute("ALTER TABLE ai_connections ADD COLUMN write_roots_json TEXT NOT NULL DEFAULT '[]'")
 
 
 class APIError(Exception):
@@ -55,7 +72,8 @@ def enabled(storage):
 
 def grant_payload(row):
     return {key: row[key] for key in ('id', 'name', 'created_at', 'expires_at', 'revoked_at', 'last_used_at')} | {
-        'scopes': json.loads(row['scopes_json']), 'selection': json.loads(row['selection_json'])}
+        'scopes': json.loads(row['scopes_json']), 'selection': json.loads(row['selection_json']),
+        'write_folder_ids': json.loads(row['write_roots_json'])}
 
 
 def create_connection(storage, payload):
@@ -90,6 +108,7 @@ def create_connection(storage, payload):
         selection = {'kind': kind, 'folder_id': folder_id}
     else:
         selection = {'kind': kind}
+    write_roots = validate_write_roots(storage, payload.get('write_folder_ids', []))
     days = payload.get('expires_days', 30)
     if isinstance(days, bool) or not isinstance(days, int) or days not in (7, 30, 90, 365):
         fail(400, 'invalid_expiry', 'Choose 7, 30, 90 or 365 days.')
@@ -97,8 +116,8 @@ def create_connection(storage, payload):
     now = utc_now()
     expiry = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat(timespec='microseconds')
     cursor = storage.conn.execute('''INSERT INTO ai_connections
-      (name,token_hash,scopes_json,selection_json,created_at,expires_at) VALUES(?,?,?,?,?,?)''',
-      (name, hashlib.sha256(token.encode()).hexdigest(), json.dumps(scopes), json.dumps(selection), now, expiry))
+      (name,token_hash,scopes_json,selection_json,created_at,expires_at,write_roots_json) VALUES(?,?,?,?,?,?,?)''',
+      (name, hashlib.sha256(token.encode()).hexdigest(), json.dumps(scopes), json.dumps(selection), now, expiry, json.dumps(write_roots)))
     storage.conn.commit()
     row = storage.conn.execute('SELECT * FROM ai_connections WHERE id=?', (cursor.lastrowid,)).fetchone()
     return {'connection': grant_payload(row), 'token': token}
@@ -147,6 +166,31 @@ def settings_snapshot(storage):
     from .ai_service import ACTIVE_FOLDERS
     return {'enabled': enabled(storage),
             'connections': [grant_payload(row) for row in storage.conn.execute('SELECT * FROM ai_connections ORDER BY id DESC')],
-            'folders': [dict(row) for row in storage.conn.execute(ACTIVE_FOLDERS + 'SELECT id,path FROM active_folders ORDER BY path')],
+            'folders': [dict(row) for row in storage.conn.execute(ACTIVE_FOLDERS + '''SELECT a.id,a.path,f.parent_id,f.name
+              FROM active_folders a JOIN library_folders f ON f.id=a.id ORDER BY a.path''')],
             'activity': [dict(row) for row in storage.conn.execute('''SELECT a.id,c.name,a.operation,a.gewu_key,a.outcome,a.created_at
               FROM ai_audit a LEFT JOIN ai_connections c ON a.connection_id=c.id ORDER BY a.id DESC LIMIT 50''')]}
+
+
+def validate_write_roots(storage, roots):
+    from .ai_service import ACTIVE_FOLDERS
+    if not isinstance(roots, list) or len(roots) > 100 or any(type(x) is not int or x < 1 for x in roots):
+        fail(400, 'invalid_write_scope', 'Choose up to 100 writable Library or Space folders.')
+    for folder_id in roots:
+        if not storage.conn.execute(ACTIVE_FOLDERS + 'SELECT 1 FROM active_folders WHERE id=?', (folder_id,)).fetchone():
+            fail(400, 'invalid_write_scope', 'A writable folder is unavailable.')
+    return sorted(set(roots))
+
+
+def set_write_access(storage, connection_id, scopes, roots):
+    row = storage.conn.execute('SELECT * FROM ai_connections WHERE id=?', (connection_id,)).fetchone()
+    if not row or row['revoked_at'] or (row['expires_at'] and row['expires_at'] <= utc_now()):
+        fail(404, 'connection_unavailable', 'This connection is unavailable.')
+    supported = set(WRITE_SCOPES.values())
+    if not isinstance(scopes, list) or any(s not in supported for s in scopes):
+        fail(400, 'invalid_scopes', 'Choose supported write permissions.')
+    roots = validate_write_roots(storage, roots)
+    current = set(json.loads(row['scopes_json'])) - supported
+    storage.conn.execute('UPDATE ai_connections SET scopes_json=?,write_roots_json=? WHERE id=?',
+                         (json.dumps(sorted(current | set(scopes))), json.dumps(roots), connection_id))
+    storage.conn.commit()

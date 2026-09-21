@@ -92,7 +92,7 @@ class JournalMonitorProvenanceStorageTests(unittest.TestCase):
                 migrated.close()
 
         self.assertEqual(schema_version, STORAGE_SCHEMA_VERSION)
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 20)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 21)
         self.assertIsNotNone(table_exists)
         self.assertIsNotNone(paper)
         self.assertEqual(paper["title"], "A canonical paper observed by three monitors")

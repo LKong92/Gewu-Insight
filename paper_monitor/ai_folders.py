@@ -21,7 +21,7 @@ def changed():
 
 
 def projection(storage, grant):
-    from .ai_service import ACTIVE_FOLDERS, require_scope, selection_sql
+    from .ai_service import ACTIVE_FOLDERS, require_scope, selection_sql, _read_selection_sql
     require_scope(grant, 'papers:read')
     require_scope(grant, 'folders:read')
     # One SQLite read snapshot covers both the tree and its memberships. Release
@@ -37,6 +37,9 @@ def projection(storage, grant):
           FROM library_items i JOIN papers p ON p.paper_id=i.paper_id
           JOIN active_folders a ON a.id=i.folder_id
           WHERE COALESCE(i.trashed_at,'')='' AND ''' + clause + ' ORDER BY i.id', params)]
+        read_clause, read_params = _read_selection_sql(grant)
+        originally_readable = {r[0] for r in storage.conn.execute(ACTIVE_FOLDERS + '''
+          SELECT p.storage_key FROM papers p WHERE ''' + read_clause, read_params)}
     finally:
         storage.conn.execute('RELEASE ai_folder_read')
 
@@ -54,12 +57,21 @@ def projection(storage, grant):
     elif kind == 'papers':
         visible = set()
         for member in members:
+            if member['gewu_key'] not in originally_readable:
+                continue
             current = member['folder_id']
             while current in folders and current not in visible:
                 visible.add(current)
                 current = folders[current]['parent_id']
     else:
         visible = set(folders)
+    from .ai_contract import WRITE_SCOPES
+    if set(grant['scopes']).intersection(WRITE_SCOPES.values()):
+        pending=[root for root in grant.get('write_folder_ids',[]) if root in folders]
+        while pending:
+            current=pending.pop()
+            visible.add(current)
+            pending.extend(children.get(current,[]))
     members = [m for m in members if m['folder_id'] in visible]
     projected = {}
     for folder_id in sorted(visible):

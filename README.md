@@ -434,7 +434,10 @@ export CROSSREF_MAILTO=your.name@example.edu
 **Setting → AI Access** provides optional, revocable access for AI clients through
 Gewu Keys. It is off by default. Create a connection with a paper collection and
 permissions, then copy its MCP configuration into your AI client. Reading file
-contents, browsing logical directories and adding Markdown analyses are separate permissions; ordinary App use
+contents, browsing directories, adding analyses, creating Spaces/folders,
+importing prepared files and standalone Resolve have separate permissions.
+Imports require AI-supplied metadata, reuse DOI/arXiv identities, and preserve
+existing files and Defaults. Write destinations are explicitly selected in AI Access; ordinary App use
 needs no AI token. See [AI Access and API v1](docs/AI_ACCESS.md) for setup, limits
 and the access boundary.
 

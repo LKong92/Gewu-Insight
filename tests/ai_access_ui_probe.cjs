@@ -1,7 +1,7 @@
 const {chromium}=require('playwright');
 // Run against a synthetic test server only; argv[2] is its private fixture JSON.
 const fs=require('fs'), assert=require('assert'), path=require('path');
-const output=path.dirname(path.resolve(process.argv[2]));
+const output=process.env.GEWU_UI_QA_DIR || path.dirname(path.resolve(process.argv[2]));
 (async()=>{
  const fixture=JSON.parse(fs.readFileSync(process.argv[2]));
  const browser=await chromium.launch({headless:true,channel:'chrome'});
@@ -22,6 +22,7 @@ const output=path.dirname(path.resolve(process.argv[2]));
  await page.evaluate(()=>window.openAIAccessSettings());await page.waitForFunction(()=>document.querySelector('#aiAccessState').textContent.startsWith('Disabled'));
  assert.equal(await page.locator('#aiReadFiles').isChecked(),false);assert.equal(await page.locator('#aiWriteAnalysis').isChecked(),false);
  assert.equal(await page.locator('#aiReadFolders').isChecked(),false);
+ assert.equal(await page.locator('#aiNewConnection .ai-write-controls input:checked').count(),0);
  await page.locator('#aiNewConnection summary').click();await page.locator('#aiName').fill('UI Fixture');
  await page.locator('#aiSelection').selectOption('folder');await page.locator('#aiChooseFolder').click();
  await page.waitForSelector('.library-add-menu.open .library-add-column');
@@ -42,6 +43,79 @@ const output=path.dirname(path.resolve(process.argv[2]));
  await folderToggle.check();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.startsWith('Directory browsing allowed.'));
  assert.equal(await page.locator('#aiToken').inputValue(),config.mcpServers['gewu-insight'].env.GEWU_API_TOKEN);
  await folderToggle.uncheck();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='Directory browsing disabled.');
+ const writer=page.locator('.ai-connection').filter({hasText:'UI Fixture'});
+ await writer.locator('summary').click();
+ assert.equal(await writer.locator('.ai-write-controls input:checked').count(),0);
+ await writer.getByRole('checkbox',{name:'Create Spaces',exact:true}).check();
+ await writer.getByRole('checkbox',{name:'Create folders',exact:true}).check();
+ await writer.getByRole('checkbox',{name:'Import papers with AI-supplied metadata',exact:true}).check();
+ const choices=writer.getByRole('group',{name:'Writable collections for UI Fixture',exact:true});
+ assert.deepEqual(await choices.locator('label > span').allTextContents(),['Library','AI']);
+ assert.equal(await choices.getByRole('checkbox',{name:'My Publications',exact:true}).count(),0);
+ await choices.getByRole('checkbox',{name:'Library',exact:true}).check();
+ await choices.getByRole('checkbox',{name:'AI',exact:true}).check();
+ assert.equal(await choices.locator('[data-state=selected]').count(),2);
+ assert.equal(await writer.locator('.ai-write-badge').textContent(),'Unsaved changes');
+ await writer.getByRole('button',{name:'Save Write Access',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.startsWith('Write access saved.'));
+ assert.equal(await page.locator('#aiToken').inputValue(),config.mcpServers['gewu-insight'].env.GEWU_API_TOKEN);
+ assert.equal(await writer.locator('details').getAttribute('open'),'');
+ const savedState=async()=>{
+   assert.equal(await writer.getByRole('checkbox',{name:'Create Spaces',exact:true}).isChecked(),true);
+   assert.equal(await writer.getByRole('checkbox',{name:'Resolve an existing paper separately (never during import)',exact:true}).isChecked(),false);
+   assert.equal(await choices.locator('[data-state=selected]').count(),2);
+   assert.equal(await writer.locator('.ai-write-badge').textContent(),'Saved');
+ };
+ await savedState();
+ for(let i=0;i<3;i++) {
+   await writer.locator('summary').click();
+   assert.equal(await writer.locator('.ai-write-badge').isVisible(),true);
+   assert.equal(await writer.locator('.ai-write-badge').textContent(),'Saved');
+   await writer.locator('summary').click();await savedState();
+ }
+ // Failed saves keep the draft and a visible error; the persisted grant stays intact.
+ await choices.getByRole('checkbox',{name:'Library',exact:true}).uncheck();
+ await page.route('**/api/settings/ai-access',async route=>{
+   if(route.request().method()==='POST') await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Synthetic save failure. Retry.'})});
+   else await route.continue();
+ });
+ await writer.getByRole('button',{name:'Save Write Access',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.includes('Synthetic save failure'));
+ assert.equal(await choices.getByRole('checkbox',{name:'Library',exact:true}).isChecked(),false);
+ assert.equal(await writer.locator('.ai-write-badge').textContent(),'Not saved');
+ assert((await writer.locator('.ai-write-feedback').textContent()).includes('Your changes are still here'));
+ await page.unroute('**/api/settings/ai-access');
+ // An unrelated immediate permission update must not discard that unsaved draft.
+ await folderToggle.check();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.startsWith('Directory browsing allowed.'));
+ assert.equal(await choices.getByRole('checkbox',{name:'Library',exact:true}).isChecked(),false);
+ assert.equal(await writer.locator('.ai-write-badge').textContent(),'Not saved');
+ await folderToggle.uncheck();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='Directory browsing disabled.');
+ await choices.getByRole('checkbox',{name:'Library',exact:true}).check();
+ await writer.getByRole('button',{name:'Save Write Access',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.startsWith('Write access saved.'));
+ await savedState();
+ // Existing child-only grants remain partial until the user explicitly selects their root.
+ const legacy=page.locator('.ai-connection').filter({hasText:'Earlier folder grant'});
+ await legacy.locator('summary').click();
+ const legacyRoot=legacy.getByRole('group').getByRole('checkbox',{name:'Library',exact:true});
+ assert.equal(await legacyRoot.evaluate(el=>el.indeterminate),true);
+ assert.equal(await legacy.getByRole('group').locator('[data-state=selected]').count(),0);
+ await legacy.getByRole('button',{name:'Save Write Access',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.startsWith('Write access saved.'));
+ const currentGrants=()=>page.evaluate(async()=> (await (await fetch('/api/settings/ai-access')).json()).connections);
+ assert.deepEqual((await currentGrants()).find(c=>c.name==='Earlier folder grant').write_folder_ids,[fixture.folder]);
+ await legacyRoot.check();
+ await legacy.getByRole('button',{name:'Save Write Access',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.startsWith('Write access saved.'));
+ assert.deepEqual((await currentGrants()).find(c=>c.name==='Earlier folder grant').write_folder_ids,[1]);
+ await legacyRoot.uncheck();
+ await legacy.getByRole('button',{name:'Save Write Access',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent.startsWith('Write access saved.'));
+ assert.deepEqual((await currentGrants()).find(c=>c.name==='Earlier folder grant').write_folder_ids,[]);
+ await legacy.locator('summary').click();
+ assert.equal(await folderToggle.isChecked(),false);
+ await writer.locator('.ai-write-controls').scrollIntoViewIfNeeded();
+ await page.screenshot({path:path.join(output,'write-permissions.png')});
  await page.locator('#aiAccessEnabled').check();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='AI access enabled.');
  for(const [w,h] of [[1280,900],[800,650],[520,600]]){
   await page.setViewportSize({width:w,height:h});await page.screenshot({path:path.join(output,`settings-${w}.png`)});
@@ -50,6 +124,17 @@ const output=path.dirname(path.resolve(process.argv[2]));
  await page.locator('#aiClose').click();assert.equal(await page.locator('#aiToken').inputValue(),'');assert.equal(await page.locator('#aiMcpConfig').inputValue(),'');
  await page.evaluate(()=>window.openAIAccessSettings());await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='');
  assert.equal(await page.locator('#aiCreated').isVisible(),false);
+ await savedState();
+ // A full page reload discards every JS variable: all selections come back from SQLite.
+ await page.reload();await page.waitForFunction(()=>typeof window.openAIAccessSettings==='function' && appBootCompleted);
+ await page.evaluate(()=>window.openAIAccessSettings());await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='');
+ assert.equal(await writer.locator('.ai-write-badge').textContent(),'Saved');
+ await writer.locator('summary').click();await savedState();
+ const persisted=(await currentGrants()).find(c=>c.name==='UI Fixture');
+ assert.deepEqual(persisted.write_folder_ids,[1,fixture.space].sort((a,b)=>a-b));
+ assert.equal(persisted.scopes.includes('files:read'),true);
+ assert.equal(persisted.scopes.includes('analysis:write'),true);
+ assert.equal(persisted.scopes.includes('folders:read'),false);
  await page.locator('.ai-connection').filter({hasText:'UI Fixture'}).getByRole('button',{name:'Revoke'}).click();
  await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='Connection revoked.');
  await page.locator('#aiAccessEnabled').uncheck();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='AI access disabled.');

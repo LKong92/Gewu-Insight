@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .ai_service import WRITE_LOCK, execute, integer
-from .ai_store import APIError, authenticate, create_connection, fail, set_folder_access, settings_snapshot, utc_now
+from .ai_store import APIError, audit, authenticate, create_connection, fail, set_folder_access, set_write_access, settings_snapshot, utc_now
 from .storage import Storage
 
 
@@ -54,6 +54,9 @@ def handle_admin(handler):
                     storage.conn.commit()
                     if not cursor.rowcount:
                         fail(404, 'connection_unavailable', 'This connection is already revoked or unavailable.')
+                elif action == 'write_access':
+                    connection_id = integer(payload.get('connection_id'), 0, 1, 2**63 - 1)
+                    set_write_access(storage, connection_id, payload.get('scopes'), payload.get('write_folder_ids'))
                 elif action == 'folder_access':
                     connection_id = integer(payload.get('connection_id'), 0, 1, 2**63 - 1)
                     set_folder_access(storage, connection_id, payload.get('allowed'))
@@ -77,6 +80,23 @@ def handle_api(handler):
         parsed = urlparse(handler.path)
         path = parsed.path
         args = {key: values[0] for key, values in parse_qs(parsed.query).items()}
+        if path == '/api/v1/uploads' and handler.command == 'POST':
+            from .ai_uploads import receive
+            from urllib.parse import unquote
+            try:
+                length = int(handler.headers.get('Content-Length', '0'))
+            except ValueError:
+                fail(400, 'invalid_length', 'Provide a valid Content-Length.')
+            if handler.headers.get('Transfer-Encoding'):
+                fail(400, 'invalid_length', 'Provide a known file length.')
+            handler.connection.settimeout(30)
+            result = receive(storage, authorization, handler.rfile,
+                name=unquote(handler.headers.get('X-Gewu-Filename', '')),
+                length=length, digest=handler.headers.get('X-Gewu-SHA256', ''),
+                retry_id=handler.headers.get('X-Gewu-Request-ID', ''))
+            audit(storage,authenticate(storage,authorization),'upload_file')
+            handler.send_json(result)
+            return
         if path == '/api/v1/openapi.json' and handler.command == 'GET':
             handler.send_bytes(Path(__file__).with_name('ai_openapi.json').read_bytes(), content_type='application/json; charset=utf-8')
             return
@@ -120,6 +140,6 @@ def handle_api(handler):
         pass
     except Exception:
         logging.getLogger(__name__).exception('AI API operation failed')
-        handler.send_json({'error': 'This operation could not finish. Retry with the same request ID when saving an analysis.', 'code': 'unavailable'}, 503)
+        handler.send_json({'error': 'This operation could not finish. Retry writes with the same request ID and unchanged arguments.', 'code': 'unavailable'}, 503)
     finally:
         storage.close()

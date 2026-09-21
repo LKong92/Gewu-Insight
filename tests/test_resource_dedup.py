@@ -196,7 +196,7 @@ class ResourceDedupTests(unittest.TestCase):
         self.storage.conn.commit()
         upgraded=Storage(self.db_path)
         try:
-            self.assertEqual(upgraded.conn.execute('PRAGMA user_version').fetchone()[0],20)
+            self.assertEqual(upgraded.conn.execute('PRAGMA user_version').fetchone()[0],21)
             self.assertEqual([r['id'] for r in upgraded.list_paper_resources('work')], [r['id'] for r in resources])
             self.assertTrue(all(p.exists() for p in paths))
         finally:
