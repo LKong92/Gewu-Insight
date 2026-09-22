@@ -83,7 +83,7 @@ from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .pdf_utils import is_valid_pdf_bytes, is_valid_pdf_file, merge_pdfs
-from .science_pdf import science_main_pdf_rejection, merge_science_pdfs
+from .science_pdf import is_science_first_release_pdf, science_main_pdf_rejection, merge_science_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import (
@@ -22052,12 +22052,15 @@ def cleanup_download_resource_snapshot(snapshot: dict[str, Any] | None) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def downloaded_version_role(paper: dict[str, Any], source_url: str = "") -> str:
+def downloaded_version_role(paper: dict[str, Any], source_url: str = "", *, pdf_path: Path | None = None) -> str:
     resolved_url = clean_text(source_url or paper.get("pdf_url") or "")
     host = urlparse(resolved_url).netloc.casefold()
     if host == "arxiv.org" or host.endswith(".arxiv.org"):
         return "preprint"
     if is_nature_reference_pdf_url(resolved_url):
+        return "accepted_manuscript"
+    if (pdf_path and normalize_doi(paper.get("doi") or "").startswith("10.1126/")
+            and is_science_first_release_pdf(pdf_path)):
         return "accepted_manuscript"
     if resolved_url and clean_text(paper.get("doi") or ""):
         return "version_of_record"
@@ -22151,7 +22154,7 @@ def register_downloaded_paper_resource(
         storage.conn.commit()
         return storage.get_paper_resource(int(primary.get("id") or 0))
     download_source_url = clean_text(result.get("main_pdf_url") or paper.get("pdf_url") or "")
-    new_version_role = downloaded_version_role(paper, download_source_url)
+    new_version_role = downloaded_version_role(paper, download_source_url, pdf_path=canonical)
     new_version_label = downloaded_version_label(new_version_role)
     new_file_type = normalize_paper_file_type(new_version_role)
     new_file_source, new_source_detail = downloaded_file_source(download_source_url)
@@ -22521,7 +22524,8 @@ def attach_downloaded_publisher_pdf_to_paper(
         or ""
     )
     original_name = Path(clean_text(context.get("publisher_download_filename") or "") or source.name).name
-    if publisher_kind == "aaas-published-pdf" or normalize_doi(paper.get("doi") or "").startswith("10.1126/"):
+    is_science = publisher_kind == "aaas-published-pdf" or normalize_doi(paper.get("doi") or "").startswith("10.1126/")
+    if is_science:
         rejection = science_main_pdf_rejection(source, url=source_url, filename=original_name)
         if rejection:
             raise ValueError(f"{rejection}. The main article was not saved; check article access with Open Website.")
@@ -22538,6 +22542,7 @@ def attach_downloaded_publisher_pdf_to_paper(
         is_nature_reference_pdf_url(source_url)
         or "first release" in classification_text
         or "first_release" in classification_text
+        or (is_science and is_science_first_release_pdf(source))
     ):
         publisher_file_type = "accepted_manuscript"
     else:
@@ -22565,7 +22570,10 @@ def attach_downloaded_publisher_pdf_to_paper(
         storage.conn.execute(
             """
             UPDATE resources
-            SET file_role = ?, version_role = ?, version_label = ?, version_number = NULL,
+            SET file_role = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_role ELSE ? END,
+                version_role = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN version_role ELSE ? END,
+                version_label = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN version_label ELSE ? END,
+                version_number = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN version_number ELSE NULL END,
                 file_type = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_type ELSE ? END,
                 file_source = 'publisher', source_detail = COALESCE(NULLIF(?, ''), source_detail),
                 source_url = COALESCE(NULLIF(?, ''), source_url), updated_at = ?
@@ -22629,7 +22637,7 @@ def attach_downloaded_publisher_pdf_to_paper(
                 )
         resource = storage.get_paper_resource(resource_id) or resource
     message = (
-        "published Science main PDF saved; supplementary PDF pending"
+        "Science main PDF saved; supplementary PDF pending"
         if publisher_kind == "aaas-published-pdf"
         else "publisher PDF downloaded and saved as a paper file"
     )
@@ -23227,7 +23235,8 @@ def attach_science_supplement_to_paper(
     paper = storage.get_paper(paper_id)
     requested_id = int(context.get("publisher_main_resource_id") or 0)
     resource = storage.get_paper_resource(requested_id) if requested_id else None
-    if requested_id and (not resource or resource.get("paper_id") != paper_id or resource.get("file_type") != "published_version"):
+    if requested_id and (not resource or resource.get("paper_id") != paper_id
+                         or resource.get("file_type") not in {"published_version", "accepted_manuscript"}):
         raise ValueError("The downloaded Science main paper file is no longer available")
     path_text = storage.resource_local_path(resource) if resource else ""
     main_path = Path(path_text).expanduser().resolve() if path_text else canonical_pdf_path_for_paper(paper)

@@ -1,4 +1,4 @@
-"""Science main-document checks and exact-byte supplement deduplication."""
+"""Science main-document/version checks and exact-byte supplement deduplication."""
 from __future__ import annotations
 
 import json
@@ -11,9 +11,21 @@ from pypdf import PdfReader, PdfWriter
 
 from .pdf_utils import is_valid_pdf_file
 from .resource_fingerprint import sha256_for_file
+from .science_version import is_science_first_release_text
 
 
 COMPONENTS_KEY = "/GewuScienceComponentSHA256"
+
+
+def is_science_first_release_pdf(path: Path) -> bool:
+    """Inspect one page locally; unreadable text cannot assert a version."""
+    try:
+        reader = PdfReader(str(path), strict=False)
+        if reader.is_encrypted:
+            reader.decrypt("")
+        return is_science_first_release_text(reader.pages[0].extract_text() or "")
+    except Exception:
+        return False
 
 
 def is_science_supplement_reference(value: str) -> bool:

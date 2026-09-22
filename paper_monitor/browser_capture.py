@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlsplit
 
 from .browser_store import browser_url, history_url
 from .pdf_utils import validated_pdf_reader
+from .science_version import is_science_first_release_text
 from .text import clean_text, make_paper_id, normalize_doi
 from .text import normalize_arxiv_identifier
 from . import paper_identity
@@ -88,6 +89,7 @@ class Capture:
     pdf_source_url: str = ""
     pdf_heading: str = ""
     pdf_metadata_title: str = ""
+    pdf_science_first_release: bool = False
     paper: dict | None = None
     conflict: str = ""
     result: dict | None = None
@@ -170,6 +172,7 @@ class BrowserCaptureService:
             pages = all_pages[:1]
             capture.pdf_metadata_title = metadata_title[:1000]
             capture.pdf_heading = clean_text(pages[0] if pages else "")[:350]
+            capture.pdf_science_first_release = is_science_first_release_text(pages[0] if pages else "")
             capture.pdf_source_url = source_url
             # Publisher PDFs can place a large DOI heading above the title, and
             # layout extraction may split a multiline title. Prefer a plausible
@@ -227,6 +230,8 @@ class BrowserCaptureService:
             return "accepted_manuscript", "Nature accepted-manuscript PDF; the DOI matches."
         if re.search(r"\b(?:author[\s_-]*)?accepted[\s_-]*manuscript\b", text):
             return "accepted_manuscript", "Accepted manuscript identified in this PDF."
+        if doi.startswith("10.1126/") and capture.pdf_science_first_release:
+            return "accepted_manuscript", "Science First Release PDF with non-final page numbers; the DOI matches."
         main = (
             (host in {"nature.com", "www.nature.com"} and path == "/articles/" + doi.removeprefix("10.1038/") + ".pdf" and doi.startswith("10.1038/"))
             or (host in {"pubs.acs.org", "www.science.org", "science.org", "onlinelibrary.wiley.com", "advanced.onlinelibrary.wiley.com"}

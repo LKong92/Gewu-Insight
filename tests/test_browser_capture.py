@@ -1,6 +1,9 @@
 """Capture-to-Library behavior with temporary SQLite/files and synthetic PDFs."""
 import io
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +13,59 @@ from pypdf import PdfWriter
 from paper_monitor import ui_server as ui
 from paper_monitor.browser_capture import BrowserCaptureService, identifier, normalize_snapshot
 from paper_monitor.storage import Storage
+
+
+class BrowserCaptureImportCompatibilityTests(unittest.TestCase):
+    def test_lazy_capture_import_with_pre_update_science_module_keeps_identifier_review(self):
+        # Use a fresh interpreter: this test module otherwise imports capture
+        # during collection, hiding the lazy-import failure seen in an open App.
+        probe = textwrap.dedent('''
+            import sys
+            import tempfile
+            from pathlib import Path
+            from unittest.mock import patch
+            from paper_monitor import ui_server, science_pdf
+            from paper_monitor.storage import Storage
+
+            for name in ('is_science_first_release_text', 'is_science_first_release_pdf'):
+                delattr(science_pdf, name)
+            sys.modules.pop('paper_monitor.science_version', None)
+            assert 'paper_monitor.browser_capture' not in sys.modules
+            from paper_monitor.browser_capture import BrowserCaptureService
+            from paper_monitor.science_version import is_science_first_release_text
+            assert is_science_first_release_text(
+                'First release: 17 September 2026 science.org '
+                '(Page numbers not final at time of first release) 1')
+
+            service = BrowserCaptureService()
+            with tempfile.TemporaryDirectory() as folder:
+                db = Path(folder) / 'capture.sqlite'
+                storage = Storage(db)
+                try:
+                    for kind, value, url in [
+                        ('arxiv', '2609.24843', 'https://arxiv.org/pdf/2609.24843'),
+                        ('doi', '10.1126/science.fixture', 'https://www.science.org/doi/10.1126/science.fixture'),
+                    ]:
+                        capture = service.begin(db, {'url': url})
+                        first = service.review(capture, storage, {'resolve': False})
+                        assert first['identifier'] == value
+                        candidate = {'paper_id': kind + '-fixture', 'title': 'Synthetic article',
+                                     'doi': value if kind == 'doi' else '',
+                                     'raw': {'arxiv_id': value} if kind == 'arxiv' else {}}
+                        with patch.object(service, 'resolve', return_value=candidate) as resolver:
+                            reviewed = service.review(capture, storage, {})
+                            resolver.assert_called_once_with(kind, value)
+                        assert reviewed['can_save'] and reviewed['identifier'] == value
+                        assert reviewed['paper']['title'] == 'Synthetic article'
+                        service.cancel(db, capture.token)
+                    for table in ('papers', 'resources', 'library_items'):
+                        assert storage.conn.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0] == 0
+                finally:
+                    storage.close()
+        ''')
+        result = subprocess.run([sys.executable, '-c', probe], cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class BrowserCaptureTests(unittest.TestCase):
@@ -102,6 +158,23 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(ui.extract_identifier_from_pdf_or_title(path, {}, title_lookup=lambda _: {}, pdf_evidence=(metadata, texts, titles)), expected)
         self.assertEqual(expected['identifier'], '10.1234/fixture')
         self.assertEqual(first_page['titles'], ui.pdf_layout_title_candidates(path, page_limit=1))
+
+    def test_science_first_release_uses_full_first_page_and_resets_on_reupload(self):
+        from tests.test_science_download_integrity import FIRST_RELEASE, pdf_bytes
+        doi = '10.1126/science.fixture'
+        url = 'https://www.science.org/doi/pdf/' + doi
+        capture = self.begin(doi=doi, pdf_urls=[url])
+        found = {'kind': 'doi', 'identifier': doi}
+        # The footer is beyond the short heading used by the capture card.
+        self.upload(capture, found=found, content=pdf_bytes('Research article. ' * 40 + FIRST_RELEASE), source_url=url)
+        self.assertNotIn('First release', capture.pdf_heading)
+        capture.paper = {'doi': doi}
+        self.assertEqual(self.service.suggested_file_type(capture)[0], 'accepted_manuscript')
+        capture.paper = {'doi': '10.1126/science.other'}
+        self.assertEqual(self.service.suggested_file_type(capture)[0], 'unknown')
+        self.upload(capture, found=found, content=pdf_bytes('Final published article'), source_url=url)
+        capture.paper = {'doi': doi}
+        self.assertEqual(self.service.suggested_file_type(capture)[0], 'published_version')
 
     def test_review_cancel_never_creates_papers_placements_or_resources(self):
         capture = self.begin()

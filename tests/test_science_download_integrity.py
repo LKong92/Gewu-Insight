@@ -12,8 +12,11 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from paper_monitor import download, ui_server
 from paper_monitor.resource_fingerprint import sha256_for_file
-from paper_monitor.science_pdf import is_science_supplement_reference, science_main_pdf_rejection
+from paper_monitor.science_pdf import is_science_first_release_pdf, is_science_supplement_reference, science_main_pdf_rejection
 from tests import test_paper_resources as resource_fixture
+
+
+FIRST_RELEASE = "First release: 17 September 2026 science.org (Page numbers not final at time of first release) 1"
 
 
 def pdf_bytes(text: str) -> bytes:
@@ -48,14 +51,130 @@ class ScienceDownloadIntegrityTests(unittest.TestCase):
         self.storage.conn.commit()
         return paper_id
 
-    def attach_main(self, paper_id="science", name="science.fixture.pdf"):
-        source = self.write_pdf("native/gewu-publisher-fixture.pdf")
+    def attach_main(self, paper_id="science", name="science.fixture.pdf", text="Research article"):
+        source = self.write_pdf("native/gewu-publisher-fixture.pdf", text)
         return ui_server.attach_downloaded_publisher_pdf_to_paper(
             self.storage, paper_id=paper_id, source_path=source,
             context={"publisher_download_kind": "aaas-published-pdf",
                      "publisher_download_final_url": "https://www.science.org/doi/pdf/10.1126/science.fixture",
                      "publisher_download_filename": name},
         )
+
+    def test_first_release_requires_the_provisional_footer_on_the_first_page(self):
+        for text, expected in [
+            (FIRST_RELEASE, True),
+            (FIRST_RELEASE.replace(" ", "  "), True),
+            ("Science: First release of a new dataset", False),
+            ("First release: 17 September 2026 science.org", False),
+            ("Published online 17 September 2026 science.org", False),
+            (FIRST_RELEASE.replace("science.org", "example.org"), False),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(is_science_first_release_pdf(self.write_pdf("main.pdf", text)), expected)
+        writer = PdfWriter()
+        writer.append(BytesIO(pdf_bytes("Final published article")))
+        writer.append(BytesIO(pdf_bytes(FIRST_RELEASE)))
+        merged = self.root / "merged.pdf"
+        with merged.open("wb") as handle:
+            writer.write(handle)
+        self.assertFalse(is_science_first_release_pdf(merged))
+        self.assertFalse(is_science_first_release_pdf(self.root / "missing.pdf"))
+
+    def test_first_release_classification_keeps_main_and_supplement_merge(self):
+        self.science_paper()
+        main, paper = self.attach_main(text=FIRST_RELEASE)
+        resource_id = paper["primary_resource_id"]
+        resource = self.storage.get_paper_resource(resource_id)
+        self.assertEqual(resource["file_type"], "accepted_manuscript")
+        self.assertEqual(resource["version_role"], "accepted_manuscript")
+        self.assertEqual(resource["file_type_override"], 0)
+        supplement = self.write_pdf("native/sm.pdf", "Supplementary Materials for")
+        context = {"publisher_download_kind": "aaas-supplement-pdf", "publisher_main_resource_id": resource_id}
+        with patch.object(ui_server, "allowed_pdf_roots", return_value=[self.root]):
+            target, after = ui_server.attach_publisher_supplement_pdf_to_paper(
+                self.storage, paper_id="science", context=context, source_path=supplement)
+            merged_bytes = target.read_bytes()
+            ui_server.attach_publisher_supplement_pdf_to_paper(
+                self.storage, paper_id="science", context=context, source_path=supplement)
+        self.assertEqual(main, target)
+        self.assertEqual(len(PdfReader(str(target)).pages), 2)
+        self.assertEqual(target.read_bytes(), merged_bytes)
+        self.assertEqual(after["primary_resource_id"], resource_id)
+        self.assertEqual(after["storage_key"], paper["storage_key"])
+        self.assertEqual(after["download_status"], "success")
+        self.assertEqual(self.storage.get_paper_resource(resource_id)["file_type"], "accepted_manuscript")
+
+    def test_first_release_duplicate_repairs_only_automatic_classification(self):
+        self.science_paper()
+        main, paper = self.attach_main(text=FIRST_RELEASE)
+        resource_id = paper["primary_resource_id"]
+        before = main.read_bytes()
+        for manual in (0, 1):
+            with self.subTest(manual=manual):
+                self.storage.conn.execute("""UPDATE resources SET file_type = 'published_version',
+                    version_role = 'version_of_record', version_label = 'Published Version',
+                    file_type_override = ? WHERE id = ?""", (manual, resource_id))
+                self.storage.conn.commit()
+                target, after = self.attach_main(text=FIRST_RELEASE)
+                resource = self.storage.get_paper_resource(resource_id)
+                self.assertEqual(resource["file_type"], "published_version" if manual else "accepted_manuscript")
+                self.assertEqual(resource["version_role"], "version_of_record" if manual else "accepted_manuscript")
+                self.assertEqual(after["primary_resource_id"], resource_id)
+                self.assertEqual(target.read_bytes(), before)
+                self.assertEqual(len(self.storage.list_paper_resources("science")), 1)
+
+    def test_later_final_publisher_pdf_keeps_first_release_as_a_separate_file(self):
+        self.science_paper()
+        first, before = self.attach_main(text=FIRST_RELEASE)
+        first_id = before["primary_resource_id"]
+        first_bytes = first.read_bytes()
+        final, after = self.attach_main(text="Final published article with final page numbers")
+        self.assertNotEqual(after["primary_resource_id"], first_id)
+        accepted = self.storage.get_paper_resource(first_id)
+        published = self.storage.get_paper_resource(after["primary_resource_id"])
+        self.assertEqual(accepted["file_type"], "accepted_manuscript")
+        self.assertEqual(published["file_type"], "published_version")
+        self.assertEqual(Path(accepted["stored_path"]).read_bytes(), first_bytes)
+        self.assertTrue(final.is_file())
+        self.assertEqual(after["storage_key"], before["storage_key"])
+        self.assertEqual(len(self.storage.list_paper_resources("science")), 2)
+
+    def test_direct_download_classifies_the_main_page_of_the_merged_pdf(self):
+        paper_id = self.science_paper()
+        contents = {"main": pdf_bytes(FIRST_RELEASE), "sm": pdf_bytes("Supplementary Materials for")}
+        def request(_method, url, **_kwargs):
+            return SimpleNamespace(url=url, headers={"content-type": "application/pdf"},
+                                   iter_content=lambda **_: [contents[url]])
+        with patch.object(download, "collect_pdf_candidates", return_value={"main": ["main"], "supplements": ["sm"]}), \
+             patch.object(download, "request_with_retries", side_effect=request):
+            result = download.download_paper(storage=self.storage, paper_id=paper_id, pdf_dir=self.root / "downloads")
+        resource = ui_server.register_downloaded_paper_resource(self.storage, paper_id, result=result, snapshot=None)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(resource["file_type"], "accepted_manuscript")
+        self.assertEqual(len(PdfReader(result["merged_pdf_path"]).pages), 2)
+
+    def test_first_release_rule_does_not_reclassify_other_publishers_or_preprints(self):
+        path = self.write_pdf("main.pdf", FIRST_RELEASE)
+        self.assertEqual(ui_server.downloaded_version_role(
+            {"doi": "10.1234/other"}, "https://example.org/doi/pdf/10.1234/other", pdf_path=path), "version_of_record")
+        self.assertEqual(ui_server.downloaded_version_role(
+            {"doi": "10.1126/science.fixture"}, "https://arxiv.org/pdf/2609.00001", pdf_path=path), "preprint")
+
+    def test_supplement_resource_binding_still_rejects_other_papers_and_non_main_files(self):
+        self.science_paper()
+        _, paper = self.attach_main(text=FIRST_RELEASE)
+        resource_id = paper["primary_resource_id"]
+        self.add_paper("other")
+        supplement = self.write_pdf("sm.pdf", "Supplementary Materials for")
+        context = {"publisher_download_kind": "aaas-supplement-pdf", "publisher_main_resource_id": resource_id}
+        with self.assertRaisesRegex(ValueError, "no longer available"):
+            ui_server.attach_publisher_supplement_pdf_to_paper(
+                self.storage, paper_id="other", context=context, source_path=supplement)
+        self.storage.conn.execute("UPDATE resources SET file_type = 'supplementary_material' WHERE id = ?", (resource_id,))
+        self.storage.conn.commit()
+        with self.assertRaisesRegex(ValueError, "no longer available"):
+            ui_server.attach_publisher_supplement_pdf_to_paper(
+                self.storage, paper_id="science", context=context, source_path=supplement)
 
     def test_supplement_reference_variants_and_cover_heading(self):
         for reference in ["/doi/suppl/10.1126/science.fixture/suppl_file/x.pdf",
@@ -144,6 +263,7 @@ class ScienceDownloadIntegrityTests(unittest.TestCase):
         self.assertEqual(target.name, "science.fixture.pdf")
         self.assertEqual(resource["source_url"], "https://www.science.org/doi/pdf/10.1126/science.fixture")
         self.assertEqual(paper["pdf_url"], resource["source_url"])
+        self.assertEqual(resource["file_type"], "published_version")
 
     def test_missing_publisher_name_uses_metadata_filename(self):
         self.science_paper()
@@ -288,7 +408,7 @@ class ScienceDownloadApiTests(unittest.TestCase):
         storage.set_preferred_paper_resource("science-api", preprint["id"])
         before = storage.get_paper("science-api")
         source = fixture.root / "gewu-publisher-fixture.pdf"
-        source.write_bytes(pdf_bytes("Research article"))
+        source.write_bytes(pdf_bytes(FIRST_RELEASE))
         status, main, _ = fixture.request("/api/manual-pdf-path", {
             "paper_id": "science-api", "source_path": str(source),
             "publisher_download_kind": "aaas-published-pdf", "publisher_download_filename": "science.fixture.pdf",
@@ -308,6 +428,8 @@ class ScienceDownloadApiTests(unittest.TestCase):
         self.assertEqual(status, 200, result)
         self.assertEqual(storage.get_paper("science-api")["merged_pdf_path"], before["merged_pdf_path"])
         resource = storage.get_paper_resource(main["publisher_main_resource_id"])
+        self.assertEqual(resource["file_type"], "accepted_manuscript")
+        self.assertEqual(storage.get_paper("science-api")["preferred_resource_id"], preprint["id"])
         self.assertEqual(len(PdfReader(resource["stored_path"]).pages), 2, str(resource))
 
 
