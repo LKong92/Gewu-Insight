@@ -2039,7 +2039,7 @@ If an imported PDF was matched to the wrong paper, Control-click its card and ch
 
 Only the selected file changes ownership when using these card commands. Its bytes, file ID, classification and source information remain intact; a name collision may require a unique filename. A source with remaining files keeps its identity and selects another eligible Default. An emptied, unshared source is removed as an independent Library item rather than left as a fileless link. Protected shared relationships can prevent that removal. The new independent paper receives a new Gewu Key and uses the file as its Default. Managed paths follow the change: an attachment goes into the destination bundle in Associated Files; a newly independent file goes into its main folder. Explicit reassignment is respected on repeat imports. Historical analysis text is not rewritten.
 
-These correction commands are user interface actions. AI Access cannot move, edit, overwrite or delete existing Paper Files. Separately granted import and attachment tools can add new files while preserving existing files and Default choices.
+AI Access can perform file ownership moves and rename files only with the separate move or rename permissions described in \hyperref[ai-access]{AI Access}. Reading and adding analyses do not grant these permissions. Existing file contents cannot be edited or overwritten through AI Access.
 
 \subsection{Understand a Missing File row}\label{understand-a-missing-file-row}
 
@@ -3815,7 +3815,7 @@ Tool & Result \\
 
 For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper\textquotesingle s file panel.
 
-Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot edit, overwrite or delete any existing Paper Files, including earlier AI analyses, delete papers, move existing folders or alter an existing Default. Creating folders, importing prepared files and filling missing metadata require separate permissions.
+Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. Existing file contents, including earlier AI analyses, cannot be edited or overwritten. Creating folders, importing files, moving or renaming existing items and filling missing metadata require separate permissions.
 
 New analyses are registered as Markdown notes: \textbf{File type: Other}, \textbf{Annotation: Unannotated}, and \textbf{Source: Other} with \textbf{AI analysis} and the connection name as source detail. File size, content hash, creation time and analysis provenance are recorded. These categories are assigned by Gewu; the AI cannot relabel its note as a published paper.
 
@@ -3845,6 +3845,8 @@ Purpose
 \endlastfoot
 \texttt{create\_space} & Create a new Space and return its folder ID. \\
 \texttt{create\_folder} & Create a nested folder under a writable Library or Space folder. \\
+\texttt{move\_folder} / \texttt{rename\_folder} & Move a complete folder subtree or rename a folder/Space, synchronizing the actual directories. \\
+\texttt{move\_file} / \texttt{rename\_file} & Move an item or Paper File, or rename its placement/filename under the existing file ownership rules. \\
 \texttt{upload\_file} & Transfer one prepared client-local file to temporary staging and return its upload ID. \\
 \texttt{import\_paper} & Register an uploaded PDF with metadata supplied by the AI, in the chosen folder. \\
 \texttt{import\_file} & Import an independent non-PDF file in any format, such as a direction overview in Markdown. \\
@@ -3877,6 +3879,18 @@ Upload staging allows up to 256 MiB per file and 512 MiB or 16 currently staged 
 Keep a stable request ID for every write and a separate ID for its upload. Retry an interrupted response with the same arguments and ID to reuse its result. Existing files are never overwritten. If the result says alias synchronization is pending, retry that same import to finish the folder shortcuts.
 
 \textbf{Resolve remains independent.} Enable its separate permission only when needed. It operates on one existing writable paper, requires an explicit standalone purpose, and returns a job immediately. Known DOI/arXiv is used first; PDF identifier extraction also needs file-reading permission. Results fill missing fields while preserving existing values and Default. At most two jobs run concurrently, and their network lookup does not block imports. The AI must never use this tool to prepare or complete import metadata.
+
+\subsection{Let an AI organize files and folders}\label{let-an-ai-organize-files-and-folders}
+
+Enable \textbf{Move folders}, \textbf{Rename folders and Spaces}, \textbf{Move files and change Paper Files ownership} or \textbf{Rename files} separately. Select the source and destination collections, save, and reconnect the client. Every affected location must be writable, including other placements of the same record. My Publications remains outside these write permissions.
+
+Use a folder ID to move a whole subtree or rename a folder/Space. The actual directory and its mirrored Associated Files move together; empty folders and existing contents are retained. Library, Unsorted and Recycle are protected. A folder cannot move into itself or a descendant. A Space root may be moved into Library using the same conversion rules as the App.
+
+For files, select either a membership ID from directory browsing or an exact Gewu Key and numeric file ID from Paper Files. A membership moves the whole item to another folder, or attaches its files to another record. A specific Paper File moves to another record or becomes an independent item in a folder. Independent non-PDF files keep their ordinary-file behavior. Renaming a membership changes its label and disk projection; renaming a Paper File changes that filename and must retain its extension. The bibliographic title stays unchanged.
+
+File contents, IDs, classifications and provenance stay intact. The main file stays in its owning directory; other files use Associated Files. Transfers follow the App\textquotesingle s existing ownership rules: the source chooses a remaining Default if necessary, the target keeps its existing Default, and an emptied source may retire. Final-file transfers from records with multiple placements are rejected. Moving into a folder that already contains the same record reuses that membership without losing files.
+
+Operations do not run Resolve, upload existing files again or consume transfer staging. Use identical arguments and the same request ID to retry an interrupted response or finish pending shortcut synchronization. Unrelated files are never overwritten. External originals cannot be renamed through MCP; a permitted ownership transfer of an externally linked file keeps the original and uses the App\textquotesingle s managed-copy rule.
 
 \subsection{Browse a directory and its papers}\label{browse-a-directory-and-its-papers}
 

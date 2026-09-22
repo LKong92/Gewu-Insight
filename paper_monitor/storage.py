@@ -4002,7 +4002,7 @@ class Storage:
         row = self.conn.execute("SELECT * FROM library_items WHERE id = ?", (int(item_id),)).fetchone()
         return dict(row) if row else None
 
-    def rename_library_item(self, *, item_id: int, name: str) -> dict[str, Any]:
+    def rename_library_item(self, *, item_id: int, name: str, commit: bool = True) -> dict[str, Any]:
         item_id = int(item_id)
         if not self.get_library_item(item_id):
             raise ValueError("Library item not found")
@@ -4011,7 +4011,8 @@ class Storage:
             "UPDATE library_items SET display_name = ? WHERE id = ?",
             (clean_name or None, item_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_item(item_id) or {}
 
     def delete_library_item(self, *, item_id: int) -> None:
@@ -5486,7 +5487,7 @@ class Storage:
         self.conn.commit()
         return copied
 
-    def move_library_item(self, *, item_id: int, folder_id: int) -> dict[str, Any]:
+    def move_library_item(self, *, item_id: int, folder_id: int, commit: bool = True) -> dict[str, Any]:
         folder_id = int(folder_id or 1)
         item_id = int(item_id)
         source = self.get_library_item(item_id)
@@ -5502,18 +5503,20 @@ class Storage:
         ).fetchone()
         if existing:
             self.conn.execute("DELETE FROM library_items WHERE id = ?", (item_id,))
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
             return dict(existing)
         sort_order = self._next_library_sort_order("library_items", folder_id)
         self.conn.execute(
             "UPDATE library_items SET folder_id = ?, original_folder_id = NULL, trashed_at = NULL, sort_order = ? WHERE id = ?",
             (folder_id, sort_order, item_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         row = self.conn.execute("SELECT * FROM library_items WHERE id = ?", (item_id,)).fetchone()
         return dict(row) if row else {}
 
-    def move_library_folder(self, *, folder_id: int, parent_id: int) -> dict[str, Any]:
+    def move_library_folder(self, *, folder_id: int, parent_id: int, commit: bool = True) -> dict[str, Any]:
         folder_id = int(folder_id)
         parent_id = int(parent_id or 1)
         if folder_id == 1:
@@ -5529,7 +5532,8 @@ class Storage:
             """,
             (parent_id, sort_order, now_iso(), folder_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(folder_id) or {}
 
     def reorder_library_entry(

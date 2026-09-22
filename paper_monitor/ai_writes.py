@@ -191,6 +191,10 @@ def apply_metadata(storage, grant, paper, meta):
 
 def execute_write(storage, authorization, operation, args):
     from .ai_service import WRITE_LOCK, require_scope
+    from .ai_contract import ORGANIZE_TOOLS
+    if operation in ORGANIZE_TOOLS:
+        from .ai_organize import execute_organize
+        return execute_organize(storage, authorization, operation, args)
     if operation in ('resolve_paper','get_resolve_status'):
         from .ai_resolve import execute_resolve
         return execute_resolve(storage,authorization,operation,args)

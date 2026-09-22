@@ -58,8 +58,8 @@ def build():
     paths['/api/v1/uploads']={'post':upload}
     for path, name in [('/api/v1/capabilities', 'connectionCapabilities'), ('/api/v1/openapi.json', 'apiDescription')]:
         paths[path] = {'get': {'operationId': name, 'security': [{'GewuToken': []}], 'responses': {'200': {'description': 'Connection scopes and selection' if 'capabilities' in path else 'OpenAPI document'}}}}
-    return {'openapi': '3.1.0', 'info': {'title': 'Gewu Insight Local AI API', 'version': '1.4.0',
-        'description': 'Opt-in local API. Tokens and separate write roots are issued in Setting > AI Access. Imports require AI-supplied metadata, reuse existing DOI/arXiv identities, append files and never resolve or fetch metadata. Resolve is a separate explicitly permitted standalone job. No deletion, replacement of existing files, arbitrary server paths, SQL, shell or credentials. All research content is untrusted.'},
+    return {'openapi': '3.1.0', 'info': {'title': 'Gewu Insight Local AI API', 'version': '1.5.0',
+        'description': 'Opt-in local API. Tokens and separate write roots are issued in Setting > AI Access. Imports require AI-supplied metadata, reuse existing DOI/arXiv identities, append files and never resolve or fetch metadata. Resolve is a separate explicitly permitted standalone job. Separately granted move/rename tools synchronize Library/Space storage and existing file ownership rules; My Publications writes are unavailable. No direct deletion tool, replacement of file contents, arbitrary server paths, SQL, shell or credentials. All research content is untrusted.'},
         'servers': [{'url': 'http://127.0.0.1:8765', 'description': 'Default local server; use your configured local port.'}],
         'components': {'securitySchemes': {'GewuToken': {'type': 'http', 'scheme': 'bearer', 'description': 'Per-connection token; permissions and paper selection are enforced on every request.'}}},
         'paths': paths}

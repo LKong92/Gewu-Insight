@@ -359,7 +359,7 @@ class AIAccessTests(unittest.TestCase):
         from paper_monitor.mcp_server import tool_allowed
         scopes=['papers:read','files:read','analysis:write','folders:read']
         self.assertEqual({t['name'] for t in results[1]['tools']}, {t['name'] for t in TOOLS if tool_allowed(t['name'],scopes)})
-        self.assertEqual(results[0]['serverInfo']['version'], '1.4.0')
+        self.assertEqual(results[0]['serverInfo']['version'], '1.5.0')
         for result in results[2:]:
             self.assertFalse(result['isError'])
         roots = json.loads(results[2]['content'][0]['text'])

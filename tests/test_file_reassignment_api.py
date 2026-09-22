@@ -36,3 +36,23 @@ class FileReassignmentApiTests(unittest.TestCase):
         status,error,_=self.call('save_analysis',args)
         self.assertEqual(status,410,error)
         self.assertNotIn('file',error)
+
+    def test_mcp_organization_http_adapter_and_retired_source_retry(self):
+        from paper_monitor import ai_store, mcp_server
+        token = ai_store.create_connection(self.storage, {'name': 'Move integration',
+            'scopes': ['papers:read', 'files:move', 'files:rename'],
+            'selection': {'kind': 'saved'}, 'write_folder_ids': [1]})['token']
+        client = mcp_server.GewuClient(url=f'http://127.0.0.1:{self.server.server_port}', token=token)
+        try:
+            source = {'gewu_key': self.key, 'file_id': self.pdf['id']}
+            renamed = client.request('rename_file', {'source': source, 'name': 'Renamed.pdf', 'request_id': 'http-rename-file-001'})
+            self.assertFalse(renamed['layout_pending'])
+            args = {'source': source, 'target': {'gewu_key': self.other_key}, 'request_id': 'http-move-file-001'}
+            moved = client.request('move_file', args)
+            self.assertTrue(moved['source_removed'])
+            self.assertEqual(moved['gewu_key'], self.other_key)
+            self.assertTrue(client.request('move_file', args)['reused_request'])
+            self.assertEqual(self.call('get_paper', {'gewu_key': self.key}, token=token)[0], 404)
+            self.assertEqual(self.storage.get_paper_resource(self.pdf['id'])['paper_id'], 'two')
+        finally:
+            client.close()

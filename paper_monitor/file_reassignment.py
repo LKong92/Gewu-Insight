@@ -15,21 +15,23 @@ from . import finder_alias
 
 def reassign_paper_file(storage: Storage, paper_id: str, resource_id: int, *,
                         target_key: str = "", new_title: str = "", folder_id: int = 0,
-                        target_paper_id: str = "") -> dict:
+                        target_paper_id: str = "", validate=None, before_commit=None, validate_paths=None) -> dict:
     return _transfer_files(storage, paper_id, [int(resource_id)], target_key=target_key,
-                           target_paper_id=target_paper_id, new_title=new_title, folder_id=folder_id)
+                           target_paper_id=target_paper_id, new_title=new_title, folder_id=folder_id,
+                           validate=validate, before_commit=before_commit, validate_paths=validate_paths)
 
 
-def attach_library_item(storage: Storage, source_item_id: int, target_paper_id: str) -> dict:
+def attach_library_item(storage: Storage, source_item_id: int, target_paper_id: str, *, validate=None, before_commit=None, validate_paths=None) -> dict:
     item = storage.get_library_item(source_item_id)
     if not item or not storage.get_paper(target_paper_id):
         raise KeyError(source_item_id)
-    result = _transfer_files(storage, item["paper_id"], None, target_paper_id=target_paper_id)
+    result = _transfer_files(storage, item["paper_id"], None, target_paper_id=target_paper_id,
+                             validate=validate, before_commit=before_commit, validate_paths=validate_paths)
     return {**result, "source_item_id": source_item_id, "attached_count": len(result["resource_ids"])}
 
 
 def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_paper_id="",
-                    new_title="", folder_id=0):
+                    new_title="", folder_id=0, validate=None, before_commit=None, validate_paths=None):
     from . import ui_server as ui
 
     if sum(bool(v) for v in (target_key, target_paper_id, new_title)) != 1:
@@ -49,6 +51,8 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
 
     storage.conn.execute("BEGIN IMMEDIATE")
     try:
+        if validate:
+            validate()
         source = storage.get_paper(paper_id)
         if not source:
             raise ValueError("The selected file no longer belongs to this paper. Refresh Paper Files.")
@@ -127,6 +131,8 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
                     if finder_alias.points_to(candidate, physical) and not any(c[0] == candidate for c in alias_changes):
                         alias_changes.append((candidate, finder_alias.snapshot(candidate)))
             operation = {"source": physical, "destination": destination, "move": managed, "done": False}
+            if validate_paths:
+                validate_paths([destination, *([physical] if managed else []), *(p for p, _ in alias_changes)])
             operations.append(operation)
             if managed:
                 shutil.move(str(physical), str(destination))
@@ -166,6 +172,8 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
                 alias = Path(value)
                 if finder_alias.is_alias(alias) and alias not in [a for a, _ in alias_changes]:
                     alias_changes.append((alias, finder_alias.snapshot(alias)))
+            if validate_paths:
+                validate_paths([p for p, _ in alias_changes])
             storage.conn.execute("DELETE FROM papers WHERE paper_id=?", (paper_id,))
         # An emptied standalone source leaves no folder row or Finder alias.
         # If other files remain, aliases follow that source's remaining Default.
@@ -178,6 +186,12 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
             alias.unlink(missing_ok=True)
             if replacement_path:
                 finder_alias.create(Path(replacement_path), alias)
+        result = {"resource_id": selected[0]["id"], "resource_ids": [r["id"] for r in selected],
+                  "source_paper_id": paper_id, "target_paper_id": target_id,
+                  "source_removed": retire_source, "removed_item_ids": [p["id"] for p in placements] if retire_source else [],
+                  "target_gewu_key": target["storage_key"], "created_paper": bool(new_title), "folder_id": folder_id}
+        if before_commit:
+            before_commit(result)
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
@@ -201,10 +215,7 @@ def _transfer_files(storage, paper_id, resource_ids, *, target_key="", target_pa
     from .file_layout import reconcile_after_write
     for pid in ([target_id] if retire_source else [paper_id, target_id]):
         reconcile_after_write(storage, pid)
-    return {"resource_id": selected[0]["id"], "resource_ids": [r["id"] for r in selected],
-            "source_paper_id": paper_id, "target_paper_id": target_id,
-            "source_removed": retire_source, "removed_item_ids": [p["id"] for p in placements] if retire_source else [],
-            "target_gewu_key": target["storage_key"], "created_paper": bool(new_title), "folder_id": folder_id,
+    return {**result,
             "files": [storage.resource_local_path(storage.get_paper_resource(r["id"])) for r in selected]}
 
 

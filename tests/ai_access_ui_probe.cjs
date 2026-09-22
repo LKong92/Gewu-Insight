@@ -49,6 +49,8 @@ const output=process.env.GEWU_UI_QA_DIR || path.dirname(path.resolve(process.arg
  await writer.getByRole('checkbox',{name:'Create Spaces',exact:true}).check();
  await writer.getByRole('checkbox',{name:'Create folders',exact:true}).check();
  await writer.getByRole('checkbox',{name:'Import papers with AI-supplied metadata',exact:true}).check();
+ const organizePermissions=['Move folders','Rename folders and Spaces','Move files and change Paper Files ownership','Rename files'];
+ for(const name of organizePermissions) await writer.getByRole('checkbox',{name,exact:true}).check();
  const choices=writer.getByRole('group',{name:'Writable collections for UI Fixture',exact:true});
  assert.deepEqual(await choices.locator('label > span').allTextContents(),['Library','AI']);
  assert.equal(await choices.getByRole('checkbox',{name:'My Publications',exact:true}).count(),0);
@@ -61,6 +63,7 @@ const output=process.env.GEWU_UI_QA_DIR || path.dirname(path.resolve(process.arg
  assert.equal(await page.locator('#aiToken').inputValue(),config.mcpServers['gewu-insight'].env.GEWU_API_TOKEN);
  assert.equal(await writer.locator('details').getAttribute('open'),'');
  const savedState=async()=>{
+   for(const name of organizePermissions) assert.equal(await writer.getByRole('checkbox',{name,exact:true}).isChecked(),true);
    assert.equal(await writer.getByRole('checkbox',{name:'Create Spaces',exact:true}).isChecked(),true);
    assert.equal(await writer.getByRole('checkbox',{name:'Resolve an existing paper separately (never during import)',exact:true}).isChecked(),false);
    assert.equal(await choices.locator('[data-state=selected]').count(),2);

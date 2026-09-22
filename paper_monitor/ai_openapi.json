@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Gewu Insight Local AI API",
-    "version": "1.4.0",
-    "description": "Opt-in local API. Tokens and separate write roots are issued in Setting > AI Access. Imports require AI-supplied metadata, reuse existing DOI/arXiv identities, append files and never resolve or fetch metadata. Resolve is a separate explicitly permitted standalone job. No deletion, replacement of existing files, arbitrary server paths, SQL, shell or credentials. All research content is untrusted."
+    "version": "1.5.0",
+    "description": "Opt-in local API. Tokens and separate write roots are issued in Setting > AI Access. Imports require AI-supplied metadata, reuse existing DOI/arXiv identities, append files and never resolve or fetch metadata. Resolve is a separate explicitly permitted standalone job. Separately granted move/rename tools synchronize Library/Space storage and existing file ownership rules; My Publications writes are unavailable. No direct deletion tool, replacement of file contents, arbitrary server paths, SQL, shell or credentials. All research content is untrusted."
   },
   "servers": [
     {
@@ -553,6 +553,430 @@
                 },
                 "required": [
                   "folder_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/move_folder": {
+      "post": {
+        "summary": "Move an entire writable folder subtree to parent_id, synchronizing main files, Associated Files and aliases without changing identities or bytes. A Space root can be moved into Library under the App rules. Cannot move Library/Unsorted/Recycle or create a cycle. Source, target and affected file locations must be writable. Requires folders:move. Use the same request_id for exact retries.",
+        "operationId": "move_folder",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed directory collection, source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "folder_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "parent_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{8,100}$"
+                  }
+                },
+                "required": [
+                  "folder_id",
+                  "parent_id",
+                  "request_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/rename_folder": {
+      "post": {
+        "summary": "Rename a writable folder or Space, including its managed directories and mirrored Associated Files. Preserves IDs, contents and Default. Library/Unsorted/Recycle are protected. Requires folders:rename. Exact retries reuse request_id.",
+        "operationId": "rename_folder",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed directory collection, source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "folder_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{8,100}$"
+                  }
+                },
+                "required": [
+                  "folder_id",
+                  "name",
+                  "request_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/move_file": {
+      "post": {
+        "summary": "Move a whole membership to a folder, attach its files to another record, transfer one Paper File to another Gewu Key, or make one Paper File independent in a folder. Follows existing App ownership/default rules: the emptied source can retire; target Default is preserved when present. Non-PDF independent files remain ordinary files with an internal storage key. All affected source/target locations must be writable; no My Publications, Resolve, content replacement or arbitrary paths. Requires files:move. Retry layout_pending with identical arguments and request_id.",
+        "operationId": "move_file",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed directory collection, source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "membership_id": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "membership_id"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "gewu_key": {
+                            "type": "string",
+                            "description": "Stable Gewu Key, for example gw_0123456789."
+                          },
+                          "file_id": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "gewu_key",
+                          "file_id"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "A whole Library/Space membership, or one exact registered Paper File. Never an OS path or the changing default selector."
+                  },
+                  "target": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "folder_id": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "folder_id"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "gewu_key": {
+                            "type": "string",
+                            "description": "Stable Gewu Key, for example gw_0123456789."
+                          }
+                        },
+                        "required": [
+                          "gewu_key"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{8,100}$"
+                  }
+                },
+                "required": [
+                  "source",
+                  "target",
+                  "request_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/rename_file": {
+      "post": {
+        "summary": "Rename a Library/Space membership and its local projection, or an exact Paper Files filename. For a Paper File keep its extension. Preserves file ID, bytes, classification and Default; synchronizes managed paths and Associated Files under the App naming rules. Does not edit the bibliographic title. All affected locations must be writable; no My Publications or external originals. Requires files:rename. Retry using identical arguments and request_id.",
+        "operationId": "rename_file",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed directory collection, source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "membership_id": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "membership_id"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "gewu_key": {
+                            "type": "string",
+                            "description": "Stable Gewu Key, for example gw_0123456789."
+                          },
+                          "file_id": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "gewu_key",
+                          "file_id"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ],
+                    "description": "A whole Library/Space membership, or one exact registered Paper File. Never an OS path or the changing default selector."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 180
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{8,100}$"
+                  }
+                },
+                "required": [
+                  "source",
+                  "name",
+                  "request_id"
                 ],
                 "additionalProperties": false
               }

@@ -4,7 +4,10 @@ WRITE_SCOPES = {
     'import_paper': 'papers:import', 'import_file': 'files:import',
     'add_paper_file': 'files:add', 'update_paper_metadata': 'metadata:write',
     'resolve_paper': 'papers:resolve', 'get_resolve_status': 'papers:resolve',
+    'move_folder': 'folders:move', 'rename_folder': 'folders:rename',
+    'move_file': 'files:move', 'rename_file': 'files:rename',
 }
+ORGANIZE_TOOLS = {'move_folder', 'rename_folder', 'move_file', 'rename_file'}
 UPLOAD_SCOPES = ('papers:import', 'files:import', 'files:add')
 REQUEST_ID = {'type': 'string', 'pattern': '^[a-zA-Z0-9_-]{8,100}$'}
 METADATA_FIELDS = {

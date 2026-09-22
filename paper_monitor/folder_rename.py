@@ -1,7 +1,8 @@
 """Transactional, file-preserving Library/Space renames.
 
-Only a rename uses this path. It does not normalize Paper Files, choose a new
-Default or change placement/identity. Alias discovery is one pass per operation.
+Moves and renames preserve registered files and Default selection. Alias
+discovery is one pass per operation; callers may save a receipt in the same
+transaction as the placement/path changes.
 """
 from contextlib import ExitStack
 import json
@@ -89,8 +90,8 @@ def _references(storage, pairs):
     ]:
         for prefix in prefixes:
             for row in storage.conn.execute(
-                f'SELECT paper_id, {field} AS path FROM {table} WHERE {field} >= ? AND {field} < ?{extra}',
-                (prefix, prefix[:-1] + '0'),
+                f'SELECT paper_id, {field} AS path FROM {table} WHERE ({field} = ? OR ({field} >= ? AND {field} < ?)){extra}',
+                (prefix[:-1], prefix, prefix[:-1] + '0'),
             ):
                 add(row['paper_id'], row['path'])
     # Legacy supplement pointers need a single pass, never one pass per file.
@@ -141,7 +142,7 @@ def _plan(storage, pairs):
 
 
 class RenameJournal:
-    def __init__(self, storage, pairs, files, directories, aliases):
+    def __init__(self, storage, pairs, files, directories, aliases, *, create_root=True):
         self.root = storage.db_path.parent / 'folder-rename-recovery' / uuid.uuid4().hex
         self.path = self.root / 'operation.json'
         self.key = 'folder_rename_committed:' + self.root.name
@@ -152,53 +153,60 @@ class RenameJournal:
         stages = []
         for old, new in pairs:
             if os.path.lexists(new):
+                if new in aliases and aliases[new][0] is None:
+                    continue  # An owned projection yields to its real original.
                 if old.exists() and os.path.samefile(old, new):
                     temporary = old.with_name('.gewu-rename-' + uuid.uuid4().hex)
                     stages.append((old, temporary))
                     self.data['stages'].append({'source': str(old), 'destination': str(temporary),
-                                                'target': str(new), 'identity': _identity(old)})
+                                                'target': str(new), 'identity': _identity(old), 'directory': old.is_dir()})
                 else:
                     raise FileExistsError(f'The destination folder already exists: {new}')
         def source(path):
             return _remap(path, stages)
         needed = {_remap(p, pairs) for p in directories}
         # Also create a real empty directory for a logical folder with no files.
-        needed.add(pairs[0][1])
+        if create_root:
+            needed.add(pairs[0][1])
         for old in files:
             new = _remap(old, pairs)
             self.data['moves'].append({'source': str(source(old)), 'destination': str(new),
                                        'identity': _identity(old)})
             needed.add(new.parent)
         for i, (old, (new, target)) in enumerate(aliases.items()):
-            self.data['aliases'].append({'source': str(source(old)), 'destination': str(new),
+            self.data['aliases'].append({'source': str(source(old)), 'destination': str(new) if new else None,
                 'target': str(target), 'backup': str(self.root / f'alias-{i}'),
                 'prepared': str(self.root / f'new-alias-{i}'), 'identity': _identity(old)})
-            needed.add(new.parent)
+            if new:
+                needed.add(new.parent)
         for directory in list(needed):
             needed.update(directory.parents)
         staged_sources = {old for old, _ in stages}
         staged_targets = [new for old, new in pairs if old in staged_sources]
+        displaced = {old for old, (new, _) in aliases.items() if new is None}
         self.data['created_dirs'] = [str(p) for p in sorted(needed, key=lambda p: len(p.parts))
-                                    if not p.exists() or any(_within(p, new) for new in staged_targets)]
+                                    if not p.exists() or p in displaced or any(_within(p, new) for new in staged_targets)]
         self.data['old_dirs'] = [str(source(p)) for p in sorted(directories, key=lambda p: len(p.parts), reverse=True)]
         write_json(self.path, self.data)
 
     def apply(self):
         for stage in self.data['stages']:
             Path(stage['source']).rename(stage['destination'])
-        for directory in self.data['created_dirs']:
-            Path(directory).mkdir(exist_ok=True)
         # Keep original alias bytes/inodes until the complete DB transaction
         # commits. No rollback needs to infer or rebuild the former bookmark.
         for alias in self.data['aliases']:
             if _identity(Path(alias['source'])) != alias['identity']:
                 raise ValueError('A shortcut changed during rename. Please retry.')
             _move(Path(alias['source']), Path(alias['backup']))
+        for directory in self.data['created_dirs']:
+            Path(directory).mkdir(exist_ok=True)
         for move in self.data['moves']:
             if _identity(Path(move['source'])) != move['identity']:
                 raise ValueError('A file changed during rename. Please retry.')
             _move(Path(move['source']), Path(move['destination']))
         for alias in self.data['aliases']:
+            if alias['destination'] is None:
+                continue
             target, destination = Path(alias['target']), Path(alias['destination'])
             backup = Path(alias['backup'])
             prepared = Path(alias['prepared'])
@@ -218,13 +226,18 @@ class RenameJournal:
         # undone before recovery was interrupted. Those files never reside at
         # the temporary prefix; in particular, do not unlink their same-file
         # destination spelling on a case-insensitive volume.
-        inactive = [stage for stage in self.data['stages'] if not Path(stage['destination']).exists()]
+        # A staged file (unlike a directory) disappears when its final move
+        # completes. Restore it through the move entry before undoing staging.
+        inactive = [stage for stage in self.data['stages']
+                    if stage.get('directory', True) and not Path(stage['destination']).exists()]
         for stage in inactive:
             if not Path(stage['source']).exists() or _identity(Path(stage['source'])) != stage['identity']:
                 raise FileNotFoundError(f"Rename recovery needs the original folder: {stage['source']}")
         def unstaged(value):
             return any(_within(Path(value), Path(stage['destination'])) for stage in inactive)
         for alias in reversed(self.data['aliases']):
+            if alias['destination'] is None:
+                continue
             backup, destination = Path(alias['backup']), Path(alias['destination'])
             if not os.path.lexists(backup):
                 continue
@@ -238,11 +251,11 @@ class RenameJournal:
         for move in reversed(self.data['moves']):
             if not unstaged(move['source']):
                 _undo_move(move)
+        _remove_empty([directory for directory in self.data['created_dirs'][::-1]
+                       if not any(_within(Path(directory), Path(stage['target'])) for stage in inactive)])
         for alias in reversed(self.data['aliases']):
             if not unstaged(alias['source']):
                 _undo_move({**alias, 'destination': alias['backup']})
-        _remove_empty([directory for directory in self.data['created_dirs'][::-1]
-                       if not any(_within(Path(directory), Path(stage['target'])) for stage in inactive)])
         for stage in reversed(self.data['stages']):
             source, destination = Path(stage['source']), Path(stage['destination'])
             if destination.exists():
@@ -300,7 +313,13 @@ def recover(storage):
             journal.rollback()
 
 
-def rename(storage, folder_id, name, *, workspace_tabs=None):
+def rename(storage, folder_id, name, *, workspace_tabs=None, validate=None, before_commit=None):
+    return relocate(storage, folder_id, name=name, workspace_tabs=workspace_tabs,
+                    validate=validate, before_commit=before_commit)
+
+
+def relocate(storage, folder_id, *, name=None, parent_id=None, workspace_tabs=None,
+             validate=None, before_commit=None, validate_paths=None):
     from . import ui_server as ui
     with MUTATION_LOCK, ExitStack() as locks:
         if any((storage.db_path.parent / 'folder-rename-recovery').glob('*/operation.json')):
@@ -322,7 +341,11 @@ def rename(storage, folder_id, name, *, workspace_tabs=None):
         try:
             if storage.get_library_folder(folder_id) != old_folder:
                 raise ValueError('The folder changed. Please retry the rename.')
-            folder = storage.rename_library_folder(folder_id=folder_id, name=name, commit=False)
+            if validate:
+                validate(paper_ids)
+            folder = (storage.move_library_folder(folder_id=folder_id, parent_id=parent_id, commit=False)
+                      if parent_id is not None else
+                      storage.rename_library_folder(folder_id=folder_id, name=name, commit=False))
             new_directory = _path(ui.local_copy_dir_for_library_folder(storage, folder_id))
             pairs = [(old, new) for old, new in zip(old_roots, _roots(ui, new_directory)) if old != new]
             if pairs:
@@ -340,6 +363,8 @@ def rename(storage, folder_id, name, *, workspace_tabs=None):
                 if {pid for pid, _, _ in references} - paper_ids:
                     raise ValueError('Folder contents changed. Please retry the rename.')
                 files, directories, aliases = _plan(storage, pairs)
+                if validate_paths:
+                    validate_paths(pairs, files, directories, aliases)
                 journal = RenameJournal(storage, pairs, files, directories, aliases)
                 journal.apply()
                 for pid, old, new in references:
@@ -367,6 +392,8 @@ def rename(storage, folder_id, name, *, workspace_tabs=None):
                 storage.conn.execute('INSERT INTO app_settings(key, value, updated_at) VALUES (?, ?, ?)',
                                      (journal.key, '1', folder['updated_at']))
             if workspace_tabs is not None:
+                if parent_id is not None:
+                    workspace_tabs = [tab for tab in workspace_tabs if int(tab.get('root_folder_id') or 0) != folder_id]
                 for tab in workspace_tabs:
                     if int(tab.get('root_folder_id') or 0) == folder_id:
                         tab['label'] = folder['name'][:80]
@@ -374,6 +401,8 @@ def rename(storage, folder_id, name, *, workspace_tabs=None):
                 storage.conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES ('library_workspace_tabs',?,?) "
                                      'ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at',
                                      (value, folder['updated_at']))
+            if before_commit:
+                before_commit(folder)
             storage.conn.commit()
         except Exception:
             storage.conn.rollback()

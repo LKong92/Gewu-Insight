@@ -5,6 +5,8 @@
     ['spaces:create', 'Create Spaces'], ['folders:create', 'Create folders'],
     ['papers:import', 'Import papers with AI-supplied metadata'], ['files:import', 'Import standalone files'],
     ['files:add', 'Add Paper Files'], ['metadata:write', 'Fill missing metadata supplied by AI'],
+    ['folders:move', 'Move folders'], ['folders:rename', 'Rename folders and Spaces'],
+    ['files:move', 'Move files and change Paper Files ownership'], ['files:rename', 'Rename files'],
     ['papers:resolve', 'Resolve an existing paper separately (never during import)']
   ];
   let newWriteControls;
@@ -58,7 +60,7 @@
       checkbox.addEventListener('change', onChange);
       return checkbox;
     });
-    appendText(field, 'p', 'Imports require metadata supplied by the AI and never run Resolve. Existing files are preserved.', 'ai-muted');
+    appendText(field, 'p', 'Imports require metadata supplied by the AI and never run Resolve. Move and rename permissions preserve file contents and update local storage. All affected locations must be writable.', 'ai-muted');
     appendText(field, 'p', 'Writable collections', 'ai-write-heading');
     appendText(field, 'p', 'Click to select or deselect. Blue selections include all subfolders. Choose operations above, then save below.', 'ai-muted');
     const choices = appendText(field, 'div', '', 'ai-write-collections');

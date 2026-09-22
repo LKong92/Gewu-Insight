@@ -208,6 +208,8 @@ must also replace the old token in Codex's settings.
 | `save_analysis` | Add a new Markdown file to the same paper's Paper Files | `analysis:write` |
 | `create_space` | Create one Space; include that new root in the connection's writable collection | `spaces:create` |
 | `create_folder` | Create a child of an explicitly writable Library/Space folder | `folders:create` |
+| `move_folder` / `rename_folder` | Relocate a whole folder subtree / rename a folder or Space, including local directories | `folders:move` / `folders:rename` |
+| `move_file` / `rename_file` | Move an item or Paper File / rename its local filename or placement label | `files:move` / `files:rename` |
 | `upload_file` | Stream a client-local file into private temporary staging; return `upload_id` | Any import or Add Paper Files permission |
 | `get_upload_status` / `release_upload` | Inspect staging quota / release an unused upload | Any import or Add Paper Files permission |
 | `import_paper` | Register an uploaded PDF with mandatory AI-supplied metadata | `papers:import` |
@@ -223,6 +225,59 @@ available offline or after revocation/expiry, and cannot retrieve new content.
 Out-of-scope
 paper keys and file IDs return an unavailable response without revealing data.
 Search uses local metadata, not a semantic index or an external service.
+
+## Move and rename existing files and folders
+
+Enable **Move folders**, **Rename folders and Spaces**, **Move files and change
+Paper Files ownership**, or **Rename files** for the intended connection, then
+save and reconnect the MCP client. Existing connections gain none of these
+permissions automatically. Select both source and destination collections.
+Every affected placement must be writable, including other locations that
+reference the same record. My Publications writes remain unavailable.
+
+- `move_folder(folder_id, parent_id, request_id)` moves the complete subtree,
+  including empty directories and files already present on disk. Folder IDs,
+  paper identities, Default choices and file bytes stay the same. A Space root
+  can be moved into Library under the App's existing conversion rules.
+- `rename_folder(folder_id, name, request_id)` renames a folder or Space and its
+  actual directory. Library, Unsorted and Recycle are protected; moving a folder
+  into itself or a descendant is rejected.
+- `move_file(source, target, request_id)` takes exactly one source: either
+  `{"membership_id": 123}` from `list_folder_papers`, or
+  `{"gewu_key": "gw_…", "file_id": 456}` from `get_paper`. Use a numeric file
+  ID, not `default`. A target is `{"folder_id": 789}` or
+  `{"gewu_key": "gw_…"}`. A membership moves the whole item to a folder, or
+  attaches its files to another record. A specific Paper File transfers to the
+  other record or becomes independent in the target folder. Non-PDF independent
+  files remain ordinary files with an internal storage key, without a visible
+  paper Gewu Key. No Resolve or automatic metadata lookup runs.
+- `rename_file(source, name, request_id)` uses the same source selectors. A
+  membership renames its displayed placement and corresponding disk projection,
+  following App naming rules. A Paper File renames that exact filename; retain
+  its extension. This does not rewrite the bibliographic article title.
+
+The main file remains in its owning directory; other Paper Files stay in the
+mirrored **Associated Files** tree. Registered paths and shortcuts follow moves
+and renames. File IDs, contents, classification and provenance are preserved.
+Ownership transfers use the existing App rules: moving a source's Default may
+select a remaining file there; an existing target Default stays selected. Moving
+the final file may retire its empty former record. A final-file transfer from a
+work with multiple placements is rejected, as in the App. Return values report
+the target key, file IDs and any retired memberships; do not keep using a retired
+source key. Moving into a folder already containing the same record reuses that
+membership without duplicating or dropping Paper Files.
+
+Names are basenames, never paths. Unrelated on-disk collisions are not
+overwritten. External originals cannot be renamed through MCP; attachment
+transfers retain the App's copy-on-transfer behavior for externally linked
+originals. Calls return logical IDs and file metadata, never managed disk paths.
+
+Use a separate stable `request_id` per operation and identical arguments on
+retry. The receipt commits with the record changes. If `layout_pending` is true,
+the saved change needs shortcut synchronization: retry the same request to
+finish, without repeating the move or consuming upload staging. Reuse with
+different arguments returns `request_conflict`. Revocation and current file
+ownership are checked again on every retry.
 
 ## Import a prepared literature collection
 
@@ -518,8 +573,10 @@ source, with read-only file mode; this is not an OS isolation mechanism.
 
 `get_paper_file` only reads registered files. `save_analysis` appends Markdown
 analyses; other imports and attachments need their separate permissions.
-No tool can edit, replace or delete **any** existing Paper Files, including an
-earlier AI note, change their classification, or replace an existing Default.
+No tool can edit or overwrite existing file contents, including an earlier AI
+note, or relabel their classification. Separately permitted organization tools
+can move or rename existing files, with the ownership/default transitions
+described above; read and analysis grants alone cannot do so.
 New analyses require a new request ID. The server rejects unsupported save
 arguments and chooses the note's classification rather than trusting
 client-supplied publication labels. Creating folders and filling missing paper

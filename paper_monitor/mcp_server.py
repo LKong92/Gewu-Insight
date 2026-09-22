@@ -42,6 +42,12 @@ INSTRUCTIONS = ('Gewu Insight provides authorized research records. Use Gewu Key
     'If delivery quota is full, release finished copies and retry; never release files still in use. '
     'Save new Markdown analyses only when requested; use a stable request_id when retrying. '
     'Write tools are separately granted and restricted to writable folders. Import metadata must be supplied by the AI. '
+    'move_folder/rename_folder and move_file/rename_file require their own explicit grants. Both source and destination must be writable. '
+    'Use membership_id to move a whole Library/Space item, or gewu_key plus numeric file_id to move/rename one Paper File. '
+    'A target folder makes a selected Paper File independent; a target key transfers ownership under the App rules. '
+    'Moving the final file can retire its former empty record; do not infer that its old key still exists. '
+    'These operations preserve bytes and synchronize managed paths and Associated Files. They never invoke Resolve or write My Publications. '
+    'Retry an operation with the identical request_id and arguments, including when layout_pending is true; never repeat with a fresh ID to repair links. '
     'If required metadata is missing, research it yourself outside Gewu and retry. NEVER call resolve_paper to prepare, complete or follow up an import. '
     'resolve_paper is solely for an independently requested task on an existing paper. Imports never extract DOI/arXiv from PDFs, query metadata services or queue enrichment. '
     'Use import_file for standalone non-PDF documents, import_paper for a PDF with full supplied metadata, and add_paper_file for an existing Gewu Key. '
@@ -51,7 +57,7 @@ INSTRUCTIONS = ('Gewu Insight provides authorized research records. Use Gewu Key
     'Each successful file import immediately releases THAT file’s staging; there is no batch completion barrier or total collection-size quota. '
     'Release abandoned uploads; inspect get_upload_status. If full, register already-ready uploads or release unused ones, then resume the remaining files. '
     'After finishing every delivered read copy, call release_paper_file. Never accumulate finished copies or solve full temporary quota by restarting. '
-    'This connection cannot delete papers, overwrite files, browse credentials or execute commands.')
+    'This connection has no direct deletion tool and cannot overwrite file contents, browse credentials or execute commands.')
 
 
 def schema(properties, required=()):
@@ -106,6 +112,20 @@ from .ai_contract import WRITE_SCOPES, UPLOAD_SCOPES, REQUEST_ID, METADATA_FIELD
 UPLOAD_ID = {'type': 'string', 'pattern': '^upload_[0-9a-f]{32}$'}
 FOLDER_ID = {'type': 'integer', 'minimum': 1}
 FILE_TYPE = {'type': 'string', 'description': 'Existing Paper Files classification, e.g. published_version, preprint, supplementary_material, source_data, other or unknown. Omit to use Unknown (PDF) / Other.'}
+ORGANIZE_SOURCE = {'oneOf': [schema({'membership_id': FOLDER_ID}, ['membership_id']),
+    schema({'gewu_key': KEY, 'file_id': FOLDER_ID}, ['gewu_key', 'file_id'])],
+    'description': 'A whole Library/Space membership, or one exact registered Paper File. Never an OS path or the changing default selector.'}
+ORGANIZE_TARGET = {'oneOf': [schema({'folder_id': FOLDER_ID}, ['folder_id']), schema({'gewu_key': KEY}, ['gewu_key'])]}
+TOOLS.extend([
+    {'name': 'move_folder', 'description': 'Move an entire writable folder subtree to parent_id, synchronizing main files, Associated Files and aliases without changing identities or bytes. A Space root can be moved into Library under the App rules. Cannot move Library/Unsorted/Recycle or create a cycle. Source, target and affected file locations must be writable. Requires folders:move. Use the same request_id for exact retries.',
+     'inputSchema': schema({'folder_id': FOLDER_ID, 'parent_id': FOLDER_ID, 'request_id': REQUEST_ID}, ['folder_id', 'parent_id', 'request_id'])},
+    {'name': 'rename_folder', 'description': 'Rename a writable folder or Space, including its managed directories and mirrored Associated Files. Preserves IDs, contents and Default. Library/Unsorted/Recycle are protected. Requires folders:rename. Exact retries reuse request_id.',
+     'inputSchema': schema({'folder_id': FOLDER_ID, 'name': {'type': 'string', 'minLength': 1, 'maxLength': 80}, 'request_id': REQUEST_ID}, ['folder_id', 'name', 'request_id'])},
+    {'name': 'move_file', 'description': 'Move a whole membership to a folder, attach its files to another record, transfer one Paper File to another Gewu Key, or make one Paper File independent in a folder. Follows existing App ownership/default rules: the emptied source can retire; target Default is preserved when present. Non-PDF independent files remain ordinary files with an internal storage key. All affected source/target locations must be writable; no My Publications, Resolve, content replacement or arbitrary paths. Requires files:move. Retry layout_pending with identical arguments and request_id.',
+     'inputSchema': schema({'source': ORGANIZE_SOURCE, 'target': ORGANIZE_TARGET, 'request_id': REQUEST_ID}, ['source', 'target', 'request_id'])},
+    {'name': 'rename_file', 'description': 'Rename a Library/Space membership and its local projection, or an exact Paper Files filename. For a Paper File keep its extension. Preserves file ID, bytes, classification and Default; synchronizes managed paths and Associated Files under the App naming rules. Does not edit the bibliographic title. All affected locations must be writable; no My Publications or external originals. Requires files:rename. Retry using identical arguments and request_id.',
+     'inputSchema': schema({'source': ORGANIZE_SOURCE, 'name': {'type': 'string', 'minLength': 1, 'maxLength': 180}, 'request_id': REQUEST_ID}, ['source', 'name', 'request_id'])},
+])
 TOOLS.extend([
     {'name':'upload_file','description':'Upload ONE AI-prepared regular file from this MCP client computer to private Gewu staging. Immediately import/register this file using the returned upload_id BEFORE uploading the next file; do not stage an entire collection. Each successful file import releases its own staging immediately, independently of other files. Preserves any filename/format. No server-side arbitrary path reads. Up to 256 MiB per file, 512 MiB / 16 currently staged files per connection, not a total collection limit. Stable request_id and same bytes safely retry. Use release_upload for unused uploads. Never upload Gewu-managed originals by bypassing get_paper_file.',
      'inputSchema':schema({'local_path':{'type':'string'},'request_id':REQUEST_ID},['local_path','request_id'])},
@@ -142,7 +162,7 @@ def tool_allowed(name, scopes):
 
 for tool in TOOLS:
     tool['annotations'] = {'readOnlyHint': tool['name'] not in {'save_analysis','release_paper_file','upload_file','release_upload', *WRITE_SCOPES.keys()} or tool['name']=='get_resolve_status',
-                           'destructiveHint': tool['name'] == 'release_paper_file',
+                           'destructiveHint': tool['name'] in {'release_paper_file', 'move_folder', 'rename_folder', 'move_file', 'rename_file'},
                            'idempotentHint': True, 'openWorldHint': tool['name']=='resolve_paper'}
 
 
@@ -384,7 +404,7 @@ def serve(client, source=sys.stdin, target=sys.stdout):
                 version = params.get('protocolVersion')
                 initialized = True
                 result = {'protocolVersion': version if version in SUPPORTED else VERSION,
-                          'capabilities': {'tools': {}}, 'serverInfo': {'name': 'gewu-insight', 'version': '1.4.0'},
+                          'capabilities': {'tools': {}}, 'serverInfo': {'name': 'gewu-insight', 'version': '1.5.0'},
                           'instructions': INSTRUCTIONS}
             elif method == 'ping':
                 result = {}
