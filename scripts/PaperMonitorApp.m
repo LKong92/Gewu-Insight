@@ -534,6 +534,8 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @property(nonatomic) NSRect windowDragStartFrame;
 @property(nonatomic) NSRect windowRestoreFrame;
 @property(nonatomic) BOOL trafficLightLayoutScheduled;
+@property(nonatomic) BOOL trafficLightLayoutInProgress;
+@property(nonatomic) BOOL trafficLightFullScreenTransition;
 @property(nonatomic, strong) NSURL *nativeQuickLookURL;
 @property(nonatomic) BOOL nativeQuickLookActive;
 @property(nonatomic) BOOL nativeQuickLookClosingProgrammatically;
@@ -1900,7 +1902,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)positionTrafficLightButtons {
-    if (!self.webView.superview || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    if (!self.webView.superview || self.trafficLightFullScreenTransition
+        || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
     // Match .view-switcher / .view-switch in ui_server.py: top 6, height 32,
     // a 2-point top border and no bottom border put the label center at 23.
     const CGFloat tabBarHeight = 38.0;
@@ -1934,6 +1937,19 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     }
 }
 
+- (void)windowDidUpdate:(NSNotification *)notification {
+    if (notification.object != self.window || self.trafficLightLayoutInProgress
+        || self.trafficLightFullScreenTransition
+        || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    // AppKit can reset the native titlebar after the resize/startup callbacks.
+    // Finish its pending layout, then align before this update is displayed.
+    // Do not queue another update: unchanged frames need no work or timer.
+    self.trafficLightLayoutInProgress = YES;
+    [self.window layoutIfNeeded];
+    [self positionTrafficLightButtons];
+    self.trafficLightLayoutInProgress = NO;
+}
+
 - (void)scheduleTrafficLightLayout:(NSNotification *)notification {
     if (notification.object != self.window || self.trafficLightLayoutScheduled) return;
     self.trafficLightLayoutScheduled = YES;
@@ -1955,8 +1971,33 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [self scheduleTrafficLightLayout:notification];
 }
 
+- (void)windowWillEnterFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = YES;
+}
+
+- (void)windowWillExitFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = YES;
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = NO;
+}
+
 - (void)windowDidExitFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = NO;
     [self scheduleTrafficLightLayout:notification];
+}
+
+- (void)windowDidFailToEnterFullScreen:(NSWindow *)window {
+    if (window != self.window) return;
+    self.trafficLightFullScreenTransition = NO;
+    [self positionTrafficLightButtons];
+}
+
+- (void)windowDidFailToExitFullScreen:(NSWindow *)window {
+    if (window != self.window) return;
+    self.trafficLightFullScreenTransition = NO;
+    [self positionTrafficLightButtons];
 }
 
 - (void)windowDidChangeBackingProperties:(NSNotification *)notification {
