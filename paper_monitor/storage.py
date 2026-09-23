@@ -1849,25 +1849,40 @@ class Storage:
     def _identity_authors(cls, paper: dict[str, Any]) -> set[str]:
         raw = cls._paper_raw_dict(paper)
         candidates: list[Any] = []
-        for key in ("authors", "author"):
-            value = paper.get(key)
-            if value not in (None, "", []):
-                candidates.extend(value if isinstance(value, list) else [value])
-            raw_value = raw.get(key)
-            if raw_value not in (None, "", []):
-                candidates.extend(raw_value if isinstance(raw_value, list) else [raw_value])
+        for record in paper_identity.metadata_records(paper, raw):
+            for key in ("authors", "author", "creators"):
+                value = record.get(key)
+                if value not in (None, "", []):
+                    candidates.extend(value if isinstance(value, list) else [value])
+            authorships = record.get("authorships")
+            if isinstance(authorships, list):
+                for authorship in authorships:
+                    if isinstance(authorship, dict):
+                        author = authorship.get("author")
+                        name = author.get("display_name") if isinstance(author, dict) else None
+                        candidates.append(name or authorship.get("raw_author_name"))
         names: set[str] = set()
         for candidate in candidates:
+            structured = isinstance(candidate, dict)
             if isinstance(candidate, dict):
-                family = candidate.get("family") or candidate.get("last") or candidate.get("last_name")
-                given = candidate.get("given") or candidate.get("first") or candidate.get("first_name")
-                candidate = candidate.get("name") or " ".join(
+                family = candidate.get("family") or candidate.get("last") or candidate.get("last_name") or candidate.get("familyName")
+                given = candidate.get("given") or candidate.get("first") or candidate.get("first_name") or candidate.get("givenName")
+                candidate = family or candidate.get("name") or candidate.get("display_name") or " ".join(
                     part for part in (str(given or ""), str(family or "")) if part
                 )
-            key = cls._identity_text_key(candidate)
-            if key:
-                tokens = key.split()
-                names.add(tokens[-1] if tokens else key)
+            if not isinstance(candidate, str):
+                continue
+            # A structured name may be "Family, Given"; a Scholar authors
+            # string instead lists multiple people separated by commas.
+            if structured and "," in candidate:
+                if candidate.count(",") != 1 or ";" in candidate:
+                    continue
+                candidate = candidate.split(",", 1)[0]
+            for name in re.split(r"[,;，；、]", candidate):
+                name = re.sub(r"\bet\s+al\.?\s*$", "", name, flags=re.IGNORECASE)
+                key = cls._identity_text_key(name)
+                if key:
+                    names.add(key.split()[-1])
         return names
 
     @classmethod
@@ -1887,6 +1902,10 @@ class Storage:
             for key in ("url", "landing_url", "pdf_url")
         } - {""}
         reasons: list[str] = []
+        existing_kind = paper_identity.work_kind(existing, cls._paper_raw_dict(existing))
+        incoming_kind = paper_identity.work_kind(incoming, cls._paper_raw_dict(incoming))
+        if {existing_kind, incoming_kind} == {"dataset", "article"}:
+            reasons.append("dataset_article_conflict")
         if incoming_doi and incoming_url_dois and incoming_doi not in incoming_url_dois:
             reasons.append("incoming_doi_url_mismatch")
         if existing_doi and incoming_url_dois and existing_doi not in incoming_url_dois:
@@ -2470,7 +2489,7 @@ class Storage:
             raise
         return self.get_paper(paper_id)
 
-    def update_semantic_scholar_enrichment(self, paper_id: str, enrichment: dict[str, Any]) -> dict[str, Any] | None:
+    def update_semantic_scholar_enrichment(self, paper_id: str, enrichment: dict[str, Any], *, commit: bool = True) -> dict[str, Any] | None:
         paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             """
@@ -2481,12 +2500,13 @@ class Storage:
             """,
             (json.dumps(enrichment or {}, ensure_ascii=False), now_iso(), str(paper_id)),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_paper(paper_id)
 
-    def update_paper_raw_json(self, paper_id: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+    def update_paper_raw_json(self, paper_id: str, raw: dict[str, Any], *, commit: bool = True) -> dict[str, Any] | None:
         paper_id = self.resolve_paper_id(paper_id)
-        with paper_identity.transaction(self):
+        with paper_identity.transaction(self, commit=commit):
             existing = self.get_paper(paper_id)
             if not existing:
                 return None
@@ -4804,6 +4824,7 @@ class Storage:
         scholar_key: str = "",
         scholar_title: str = "",
         unread: bool = False,
+        commit: bool = True,
     ) -> bool:
         paper_id = self.resolve_paper_id(paper_id)
         existing = self.conn.execute(
@@ -4851,9 +4872,11 @@ class Storage:
                 last_seen_at=timestamp,
                 commit=False,
             )
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
         except Exception:
-            self.conn.rollback()
+            if commit:
+                self.conn.rollback()
             raise
         return existing is None
 

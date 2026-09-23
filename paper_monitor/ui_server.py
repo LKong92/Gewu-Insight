@@ -2092,11 +2092,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if not payload["indexReady"]:
                     request_author_monitor_card_cache_build(self.configured_db_path)
             elif first(query, "index") == "1":
-                payload = author_monitor_index_snapshot(storage)
+                payload = author_monitor_index_snapshot(
+                    storage, include_metadata_work=first(query, "cards_only") != "1"
+                )
                 if not payload.get("indexReady"):
                     request_author_monitor_card_cache_build(self.configured_db_path)
             else:
-                payload = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
+                payload = author_monitor_snapshot(
+                    storage, author_monitor_id=author_monitor_id,
+                    include_metadata_work=first(query, "cards_only") != "1",
+                )
         finally:
             storage.close()
         self.send_json(payload)
@@ -9777,7 +9782,7 @@ def run_auto_author_monitor_once(
             # One failed probe is enough for this provider. Do not walk the
             # entire author list while disconnected or after a restriction.
             unavailable_providers.add(source)
-        elif result.get("status") == "success":
+        elif result.get("status") in {"success", "partial"}:
             network_retry.pop(source, None)
     status = {
         "run_date": run_date.isoformat(),
@@ -14525,7 +14530,9 @@ def start_google_scholar_global_cooldown_for_db(db_path: Path, *, message: str =
         storage.close()
 
 
-def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> dict[str, Any]:
+def author_monitor_snapshot(
+    storage: Storage, *, author_monitor_id: int = 0, include_metadata_work: bool = True
+) -> dict[str, Any]:
     storage.remove_author_monitor_papers_by_journal_names(
         OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
     )
@@ -14541,7 +14548,7 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
             "selectedAuthorId": author_monitor_id, "paperScopeAuthorId": author_monitor_id,
             "unreadCount": sum(bool(card.get("author_unread")) for card in cards),
             "checkedAt": now_iso(), "scholarCooldown": google_scholar_global_cooldown(storage),
-            "metadataWork": author_metadata_work.snapshot(storage),
+            **({"metadataWork": author_metadata_work.snapshot(storage)} if include_metadata_work else {}),
         }
     # Paper lists are local SQLite data, so load only the selected author here.
     # The client keeps a small LRU cache for fast switching; this avoids parsing
@@ -14570,14 +14577,16 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
         "papers": paper_payloads,
         "selectedAuthorId": int(author_monitor_id),
         "paperScopeAuthorId": int(author_monitor_id),
-        "metadataWork": author_metadata_work.snapshot(storage),
+        **({"metadataWork": author_metadata_work.snapshot(storage)} if include_metadata_work else {}),
         "unreadCount": sum(1 for paper in paper_payloads if paper.get("author_unread")),
         "checkedAt": now_iso(),
         "scholarCooldown": google_scholar_global_cooldown(storage),
     }
 
 
-def author_monitor_index_snapshot(storage: Storage) -> dict[str, Any]:
+def author_monitor_index_snapshot(
+    storage: Storage, *, include_metadata_work: bool = True
+) -> dict[str, Any]:
     """Return the complete compact card index when its SQLite cache is current."""
     storage.remove_author_monitor_papers_by_journal_names(
         OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
@@ -14594,7 +14603,7 @@ def author_monitor_index_snapshot(storage: Storage) -> dict[str, Any]:
         "scholarCooldown": google_scholar_global_cooldown(storage),
         "indexReady": bool(status.get("ready")),
         "indexTotal": int(status.get("total_count") or 0),
-        "metadataWork": author_metadata_work.snapshot(storage),
+        **({"metadataWork": author_metadata_work.snapshot(storage)} if include_metadata_work else {}),
         "indexReadyCount": int(status.get("ready_count") or 0),
         "indexPendingCount": int(status.get("pending_count") or 0),
     }
@@ -14652,6 +14661,8 @@ def save_google_scholar_publication_observation(
     storage: Storage,
     paper_id: str,
     candidate: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> dict[str, Any] | None:
     paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
@@ -14666,13 +14677,15 @@ def save_google_scholar_publication_observation(
         "publication_url": clean_text(observation.get("publication_url") or ""),
         "checked_at": clean_text(observation.get("checked_at") or now_iso()),
     }
-    return storage.update_paper_raw_json(paper_id, raw) or current
+    return storage.update_paper_raw_json(paper_id, raw, commit=commit) or current
 
 
 def save_openalex_author_monitor_observation(
     storage: Storage,
     paper_id: str,
     candidate: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> dict[str, Any] | None:
     paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
@@ -14686,7 +14699,7 @@ def save_openalex_author_monitor_observation(
         "cited_by_count": int_or_none(candidate_raw.get("cited_by_count")),
         "checked_at": now_iso(),
     }
-    return storage.update_paper_raw_json(paper_id, raw) or current
+    return storage.update_paper_raw_json(paper_id, raw, commit=commit) or current
 
 
 def semantic_scholar_author_candidate_raw(
@@ -14705,6 +14718,8 @@ def save_semantic_scholar_author_monitor_observation(
     storage: Storage,
     paper_id: str,
     candidate: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> dict[str, Any] | None:
     paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
@@ -14718,8 +14733,47 @@ def save_semantic_scholar_author_monitor_observation(
         "citation_count": int_or_none(semantic.get("citationCount")),
         "checked_at": now_iso(),
     }
-    storage.update_paper_raw_json(paper_id, raw)
-    return storage.update_semantic_scholar_enrichment(paper_id, semantic) or current
+    updated = storage.update_paper_raw_json(paper_id, raw, commit=commit)
+    paper_id = updated["paper_id"] if updated else paper_id
+    return storage.update_semantic_scholar_enrichment(paper_id, semantic, commit=commit) or current
+
+
+def save_author_monitor_candidate(
+    storage: Storage, author_monitor_id: int, candidate: dict[str, Any],
+    normalized: dict[str, Any], *, is_scholar: bool, provider: str, unread: bool,
+) -> bool:
+    """Commit one accepted publication, or leave all its prior state intact."""
+    with paper_identity.transaction(storage):
+        existing = existing_paper_for_author_monitor(storage, normalized)
+        if existing:
+            reasons = paper_identity.review_reasons(storage, existing, normalized)
+            if reasons:
+                raise paper_identity.IdentityReviewRequired(existing, normalized, reasons)
+            paper_id = existing['paper_id']
+            save_observation = (
+                save_google_scholar_publication_observation if is_scholar else
+                save_openalex_author_monitor_observation if provider == 'OpenAlex' else
+                save_semantic_scholar_author_monitor_observation
+            )
+            updated = save_observation(storage, paper_id, candidate, commit=False)
+            normalized['paper_id'] = updated['paper_id'] if updated else paper_id
+        if not storage.upsert_paper(normalized, commit=False):
+            matches = paper_identity.find(storage, normalized)
+            existing = matches[0] if matches else (existing or normalized)
+            reasons = paper_identity.review_reasons(storage, existing, normalized)
+            raise paper_identity.IdentityReviewRequired(
+                existing, normalized, reasons or ['canonical_identifier_conflict'])
+        paper_id = normalized['paper_id']
+        if not existing and provider == 'Semantic Scholar':
+            semantic = semantic_scholar_author_candidate_raw(candidate)
+            if semantic:
+                storage.update_semantic_scholar_enrichment(paper_id, semantic, commit=False)
+        return storage.add_author_monitor_paper(
+            author_monitor_id=author_monitor_id, paper_id=paper_id,
+            scholar_key=scholar_candidate_key(candidate, normalized),
+            scholar_title=clean_text(normalized.get('title') or ''),
+            unread=unread, commit=False,
+        )
 
 
 def author_monitor_cooldown_active(monitor: dict[str, Any], now: datetime | None = None) -> bool:
@@ -14971,6 +15025,7 @@ def refresh_author_monitor_for_db(
                     ),
                 }
             added = 0
+            identity_reviews = []
             for candidate in candidates:
                 if openalex_author_work_is_excluded(candidate):
                     continue
@@ -14978,52 +15033,16 @@ def refresh_author_monitor_for_db(
                     normalized = paper_from_publication_candidate(candidate)
                 except Exception:
                     continue
-                existing = existing_paper_for_author_monitor(storage, normalized)
-                if existing:
-                    conflict_reasons = storage.paper_identity_conflict_reasons(existing, normalized)
-                    if conflict_reasons:
-                        storage.record_paper_identity_conflict(existing, normalized, conflict_reasons)
-                        continue
-                    paper_id = clean_text(existing.get("paper_id") or "")
-                    if is_scholar:
-                        save_google_scholar_publication_observation(
-                            storage, paper_id, candidate
-                        )
-                    elif active_metadata_provider == "OpenAlex":
-                        save_openalex_author_monitor_observation(
-                            storage, paper_id, candidate
-                        )
-                    else:
-                        save_semantic_scholar_author_monitor_observation(
-                            storage, paper_id, candidate
-                        )
-                else:
-                    if not storage.upsert_paper(normalized):
-                        continue
-                    paper_id = clean_text(normalized.get("paper_id") or "")
-                    if (
-                        active_metadata_provider == "Semantic Scholar"
-                        and paper_id
-                    ):
-                        semantic = semantic_scholar_author_candidate_raw(candidate)
-                        if semantic:
-                            storage.update_semantic_scholar_enrichment(
-                                paper_id,
-                                semantic,
-                            )
-                if not paper_id:
+                try:
+                    inserted = save_author_monitor_candidate(
+                        storage, author_monitor_id, candidate, normalized,
+                        is_scholar=is_scholar, provider=active_metadata_provider,
+                        unread=not baseline,
+                    )
+                except paper_identity.IdentityReviewRequired as exc:
+                    storage.record_paper_identity_conflict(exc.existing, exc.incoming, exc.reasons)
+                    identity_reviews.append(str(exc))
                     continue
-                normalized["paper_id"] = paper_id
-                if not storage.upsert_paper(normalized):
-                    continue
-                paper_id = normalized["paper_id"]
-                inserted = storage.add_author_monitor_paper(
-                    author_monitor_id=author_monitor_id,
-                    paper_id=paper_id,
-                    scholar_key=scholar_candidate_key(candidate, normalized),
-                    scholar_title=clean_text(normalized.get("title") or ""),
-                    unread=not baseline,
-                )
                 if inserted:
                     added += 1
             success_at = now_iso()
@@ -15045,10 +15064,20 @@ def refresh_author_monitor_for_db(
                 message = f"{added} new publication{'s' if added != 1 else ''} found." if added else "No new publications."
             if provider_fallback_note:
                 message = f"{message} {provider_fallback_note}"
+            status = "partial" if identity_reviews else "success"
+            if identity_reviews:
+                message = (
+                    f"Refresh completed; {len(identity_reviews)} publication(s) need identity review. "
+                    f"{added} new publication(s) added. {identity_reviews[0]}"
+                )
+                if len(identity_reviews) > 1:
+                    message += f" {len(identity_reviews) - 1} additional review(s) recorded."
+                if provider_fallback_note:
+                    message += f" {provider_fallback_note}"
             storage.update_author_monitor(
                 author_monitor_id,
                 profile=refreshed_profile,
-                status="success",
+                status=status,
                 message=message,
                 last_checked_at=success_at,
                 last_success_at=success_at,
@@ -15057,8 +15086,10 @@ def refresh_author_monitor_for_db(
             author_profile_retry.succeeded(storage, monitor)
             return {
                 "author_id": author_monitor_id,
-                "status": "success",
+                "status": status,
                 "added": added,
+                "identity_review_count": len(identity_reviews),
+                "identity_reviews": identity_reviews,
                 "seen": len(candidates),
                 "baseline": baseline,
                 "full_metadata": full_metadata,
@@ -16045,6 +16076,9 @@ def resolve_google_scholar_candidate_to_identifier(candidate: dict[str, Any]) ->
 
 def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[str, Any] | None:
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
+    if paper_identity.work_kind(paper, candidate.get("raw") or paper.get("raw") or {}) == "dataset":
+        # A dataset's similar title is not a request for the associated article.
+        return None
     title = clean_text(paper.get("title") or "")
     year = clean_text(paper.get("publication_date") or "")
     if not title:
@@ -16097,6 +16131,9 @@ def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[s
 def resolve_google_scholar_candidate_to_arxiv(candidate: dict[str, Any]) -> dict[str, Any] | None:
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
     raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+    if paper_identity.work_kind(paper, candidate.get("raw") or paper.get("raw") or {}) == "dataset":
+        # A dataset's similar title is not a request for the associated article.
+        return None
     title = clean_text(paper.get("title") or "")
     year = clean_text(paper.get("publication_date") or raw.get("year") or "")
     direct_candidates = [
@@ -53017,7 +53054,8 @@ INDEX_HTML = """<!doctype html>
           }, AUTHOR_MONITOR_INDEX_RETRY_MS);
         };
         try {
-          const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1", 30000);
+          // Footer queue counts arrive separately; a cold recount must not delay cards.
+          const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1&cards_only=1", 30000);
           if (data.indexReady) return applyAuthorMonitorIndex(data);
           document.documentElement.dataset.authorMonitorIndex = "building";
           scheduleRetry();
@@ -53269,7 +53307,7 @@ INDEX_HTML = """<!doctype html>
           }
         }
         const pendingImport = state.authorMonitors.find(
-          (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+          authorMonitorIsBackgroundScholarJob
         );
         if (pendingImport && !state.authorMonitorImportPoller) {
           pollAuthorMonitorInitialImport(Number(pendingImport.id));
@@ -53889,6 +53927,7 @@ INDEX_HTML = """<!doctype html>
     function authorMonitorIdleActivity(channel = "primary") {
       if (channel === "secondary") {
         const work = state.authorMonitorMetadataWork || {};
+        if (!("eligible" in work)) return {text: "Author metadata · Checking status...", live: false};
         const pending = Number(work.eligible || 0);
         const waiting = Number(work.waiting_retry || 0);
         const manual = Number(work.needs_manual || 0);
@@ -53917,6 +53956,8 @@ INDEX_HTML = """<!doctype html>
         live: false, waiting: true
       };
       if (failed) return {text: `${failed.name || "Author"} · ${failed.message || "Last check failed"}`, live: false};
+      const review = scope.find(a => a.status === "partial");
+      if (review) return {text: `${review.name || "Author"} · ${review.message || "Refresh completed; some publications need identity review."}`, live: false};
       const times = scope.map(a => a.last_success_at).filter(Boolean).sort();
       return {text: times.length ? `Publications · Last successful check ${autoStatusTime(times[times.length - 1])}${selected ? ` · ${selected.message || ""}` : ` · ${times.length} authors`}` : "Publications · Waiting for scheduled check", live: false};
     }
@@ -53991,7 +54032,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function authorMonitorIsBackgroundScholarJob(author) {
-      return ["idle", "queued", "refreshing"].includes(String(author?.status || ""));
+      return ["queued", "refreshing"].includes(String(author?.status || ""));
     }
 
     function syncAuthorMonitorBackgroundScholarStatus(authors = state.authorMonitors) {
@@ -54787,7 +54828,7 @@ INDEX_HTML = """<!doctype html>
         syncAuthorMonitorActivityDisplay();
         refreshAuthorMonitorSummary();
         const pendingImport = state.authorMonitors.find(
-          (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+          authorMonitorIsBackgroundScholarJob
         );
         if (pendingImport) {
           pollAuthorMonitorInitialImport(Number(pendingImport.id));
@@ -54811,8 +54852,9 @@ INDEX_HTML = """<!doctype html>
         state.authorMonitorLoading = false;
       }
       if (state.mode === "author") renderAuthorMonitor();
+      refreshAuthorMonitorSummary();
       const pendingImport = state.authorMonitors.find(
-        (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+        authorMonitorIsBackgroundScholarJob
       );
       if (pendingImport) {
         pollAuthorMonitorInitialImport(Number(pendingImport.id));
@@ -54934,7 +54976,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function fetchAuthorMonitorSnapshot(authorId = 0) {
-      return fetchAuthorMonitorReadSafeJson(`/api/author-monitor?author_id=${Number(authorId || 0)}`);
+      return fetchAuthorMonitorReadSafeJson(`/api/author-monitor?author_id=${Number(authorId || 0)}&cards_only=1`);
     }
 
     async function reconcileAddedAuthorMonitor(profile) {
@@ -54997,6 +55039,18 @@ INDEX_HTML = """<!doctype html>
             () => pollAuthorMonitorInitialImport(authorId, options),
             2200
           );
+          return;
+        }
+        if (["idle", "ready"].includes(author.status)) {
+          syncAuthorMonitorBackgroundScholarStatus();
+          return;
+        }
+        if (author.status === "partial") {
+          updateAuthorMonitorActivityStatus(
+            author.message || "Refresh completed; some publications need identity review.",
+            {live: false, clear: false, channel: "secondary", kind: "scholar-background"}
+          );
+          if (options.enrichOnSuccess !== false) scheduleAuthorMonitorIdleEnrichment(authorId);
           return;
         }
         if (author.status === "success") {

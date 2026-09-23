@@ -13,6 +13,82 @@ from .time_utils import now_iso
 from .text import normalize_arxiv_identifier
 
 
+def metadata_records(paper, raw):
+    """Known provider envelopes, without changing which provider is queried."""
+    raw = raw if isinstance(raw, dict) else {}
+    records = [paper, raw]
+    for key in ('openalex', 'crossref', 'google_scholar', 'semantic_scholar', 'datacite'):
+        if isinstance(raw.get(key), dict):
+            records.append(raw[key])
+    return records
+
+
+def work_kind(paper, raw):
+    title = str(paper.get('title') or '')
+    if re.match(r'^\s*(?:raw\s+data|dataset|data\s+(?:for|from))\s*:', title, re.I):
+        return 'dataset'
+    kinds = set()
+    for record in metadata_records(paper, raw):
+        value = record.get('type') or record.get('resourceTypeGeneral')
+        types = record.get('types')
+        if isinstance(types, dict):
+            value = types.get('resourceTypeGeneral') or value
+        if isinstance(value, str):
+            kinds.add(value.casefold())
+    if 'dataset' in kinds:
+        return 'dataset'
+    return 'article' if kinds & {'article', 'journal-article', 'posted-content', 'preprint'} else ''
+
+
+def stored_work_kind(storage, paper):
+    # Old enrichment may already have replaced a dataset's title. Retain the
+    # original monitored title as a guard; never infer dataset from host alone.
+    kind = work_kind(paper, storage._paper_raw_dict(paper))
+    if kind != 'dataset':
+        titles = storage.conn.execute(
+            'SELECT scholar_title FROM author_monitor_papers WHERE paper_id=?',
+            (paper.get('paper_id') or '',))
+        if any(work_kind({'title': row['scholar_title']}, {}) == 'dataset' for row in titles):
+            kind = 'dataset'
+    return kind
+
+
+def review_reasons(storage, existing, incoming):
+    reference = dict(existing, paper_id=incoming.get('paper_id') or existing['paper_id'])
+    reasons = storage.paper_identity_conflict_reasons(reference, incoming)
+    old_kind = stored_work_kind(storage, existing)
+    new_kind = work_kind(incoming, storage._paper_raw_dict(incoming))
+    if ((old_kind == 'dataset' and new_kind != 'dataset'
+         and (new_kind == 'article' or incoming.get('title')))
+            or (old_kind != 'dataset' and stored_work_kind(storage, incoming) == 'dataset')):
+        reasons = sorted(set(reasons + ['dataset_article_conflict']))
+    return reasons
+
+
+class IdentityReviewRequired(ValueError):
+    """A single publication needs review; unrelated refresh items may proceed."""
+    def __init__(self, existing, incoming, reasons):
+        self.existing = dict(existing)
+        self.incoming = dict(incoming)
+        self.reasons = list(reasons)
+        labels = {
+            'insufficient_same_work_evidence': 'not enough evidence to merge existing records',
+            'dataset_article_conflict': 'a dataset and an article must remain separate',
+            'different_doi': 'the DOI values differ',
+            'incoming_doi_url_mismatch': 'the incoming DOI disagrees with its URL',
+            'existing_doi_conflicts_with_incoming_url': 'the incoming URL identifies a different DOI',
+            'incoming_doi_conflicts_with_existing_url': 'the DOI disagrees with the existing URL',
+            'title_and_authors_conflict': 'the titles and authors disagree',
+            'title_and_journal_conflict': 'the titles and journals disagree',
+        }
+        explanation = '; '.join(labels.get(reason, reason.replace('_', ' ')) for reason in reasons)
+        def label(paper):
+            title = str(paper.get('title') or 'Untitled publication')
+            key = paper.get('storage_key') or paper.get('paper_id') or 'incoming record'
+            return f'“{title}” [{key}]'
+        super().__init__(f'{label(incoming)} / {label(existing)}: {explanation}. Existing papers and files were preserved.')
+
+
 def doi(value):
     value = unquote(str(value or '')).strip()
     value = re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)', '', value, flags=re.I)
@@ -168,8 +244,7 @@ def compatible(storage, left, right):
     # Keep the established conflict checks, also when an incoming record lacks DOI.
     if doi(left.get('doi')) and doi(right.get('doi')) and doi(left['doi']) != doi(right['doi']):
         return False
-    ref = dict(left, paper_id=right.get('paper_id') or left['paper_id'])
-    return not storage.paper_identity_conflict_reasons(ref, right)
+    return not review_reasons(storage, left, right)
 
 
 def same_work_evidence(storage, left, right):
@@ -219,6 +294,9 @@ def prepare(storage, paper, *, current_id='', linked_preprint_id=''):
         payload['doi']=doi(payload['doi']) or str(payload['doi']).strip().casefold()
     current=storage.get_paper(payload['paper_id'])
     if current:
+        kind_reasons = review_reasons(storage, current, payload)
+        if 'dataset_article_conflict' in kind_reasons:
+            raise IdentityReviewRequired(current, payload, kind_reasons)
         reference=storage.metadata_refresh_identity_reference(current,payload,linked_preprint_id=linked_preprint_id)
         if storage.paper_identity_conflict_reasons(reference,payload):
             return payload  # The existing writer records/rejects this conflict.
@@ -231,7 +309,10 @@ def prepare(storage, paper, *, current_id='', linked_preprint_id=''):
         if others:
             target=others[0]
             if not same_work_evidence(storage,target,payload):
-                raise ValueError('The identifier matches another paper but the metadata conflicts. Existing papers and files were preserved.')
+                reasons = review_reasons(storage, target, payload)
+                if doi(target.get('doi')) and doi(payload.get('doi')) and doi(target['doi']) != doi(payload['doi']):
+                    reasons.append('different_doi')
+                raise IdentityReviewRequired(target, payload, reasons or ['insufficient_same_work_evidence'])
             if rank(storage,current) < rank(storage,target):
                 target, current = current, target
             merge(storage,target['paper_id'],current['paper_id'],reason='identifier_completed',evidence=payload)
@@ -327,7 +408,7 @@ def _merge_locked(storage, target_id, source_id, *, reason, evidence=None):
     blockers=merge_blockers(storage,target,source)
     if evidence and compatible(storage,target,evidence):
         blockers=[b for b in blockers if b!='Bibliographic identities disagree']
-    if blockers: raise ValueError('; '.join(blockers))
+    if blockers: raise IdentityReviewRequired(target, source, blockers)
     tables={r['name'] for r in storage.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     refs={}
     for table in tables:
