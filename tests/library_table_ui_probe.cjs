@@ -5,7 +5,7 @@ const f=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.GEWU_TEST_CHROME});
  try {
-  const context=await browser.newContext({viewport:{width:1400,height:900},extraHTTPHeaders:{'X-Gewu-Workspace':f.token}});
+  const context=await browser.newContext({viewport:{width:1400,height:900},timezoneId:'Asia/Shanghai',extraHTTPHeaders:{'X-Gewu-Workspace':f.token}});
   await context.route('**/*',r=>r.request().url().startsWith(f.url)?r.continue():r.abort());
   const page=await context.newPage(),errors=[],posts=[];
   page.on('pageerror',e=>errors.push(e.message));
@@ -32,7 +32,8 @@ const f=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
     ['title',['Alpha wave','Beta interference','Gamma phase','Unknown metadata']],
     ['authors',['Beta interference','Gamma phase','Alpha wave','Unknown metadata']],
     ['year',['Beta interference','Gamma phase','Alpha wave','Unknown metadata']],
-    ['journal',['Gamma phase','Alpha wave','Beta interference','Unknown metadata']]
+    ['journal',['Gamma phase','Alpha wave','Beta interference','Unknown metadata']],
+    ['added',['Gamma phase','Alpha wave','Beta interference','Unknown metadata']]
    ]) {
     await page.evaluate(()=>{state.libraryTableSort=null;renderLibrary();});
     const button=page.locator(`[data-library-table-sort="${key}"]`);
@@ -45,6 +46,8 @@ const f=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
     assert.equal(await button.locator('..').getAttribute('aria-sort'),'descending');
     if(type!=='workspace') assert.equal(await page.locator('.table-column .library-row').first().getAttribute('data-library-type'),'folder');
    }
+   const times=await page.locator('.table-column .library-table-row[data-library-type="item"] .time-added').allTextContents();
+   assert.deepEqual(times,['2026-09-21 11:00','2026-09-21 10:00','2026-09-21 09:30','—'],type+' placement times in local timezone');
   }
   // Native button keyboard activation must sort, not open Quick Look.
   const title=page.locator('[data-library-table-sort="title"]');await title.focus();await page.keyboard.press('Enter');
@@ -131,18 +134,36 @@ const f=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
   assert.equal(await page.evaluate(()=>librarySelectionPathText()),'Interferometry renamed > Experiments');
   await page.evaluate(id=>{state.libraryShortcutTabs[0].folder_id=id;},f.parent_id);
   // Persisted sort survives reload; choosing a context-menu sort clears it.
-  await page.locator('[data-library-table-sort="year"]').click();
+  await page.locator('[data-library-table-sort="added"]').click();
   const saved=await page.evaluate(()=>JSON.stringify(state.libraryTableSort));
   await page.reload();await page.waitForFunction(()=>appBootCompleted);
   assert.equal(await page.evaluate(()=>JSON.stringify(state.libraryTableSort)),saved);
   await open('workspace');await page.evaluate(()=>setLibrarySortMode('modified'));
   assert.equal(await page.evaluate(()=>state.libraryTableSort),null);
-  assert.equal(await page.locator('[aria-sort="none"]').count(),4);
+  assert.equal(await page.locator('[aria-sort="none"]').count(),5);
+  // The added column remains reachable with its header aligned at narrow widths.
+  for(const width of [1024,1400,1920]) {
+   await page.setViewportSize({width,height:900});
+   await page.locator('[data-library-table-sort="added"]').scrollIntoViewIfNeeded();
+   const geometry=await page.evaluate(()=>{
+    const header=document.querySelector('[data-library-table-sort="added"]').getBoundingClientRect();
+    const cell=document.querySelector('.table-column [data-library-type="item"] .time-added').getBoundingClientRect();
+    const body=document.querySelector('.table-column .library-table-body');
+    return {headerX:header.x,cellX:cell.x,cellWidth:cell.width,extraBodyScroll:body.scrollWidth-body.clientWidth};
+   });
+   assert.ok(Math.abs(geometry.headerX-geometry.cellX)<2,JSON.stringify({width,...geometry}));
+   assert.equal(geometry.cellWidth,138);
+   assert.ok(geometry.extraBodyScroll<=1,'columns scroll together, never just the row body');
+   if(process.env.GEWU_TEST_ARTIFACT_DIR) {
+    fs.mkdirSync(process.env.GEWU_TEST_ARTIFACT_DIR,{recursive:true});
+    await page.screenshot({path:process.env.GEWU_TEST_ARTIFACT_DIR+`/time-added-${width}.png`});
+   }
+  }
   if(process.env.GEWU_TEST_ARTIFACT_DIR){
    fs.mkdirSync(process.env.GEWU_TEST_ARTIFACT_DIR,{recursive:true});
    await page.screenshot({path:process.env.GEWU_TEST_ARTIFACT_DIR+'/space-table.png'});
   }
   assert.deepEqual(errors,[]);
-  console.log('Table UI: all four sorts/both directions/three roots; selection, keyboard/range, root header, nested adds, rename/move menus and persisted sort passed.');
+  console.log('Table UI: all five sorts/both directions/three roots; local added times, three widths, selection, keyboard/range, root header, nested adds, rename/move menus and persisted sort passed.');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

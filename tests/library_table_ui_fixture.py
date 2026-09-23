@@ -31,7 +31,11 @@ with tempfile.TemporaryDirectory(prefix='gewu-table-ui-') as temp, ExitStack() a
     ]:
         store.upsert_paper({'paper_id':pid, 'title':title, 'raw':{'author':[{'given':a.split()[0], 'family':a.split()[1]} for a in authors]}, 'publication_date':date, 'journal':journal})
         for folder_id in roots:
-            store.add_library_item(paper_id=pid, folder_id=folder_id)
+            item = store.add_library_item(paper_id=pid, folder_id=folder_id)
+            added = {'alpha': '2026-09-21T10:00:00+08:00', 'beta': '2026-09-20T23:00:00-04:00',
+                     'gamma': '2026-09-21T01:30:00Z', 'unknown': ''}[pid]
+            store.conn.execute('UPDATE library_items SET created_at=? WHERE id=?', (added, item['id']))
+    store.conn.commit()
     patches.enter_context(patch.object(ui, 'library_workspace_publication_from_query', side_effect=lambda q: {'paper_id':'added-'+q, 'title':'Added '+q, 'journal':'Test Journal', 'authors':['New Author']}))
     for name in ('refresh_pubmed_if_possible','refresh_semantic_scholar_if_possible','refresh_ads_if_possible'):
         patches.enter_context(patch.object(ui, name, return_value=None))

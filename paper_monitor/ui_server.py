@@ -29791,8 +29791,8 @@ INDEX_HTML = """<!doctype html>
       min-width: 170px;
     }
     .library-column.table-column {
-      flex: 1 0 660px;
-      min-width: 520px;
+      flex: 1 0 820px;
+      min-width: 820px;
     }
     .library-column-resizer {
       position: absolute;
@@ -30259,7 +30259,7 @@ INDEX_HTML = """<!doctype html>
     .library-table-header-row {
       min-height: 30px;
       display: grid;
-      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr);
+      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr) 138px;
       gap: 10px;
       align-items: center;
       padding: 0 12px;
@@ -30291,9 +30291,9 @@ INDEX_HTML = """<!doctype html>
       overflow: auto;
     }
     .library-table-row {
-      min-width: 640px;
+      min-width: 0;
       height: 34px;
-      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr);
+      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr) 138px;
       gap: 10px;
       padding: 2px 4px;
       border-radius: 5px;
@@ -30320,7 +30320,8 @@ INDEX_HTML = """<!doctype html>
       color: #475467;
       font-size: 12px;
     }
-    .library-table-cell.year {
+    .library-table-cell.year,
+    .library-table-cell.time-added {
       color: #344054;
       font-variant-numeric: tabular-nums;
     }
@@ -37971,7 +37972,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function normalizeLibraryTableSort(value) {
-      if (!["title", "authors", "year", "journal"].includes(value?.key)) return null;
+      if (!["title", "authors", "year", "journal", "added"].includes(value?.key)) return null;
       return {key: value.key, direction: value.direction === "desc" ? "desc" : "asc"};
     }
 
@@ -37986,6 +37987,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryTableSortValue(entry, key) {
+      if (key === "added") {
+        const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
+        return libraryAddedTimeMs(data);
+      }
       if (entry.type === "folder") return libraryEntrySortName(entry);
       const item = libraryItemById(entry.id) || {};
       const paper = item.paper || {};
@@ -37994,6 +37999,20 @@ INDEX_HTML = """<!doctype html>
       if (key === "year") return libraryPaperYearText(paper, item, name);
       if (key === "journal") return libraryPaperJournalText(paper);
       return libraryPaperTableTitle(item, paper, name);
+    }
+
+    function libraryAddedTimeMs(entry) {
+      // Use the saved placement/folder time, never publication or refresh dates.
+      const ms = Date.parse(entry?.created_at || "");
+      return Number.isFinite(ms) ? ms : null;
+    }
+
+    function libraryAddedTimeText(entry) {
+      const ms = libraryAddedTimeMs(entry);
+      if (ms === null) return "—";
+      const date = new Date(ms);
+      const pad = value => String(value).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
     }
 
     function initialLibraryContentView() {
@@ -38052,14 +38071,14 @@ INDEX_HTML = """<!doctype html>
       }
       const tableSort = libraryTableViewActive() ? normalizeLibraryTableSort(state.libraryTableSort) : null;
       if (tableSort) {
-        const key = a.type === "folder" ? "title" : tableSort.key;
-        const left = String(libraryTableSortValue(a, key) || "").trim();
-        const right = String(libraryTableSortValue(b, key) || "").trim();
+        const key = a.type === "folder" && tableSort.key !== "added" ? "title" : tableSort.key;
+        const left = String(libraryTableSortValue(a, key) ?? "").trim();
+        const right = String(libraryTableSortValue(b, key) ?? "").trim();
         // Unknown metadata stays below known values in both directions.
         if (!left !== !right) return left ? -1 : 1;
-        const delta = key === "year" ? Number(left) - Number(right)
+        const delta = ["year", "added"].includes(key) ? Number(left) - Number(right)
           : left.localeCompare(right, undefined, {numeric: true, sensitivity: "base"});
-        const descending = tableSort.direction === "desc" && (a.type !== "folder" || tableSort.key === "title");
+        const descending = tableSort.direction === "desc" && (a.type !== "folder" || ["title", "added"].includes(tableSort.key));
         if (delta) return descending ? -delta : delta;
         return String(libraryTableSortValue(a, "title")).localeCompare(String(libraryTableSortValue(b, "title")), undefined, {numeric: true, sensitivity: "base"})
           || Number(a.id || 0) - Number(b.id || 0);
@@ -46065,7 +46084,7 @@ INDEX_HTML = """<!doctype html>
       const inlineAddPaper = libraryInlineAddPaperMarkup(folderId, {table: true});
       const navigation = libraryNavigationHeaderContext(folderId);
       const sort = normalizeLibraryTableSort(state.libraryTableSort);
-      const headers = [["title", "Title"], ["authors", "Authors"], ["year", "Year"], ["journal", "Journal"]].map(([key, label]) => {
+      const headers = [["title", "Title"], ["authors", "Authors"], ["year", "Year"], ["journal", "Journal"], ["added", "Time added"]].map(([key, label]) => {
         const active = sort?.key === key;
         const direction = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
         const next = active && sort.direction === "asc" ? "descending" : "ascending";
@@ -46211,6 +46230,7 @@ INDEX_HTML = """<!doctype html>
       const authors = type === "item" ? libraryPaperAuthorsText(paper, entry, name) : "";
       const year = type === "item" ? libraryPaperYearText(paper, entry, name) : "";
       const journal = type === "item" ? libraryPaperJournalText(paper) : "Folder";
+      const addedMs = libraryAddedTimeMs(entry);
       return `
         <${rowTag} class="library-row library-table-row${rangeSelected ? " range-selected" : ""}${selected && !rangeSelected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
           ${rowAttrs}
@@ -46226,6 +46246,7 @@ INDEX_HTML = """<!doctype html>
           <span class="library-table-cell" title="${escapeAttr(authors)}">${escapeHtml(authors)}</span>
           <span class="library-table-cell year">${escapeHtml(year)}</span>
           <span class="library-table-cell" title="${escapeAttr(journal)}">${escapeHtml(journal)}</span>
+          <span class="library-table-cell time-added" title="${addedMs === null ? "" : escapeAttr(new Date(addedMs).toString())}">${escapeHtml(libraryAddedTimeText(entry))}</span>
         </${rowTag}>
       `;
     }
