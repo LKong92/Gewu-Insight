@@ -71,15 +71,20 @@ def _selection(storage, entries, recycle_id, empty):
 def _references(storage):
     # Read only file pointers. Cache path resolution because paper/resource
     # projections and Library aliases often describe the same physical file.
-    refs, cache = [], {}
+    refs, cache, parents = [], {}, {}
     def add(table, row_id, pid, field, value, member=None):
         if not value:
             return
         value = str(value)
         if value not in cache:
-            path = lexical_path(value)
+            original = Path(value).expanduser().absolute()
+            if original.parent not in parents:
+                parents[original.parent] = original.parent.resolve()
+            path = parents[original.parent] / original.name
             try:
-                cache[value] = (path, path.resolve())
+                # The parent is already resolved. Only a final symlink needs
+                # another resolution; thousands of siblings share this work.
+                cache[value] = (path, path.resolve() if path.is_symlink() else path)
             except (OSError, RuntimeError):
                 cache[value] = (path, path)
         raw, resolved = cache[value]
@@ -131,19 +136,28 @@ def _plan(storage, entries, recycle_id, empty):
             for path in directory.iterdir():
                 if finder_alias.is_alias(path) and finder_alias.resolve(path) in paper_paths:
                     paths.append(path)
-    plan.update(paths=_minimal_paths(paths), refs=refs)
+    paths = _minimal_paths(paths)
+    plan.update(paths=paths, refs=refs, affected=_affected_checker(paths))
     return plan
 
 
-def _affected(ref, paths):
-    raw, resolved = ref[-2:]
-    for path in paths:
-        if finder_alias.is_alias(path):
-            if raw == path:
+def _affected_checker(paths):
+    # All reference checks in a plan happen before moving files. Snapshot each
+    # selected path's kind once, not once per registered file in the library.
+    # _plan runs again under the writer lock, with fresh path information.
+    kinds = [(path, finder_alias.is_alias(path), path.is_dir()) for path in paths]
+
+    def affected(ref):
+        raw, resolved = ref[-2:]
+        for path, alias, directory in kinds:
+            if alias:
+                if raw == path:
+                    return True
+            elif raw == path or resolved == path or (directory and (within(raw, path) or within(resolved, path))):
                 return True
-        elif raw == path or resolved == path or (path.is_dir() and (within(raw, path) or within(resolved, path))):
-            return True
-    return False
+        return False
+
+    return affected
 
 
 def preview_recycle_selection(storage, entries, *, recycle_id, empty=False):
@@ -162,7 +176,7 @@ def delete_recycle_selection(storage, entries, *, recycle_id, empty=False, confi
     moved, copied, relinked, created_dirs = [], [], [], []
     with MUTATION_LOCK, ExitStack() as locks:
         plan = _plan(storage, entries, recycle_id, empty)
-        affected_papers = plan["papers"] | {r[2] for r in plan["refs"] if _affected(r, plan["paths"])}
+        affected_papers = plan["papers"] | {r[2] for r in plan["refs"] if plan["affected"](r)}
         for pid in sorted(affected_papers):
             locks.enter_context(paper_download_lock(storage.db_path, pid))
         storage.conn.execute("BEGIN IMMEDIATE")
@@ -171,7 +185,7 @@ def delete_recycle_selection(storage, entries, *, recycle_id, empty=False, confi
             if (plan["items"] or plan["folders"] or plan["paths"]) and not confirmed:
                 raise ValueError("confirmation is required")
             replacements, updates = {}, {}
-            preserved = [r for r in plan["refs"] if r[2] not in plan["deleting"] and _affected(r, plan["paths"])]
+            preserved = [r for r in plan["refs"] if r[2] not in plan["deleting"] and plan["affected"](r)]
             for ref in preserved:
                 table, identity, pid, field, old, member, raw, source = ref
                 if not source.is_file():

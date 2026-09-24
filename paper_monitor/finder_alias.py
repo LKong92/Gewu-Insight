@@ -99,7 +99,11 @@ def recorded_target(path: Path) -> Path | None:
 
 def is_alias(path: Path) -> bool:
     path = Path(path)
-    if path.is_symlink() or recorded_target(path) is not None:
+    return path.is_symlink() or _has_alias_metadata(path)
+
+
+def _has_alias_metadata(path) -> bool:
+    if recorded_target(path) is not None:
         return True
     if sys.platform == "darwin":
         try:
@@ -108,6 +112,27 @@ def is_alias(path: Path) -> bool:
         except OSError:
             pass
     return False
+
+
+def iter_aliases(root: Path):
+    """Find the same shortcuts as rglob/is_alias without stat-ing every file.
+
+    DirEntry supplies the symlink/directory flags. Ordinary files need only
+    metadata checks; construct Path objects for shortcuts and directories.
+    Do not follow directory symlinks, including links outside managed roots.
+    """
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.is_symlink() or _has_alias_metadata(entry.path):
+                        yield Path(entry.path)
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            continue
 
 
 def resolve(path: Path) -> Path:

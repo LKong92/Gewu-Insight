@@ -24049,9 +24049,7 @@ def remove_symlinks_to(target: Path, roots: list[Path]) -> list[str]:
     for root in roots:
         if not root.exists():
             continue
-        for candidate in root.rglob("*"):
-            if not finder_alias.is_alias(candidate):
-                continue
+        for candidate in finder_alias.iter_aliases(root):
             try:
                 if finder_alias.points_to(candidate, target_resolved):
                     candidate.unlink()

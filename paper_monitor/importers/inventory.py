@@ -1794,14 +1794,27 @@ def existing_paper_id(record: dict[str, Any], existing: dict[str, dict[str, str]
 
 
 def build_existing_index(storage: Storage) -> dict[str, dict[str, str]]:
-    rows = storage.conn.execute("SELECT paper_id, doi, raw_json FROM papers").fetchall()
+    # Imports need identity/provenance fields, not every provider's full reply.
+    # Project in SQLite and stream rows so a one-file drop does not materialize
+    # and JSON-decode the entire metadata library in Python. Keep the legacy
+    # parser for malformed JSON and the same normalization/first-match rules.
+    fields = ("arxiv_id", "versioned_arxiv_id", "import", "source_path", "size_bytes")
+    rows = storage.conn.execute("""
+        SELECT paper_id, doi, json_valid(raw_json) AS projected,
+               CASE WHEN json_valid(raw_json)
+                    THEN json_extract(raw_json, '$.arxiv_id', '$.versioned_arxiv_id',
+                                      '$.import', '$.source_path', '$.size_bytes')
+                    ELSE raw_json END AS identity_fields
+        FROM papers
+    """)
     index: dict[str, dict[str, str]] = {"doi": {}, "arxiv_id": {}, "source_path": {}}
     for row in rows:
         paper_id = str(row["paper_id"] or "")
         doi = normalize_doi(row["doi"])
         if paper_id and doi:
             index["doi"].setdefault(doi, paper_id)
-        raw = parse_json(row["raw_json"])
+        raw = (dict(zip(fields, json.loads(row["identity_fields"]))) if row["projected"]
+               else parse_json(row["identity_fields"]))
         for value in [raw.get("arxiv_id"), raw.get("versioned_arxiv_id")]:
             arxiv_id = normalize_arxiv_id(value)
             if paper_id and arxiv_id:
