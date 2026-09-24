@@ -73,6 +73,36 @@ class AuthorBackgroundTests(unittest.TestCase):
             self.assertEqual(request.call_args.kwargs['max_retries'], 1)
         self.assertTrue(ui.google_scholar_global_cooldown(self.storage)['active'])
 
+    def test_pause_preserves_safe_trigger_without_response_body_or_query(self):
+        cases = [
+            (SimpleNamespace(status_code=403, text='private response body', url='https://scholar.google.com/citations?secret=value'), None, 'HTTP 403'),
+            (SimpleNamespace(status_code=429, text='private response body', url='https://scholar.google.com/citations?secret=value'), None, 'HTTP 429'),
+            (SimpleNamespace(status_code=200, text='unusual traffic recaptcha private response body', url='https://scholar.google.com/sorry?secret=value'), None, 'verification or unusual-traffic page'),
+            (None, RuntimeError('HTTP 429 Too Many Requests for https://scholar.google.com/citations?secret=value'), 'HTTP 429'),
+        ]
+        for response, error, reason in cases:
+            with self.subTest(reason=reason, error=bool(error)):
+                self.storage.set_setting(ui.GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SETTING, '')
+                ui.GOOGLE_SCHOLAR_LAST_REQUEST_AT = 0
+                with scholar_access.database(self.path), patch.object(ui, 'request_with_retries', return_value=response, side_effect=error) as request:
+                    with self.assertRaises(ui.GoogleScholarBlockedError):
+                        ui.google_scholar_request_with_spacing('GET', 'https://scholar.google.com/citations?secret=value', max_retries=8)
+                    request.assert_called_once()
+                    self.assertEqual(request.call_args.kwargs['max_retries'], 1)
+                saved = ui.google_scholar_global_cooldown(self.storage)
+                self.assertIn(f'Detection: {reason}.', saved['message'])
+                self.assertNotIn('private response body', saved['message'])
+                self.assertNotIn('secret', saved['message'])
+                again = ui.start_google_scholar_global_cooldown(self.storage, message='later generic error')
+                self.assertEqual(saved, again, 'Suppressed work must not overwrite the original trigger or extend the pause')
+
+    def test_http_error_with_falsey_response_retains_status(self):
+        import requests
+        response = requests.Response()
+        response.status_code = 403
+        error = requests.HTTPError('private exception details', response=response)
+        self.assertEqual(ui.google_scholar_restriction_reason(error=error), 'HTTP 403')
+
     def test_automatic_budget_and_rest_survive_worker_reentry(self):
         self.add(6)
         # Check a single day's budget even when the suite runs near midnight.

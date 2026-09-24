@@ -487,6 +487,55 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 
 @end
 
+// macOS WebKit may route file drags to an internal scrolling view instead of
+// the WKWebView subclass. A sibling destination covers the complete workspace
+// without depending on the DOM's composited hit regions. It only registers
+// native file URLs; ordinary clicks and HTML row/sort drags stay with WebKit.
+@interface GewuFinderDropView : NSView <NSDraggingDestination>
+@property(nonatomic, weak) GewuInsightWebView *destinationWebView;
+@end
+
+@implementation GewuFinderDropView
+
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.wantsLayer = YES;
+        [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+    }
+    return self;
+}
+
+- (NSView *)hitTest:(NSPoint)point { return nil; }
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return [self.destinationWebView draggingEntered:sender];
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return [self.destinationWebView draggingUpdated:sender];
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    [self.destinationWebView clearFinderDropTarget];
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    GewuInsightWebView *webView = self.destinationWebView;
+    if (!webView || [webView finderDropPathsFromDraggingInfo:sender].count == 0) return NO;
+    if (sender.draggingSource == webView) {
+        return webView.nativeFileDragActive && webView.pendingLibraryDragPayload != nil;
+    }
+    return YES;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    if (![self prepareForDragOperation:sender]) return NO;
+    return [self.destinationWebView performDragOperation:sender];
+}
+
+@end
+
 @interface GewuInsightWindow : NSWindow
 @end
 
@@ -861,6 +910,10 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
                                                                 alpha:1.0];
     }
     [contentView addSubview:self.webView];
+    GewuFinderDropView *finderDropView = [[GewuFinderDropView alloc] initWithFrame:contentView.bounds];
+    finderDropView.destinationWebView = (GewuInsightWebView *)self.webView;
+    finderDropView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [contentView addSubview:finderDropView];
     self.window.contentView = contentView;
     self.window.backgroundColor = [NSColor colorWithRed:244.0/255.0 green:242.0/255.0 blue:237.0/255.0 alpha:1.0];
     [self showLoadingPage];

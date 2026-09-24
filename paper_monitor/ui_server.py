@@ -15832,15 +15832,37 @@ def google_scholar_request_with_spacing(
             kwargs["max_retries"] = 1
             response = request_with_retries(method, url, **kwargs)
             if getattr(response, 'status_code', 200) in {403, 429} or is_google_scholar_block_page(response.text, response.url):
-                raise GoogleScholarBlockedError(google_scholar_block_message())
+                reason = google_scholar_restriction_reason(response=response)
+                raise GoogleScholarBlockedError(f"{google_scholar_block_message()} Detection: {reason}.")
             return response
         except Exception as exc:
             if isinstance(exc, GoogleScholarBlockedError) or is_google_scholar_block_error(exc):
-                scholar_access.blocked(google_scholar_block_message())
-                raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
+                # Keep the observed trigger, not response bodies, query strings
+                # or arbitrary exception text. Previously every restriction was
+                # persisted as the same generic message, hiding its cause.
+                message = (str(exc) if isinstance(exc, GoogleScholarBlockedError) else
+                           f"{google_scholar_block_message()} Detection: {google_scholar_restriction_reason(error=exc)}.")
+                scholar_access.blocked(message)
+                raise GoogleScholarBlockedError(message) from exc
             raise
         finally:
             GOOGLE_SCHOLAR_LAST_REQUEST_AT = time.monotonic()
+
+
+def google_scholar_restriction_reason(*, response: Any = None, error: Exception | None = None) -> str:
+    if response is None and error is not None:
+        response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if status in {403, 429}:
+        return f"HTTP {status}"
+    if error is not None:
+        # request_with_retries raises a plain RuntimeError for a final 429.
+        text = str(error).lower()
+        for code in (403, 429):
+            if f"http {code}" in text or f"{code} client error" in text:
+                return f"HTTP {code}"
+        return "access-denied error"
+    return "verification or unusual-traffic page"
 
 
 def google_scholar_author_row_to_profile(row: Any) -> dict[str, Any]:

@@ -20,6 +20,9 @@ static void check(BOOL ok, NSString *message) {
 @property NSWindow *window;
 @property NSMutableArray *scripts;
 @property NSRect bounds;
+- (NSArray *)finderDropPathsFromDraggingInfo:(id)sender;
+- (void)updateFinderDropTargetForDraggingInfo:(id)sender;
+- (void)clearFinderDropTarget;
 - (void)evaluateJavaScript:(NSString *)script completionHandler:(id)handler;
 - (NSPoint)browserClientPointForDraggingInfo:(id)sender;
 - (NSPoint)browserClientPointForViewPoint:(NSPoint)point;
@@ -28,6 +31,15 @@ static void check(BOOL ok, NSString *message) {
 - (void)dispatchPendingLibraryItemDropAtClientPoint:(NSPoint)point;
 @end
 @implementation MoveReceiver
+- (NSArray *)finderDropPathsFromDraggingInfo:(id)sender {
+ NSArray *(*call)(id,SEL,id)=(void *)[GewuInsightWebView instanceMethodForSelector:_cmd];return call(self,_cmd,sender);
+}
+- (void)updateFinderDropTargetForDraggingInfo:(id)sender {
+ void (*call)(id,SEL,id)=(void *)[GewuInsightWebView instanceMethodForSelector:_cmd];call(self,_cmd,sender);
+}
+- (void)clearFinderDropTarget {
+ void (*call)(id,SEL)=(void *)[GewuInsightWebView instanceMethodForSelector:_cmd];call(self,_cmd);
+}
 - (void)evaluateJavaScript:(NSString *)script completionHandler:(id)handler {[self.scripts addObject:script];}
 - (NSPoint)browserClientPointForDraggingInfo:(id)sender {return NSMakePoint(100,200);}
 - (NSPoint)browserClientPointForViewPoint:(NSPoint)p {return p;}
@@ -39,6 +51,7 @@ static void check(BOOL ok, NSString *message) {
 @end
 @interface MoveInfo : NSObject
 @property id draggingSource;
+@property NSPasteboard *draggingPasteboard;
 @end
 @implementation MoveInfo
 @end
@@ -168,6 +181,48 @@ int main(void) {
         }
         check(forwarded==3 && receiver.scripts.count==0,@"WebKit must finish DOM drags and dispatch its own dragend");
         method_setImplementation(method,original);
+        // The public sibling destination must forward the complete native file
+        // handshake even when WebKit's internal scrolling view owns DOM hits.
+        for (NSString *name in @[@"draggingEntered:", @"draggingUpdated:", @"performDragOperation:"]) {
+            SEL sel=NSSelectorFromString(name);
+            Method source=class_getInstanceMethod(GewuInsightWebView.class,sel);
+            class_addMethod(MoveReceiver.class,sel,method_getImplementation(source),method_getTypeEncoding(source));
+        }
+        GewuFinderDropView *destination=[[GewuFinderDropView alloc] initWithFrame:NSMakeRect(0,0,500,500)];
+        destination.destinationWebView=(id)receiver;
+        check([destination hitTest:NSMakePoint(100,100)]==nil,@"The file destination must not intercept clicks or text selection");
+        check([destination.registeredDraggedTypes isEqualToArray:@[NSPasteboardTypeFileURL]],@"Text, links and HTML row sorting must not enter the file destination");
+        check(!destination.acceptsFirstResponder,@"The transparent destination must not add a keyboard focus stop");
+        info.draggingSource=[NSObject new];
+        info.draggingPasteboard=[NSPasteboard pasteboardWithUniqueName];
+        receiver.nativeFileDragActive=NO;receiver.pendingLibraryDragPayload=nil;
+        for (NSArray *paths in @[@[@"/private/tmp/fixture.md"], @[@"/private/tmp/folder"], @[@"/private/tmp/a.pdf",@"/private/tmp/b.md"]]) {
+            [info.draggingPasteboard clearContents];
+            NSMutableArray *fileURLs=[NSMutableArray new];
+            for (NSString *path in paths) [fileURLs addObject:[NSURL fileURLWithPath:path]];
+            [info.draggingPasteboard writeObjects:fileURLs];
+            [receiver.scripts removeAllObjects];
+            check([destination draggingEntered:(id)info]==NSDragOperationCopy,@"Files and folders must negotiate Copy");
+            check([destination draggingUpdated:(id)info]==NSDragOperationCopy,@"Native hover remains accepted across the whole surface");
+            check([destination prepareForDragOperation:(id)info],@"Accepted file URLs must survive the preparation phase");
+            check([destination performDragOperation:(id)info],@"Files and folders must reach the product importer");
+            check(receiver.scripts.count==3 && [receiver.scripts.lastObject containsString:@"handleNativeFinderDrop"],@"One gesture dispatches exactly one native import");
+            for (NSString *path in paths) check([receiver.scripts.lastObject containsString:path.lastPathComponent],@"Preserve all dropped paths");
+            [destination draggingExited:(id)info];
+            check([receiver.scripts.lastObject containsString:@"clearNativeFinderDropTarget"],@"Leaving clears the destination highlight");
+        }
+        info.draggingSource=receiver;receiver.nativeFileDragActive=YES;receiver.pendingLibraryDragPayload=payload;
+        [receiver.scripts removeAllObjects];
+        check([destination draggingEntered:(id)info]==NSDragOperationMove,@"A managed native resource keeps ownership-move semantics");
+        check([destination prepareForDragOperation:(id)info] && [destination performDragOperation:(id)info],@"Managed native drop passes the same destination");
+        check([receiver.scripts.lastObject containsString:@"handleNativeLibraryManagedDrop"],@"Managed files must never become external imports");
+        check(![destination prepareForDragOperation:(id)info] && ![destination performDragOperation:(id)info],@"Do not replay a consumed managed gesture");
+        receiver.nativeFileDragActive=NO;receiver.pendingLibraryDragPayload=payload;
+        check(![destination prepareForDragOperation:(id)info],@"A stale armed payload cannot steal a WebKit DOM gesture");
+        info.draggingSource=[NSObject new];[info.draggingPasteboard clearContents];
+        [info.draggingPasteboard setString:@"https://example.org/paper" forType:NSPasteboardTypeURL];
+        check(![destination prepareForDragOperation:(id)info] && ![destination performDragOperation:(id)info],@"Ordinary web links are not imported as files");
+        [info.draggingPasteboard releaseGlobally];
         printf("%lu native drag contract checks passed\n",(unsigned long)checks);
     }
 }
