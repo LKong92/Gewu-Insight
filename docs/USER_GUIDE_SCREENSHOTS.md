@@ -4,6 +4,11 @@ Edition: September 24, 2026 · Version 1.0.0 / Build 1.
 HTML and PDF share 36 packaged PNG captures: 32 retained, three replaced, one added.
 All previous images were visually reviewed before deciding which to change.
 
+The later September 24 licensing revision retains all 36 images byte-for-byte.
+The About illustration remains an identity/credits example; its earlier layout
+omits the new legal summary. Current permissions are stated in the guide text
+and complete LICENSE, so this wording-only change does not require recapture.
+
 ## Capture rules and this revision
 
 - Use only the real original Gewu Insight App, never generated UI, test fixtures,

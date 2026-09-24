@@ -608,10 +608,14 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 
 
 LATEX_END = r"""
-\Needspace{7\baselineskip}
+\clearpage
 \section*{Copyright and product notice}
 \addcontentsline{toc}{section}{Copyright and product notice}
-Gewu Insight is proprietary software. Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved.
+Gewu Insight is source-available research software. Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved, except for the limited permissions in the Gewu Insight Academic and Non-Commercial Research License.
+
+The License permits academic/non-commercial research use, including downloading, installing, building, running and modifying the software, and free research sharing of unmodified official versions under the same terms with retained notices. Private research modifications are allowed; publishing modified versions or patches requires separate prior written authorization. Commercial use, commercial redistribution, sublicensing and integration into commercial products or services require separate prior written authorization. This is not an open-source license. The complete LICENSE in the distribution governs; the same text is included in the App resources. Contact: \href{mailto:konglingyuan@westlake.edu.cn}{konglingyuan@westlake.edu.cn}.
+
+Third-party software, fonts, artwork and research content retain their own terms. The Gewu License does not grant rights in those materials. See THIRD\_PARTY\_NOTICES.md and the dependency and asset audit before redistribution. Independent research outputs do not inherit this software license merely through use of Gewu.
 
 This manual describes the product as shipped at the version printed on the title page. Online services, publisher access, and third-party metadata may change independently of the application.
 \end{document}

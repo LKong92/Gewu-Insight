@@ -4,6 +4,11 @@
 The [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) covers the current
 workflows; [release notes](docs/RELEASE_1.0.0.md) describe versioning and scope.
 
+**Source-available research software.** Downloading, installing, running and
+modifying Gewu Insight for academic/non-commercial research are permitted under
+the custom [LICENSE](LICENSE). Commercial use requires separate prior written
+authorization. See [usage and sharing terms](docs/LICENSING.md).
+
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
 Gewu Insight is a local-first desktop workspace for discovering, organizing,
@@ -328,6 +333,11 @@ Acquire → Identify → Resolve → Remember
 
 ## Quick start on macOS
 
+These instructions are for use allowed by the [research license](LICENSE).
+Academic/non-commercial research use needs no separate permission; commercial
+use requires prior written authorization. Installation does not grant a broader
+license to Gewu or to the third-party content you access.
+
 The repository includes the native launcher:
 
 ```text
@@ -516,10 +526,28 @@ Developed with coding assistance from **OpenAI Codex**.
 
 Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.
 
-Gewu Insight is proprietary software and is **not** distributed under the MIT
-License or another open-source license. Viewing or forking this repository does
-not grant permission to reuse, modify, redistribute, sublicense, or sell its
-copyrighted contents. See [LICENSE](LICENSE) for the complete notice.
+Gewu Insight is **source-available research software**, offered under the custom
+**Gewu Insight Academic and Non-Commercial Research License**. It is not offered
+under an open-source license such as MIT, Apache or GPL.
+
+The [LICENSE](LICENSE) expressly permits academic/non-commercial research use,
+including downloading, installing, building, running, studying and modifying the
+software. Free non-commercial research sharing is limited to **unmodified
+official versions**, with the same license and retained notices. Private research
+modifications are permitted; public distribution of modified versions or patches
+requires separate prior written authorization.
+These limited permissions coexist with the All Rights Reserved copyright notice.
+
+Commercial use, commercial redistribution, sublicensing and integration into
+commercial products or services require **separate prior written authorization**.
+Contact [konglingyuan@westlake.edu.cn](mailto:konglingyuan@westlake.edu.cn).
+Public access or a GitHub fork does not grant commercial rights. Independent
+research outputs do not inherit the software license merely by using Gewu.
 
 Third-party components and services remain subject to their own licenses and
-terms.
+terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the
+[dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md), including unresolved
+font and artwork permissions. [Licensing explained](docs/LICENSING.md) describes
+research sharing, commercial boundaries and the distinction between source
+availability and an open-source license. The **Open Source Settings** menu
+configures scholarly data sources; it is not a statement of the software license.

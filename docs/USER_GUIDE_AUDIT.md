@@ -130,3 +130,26 @@ copies and QA are kept outside the repository in `/private/tmp/gewu-guide-sep24/
   the original App resource path. The guide was left on Welcome with its search
   cleared. No authentication setting, permission or literature data was changed;
   no App restart, commit or push was performed.
+
+## Licensing follow-up — September 24, 2026
+
+The subsequent licensing-only revision adds the custom academic/non-commercial
+grant to Welcome and a dedicated final copyright page, clarifies that Open Source
+Settings names scholarly sources, and limits the artwork statement to rights the
+project actually owns. Private research modifications are permitted; public
+sharing is limited to unmodified official versions unless separately authorized.
+Commercial uses require prior written authorization. See
+[the licensing/dependency audit](DEPENDENCY_LICENSE_AUDIT.md) for the complete
+change inventory and unresolved third-party permissions.
+
+The manual now has 119 pages. All 49 topic anchors and 36 screenshot files remain;
+no screenshot was replaced. All 913 earlier named PDF destinations resolve, with
+only `page.119` added. Eleven changed pages (3, 6, 8–11, 82–83, 106, 118–119) were
+rendered and reviewed. Product Identity's continuous chapter rules remain intact.
+The 30 guide/audit tests, 16 macOS window/package checks and six PDF structure
+checks pass. The final source and App-bundled PDFs and legal texts match; the
+universal App signature verifies. At initial delivery, no live App restart was
+performed. After the user authorized commit/push, the original App was normally
+restarted once: one App/backend and healthy local service were confirmed, and
+the actual About window displayed the new licensing summary before returning
+to Library. No literature mutation or source refresh was requested.

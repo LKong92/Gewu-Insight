@@ -4,6 +4,24 @@ The current research and writing baseline is **Gewu Insight 1.0.0, Build 1**.
 This project uses macOS folder-based distribution. Keep the App, Python package,
 configuration and assets together; the App alone is not a standalone installer.
 
+## Research license and commercial rights
+
+Gewu Insight is source-available research software under the custom
+[Academic and Non-Commercial Research License](LICENSE). Academic/non-commercial
+research users may download, install, run and privately modify it. They may share
+only unmodified official versions free of charge for those purposes under the
+same terms, retaining LICENSE, copyright and third-party notices. Public sharing
+of modified versions or patches requires separate prior written authorization.
+Commercial use, commercial redistribution, sublicensing and incorporation into
+commercial products or services require separate prior written authorization
+from the copyright holders. See [licensing explained](docs/LICENSING.md).
+
+Third-party rights are separate. Before public or commercial distribution,
+review [the dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md), especially
+the outstanding artwork/font permissions. The Gewu license does not clear those
+rights. Do not add a virtual environment, third-party binaries or fonts to a
+release without auditing that exact distribution and retaining required notices.
+
 ## Version and build
 
 `paper_monitor/__init__.py` owns `__version__` and `__build__`. The App builder
@@ -37,6 +55,7 @@ It creates a zip under `dist/` containing:
 - `config/`
 - `requirements.txt`
 - `README.md`
+- `LICENSE`, `THIRD_PARTY_NOTICES.md` and `docs/` (including licensing and audit notes)
 - helper scripts
 - empty `data/` and `reports/` directories
 
@@ -72,5 +91,10 @@ such as `~/Applications/PaperMonitor` or `~/PaperMonitor`.
 ## GitHub
 
 For GitHub, commit source files, `Gewu Insight.app`, `config/`, scripts,
-`README.md`, and `DISTRIBUTION.md`. Keep local data out of git using
-`.gitignore`.
+`README.md`, `DISTRIBUTION.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` and `docs/`.
+Keep local data out of git using `.gitignore`.
+
+Describe Gewu as **source-available research software**; use **publicly available
+source code** only once the repository is public. Do not advertise it as
+open-source software or apply a standard-license badge to this custom license.
+Repository visibility and the arXiv/public-release timing are separate decisions.

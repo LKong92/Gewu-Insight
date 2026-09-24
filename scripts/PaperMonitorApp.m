@@ -2491,7 +2491,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 - (void)showAboutWindow {
     if (!self.aboutWindow) {
         const CGFloat width = 336.0;
-        const CGFloat height = 340.0;
+        const CGFloat height = 380.0;
         self.aboutWindow = [[NSWindow alloc]
             initWithContentRect:NSMakeRect(0, 0, width, height)
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
@@ -2507,20 +2507,20 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         self.aboutWindow.contentView = content;
 
-        NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(132, 248, 72, 72)];
+        NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(132, 288, 72, 72)];
         iconView.image = NSApp.applicationIconImage;
         iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
         [content addSubview:iconView];
 
         [content addSubview:[self aboutLabelWithString:@"Gewu Insight"
                                                    font:[NSFont systemFontOfSize:23.5 weight:NSFontWeightSemibold]
-                                                  frame:NSMakeRect(20, 211, 296, 30)
+                                                  frame:NSMakeRect(20, 251, 296, 30)
                                                   color:NSColor.labelColor]];
         NSURL *calligraphyURL = [[NSBundle mainBundle] URLForResource:@"GewuAboutCalligraphy" withExtension:@"png"];
         NSImage *calligraphyImage = calligraphyURL ? [[NSImage alloc] initWithContentsOfURL:calligraphyURL] : nil;
         if (calligraphyImage) {
             calligraphyImage.template = YES;
-            NSImageView *calligraphyView = [[NSImageView alloc] initWithFrame:NSMakeRect(116, 182, 104, 22)];
+            NSImageView *calligraphyView = [[NSImageView alloc] initWithFrame:NSMakeRect(116, 222, 104, 22)];
             calligraphyView.image = calligraphyImage;
             calligraphyView.imageScaling = NSImageScaleProportionallyUpOrDown;
             calligraphyView.contentTintColor = NSColor.secondaryLabelColor;
@@ -2536,33 +2536,33 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             : [NSString stringWithFormat:@"Version %@", version];
         [content addSubview:[self aboutLabelWithString:versionText
                                                    font:[NSFont systemFontOfSize:11.5]
-                                                  frame:NSMakeRect(20, 160, 296, 16)
+                                                  frame:NSMakeRect(20, 200, 296, 16)
                                                   color:NSColor.tertiaryLabelColor]];
 
         NSTextField *taglineLabel = [self aboutLabelWithString:@"Your personal research workspace where papers,\nevidence, and files stay connected over time."
                                                            font:[NSFont systemFontOfSize:12.0]
-                                                          frame:NSMakeRect(16, 112, 304, 36)
+                                                          frame:NSMakeRect(16, 152, 304, 36)
                                                           color:NSColor.labelColor];
         taglineLabel.maximumNumberOfLines = 2;
         taglineLabel.selectable = NO;
         [content addSubview:taglineLabel];
 
         NSButton *guideButton = [self aboutLinkButtonWithTitle:@"User Guide"
-                                                        frame:NSMakeRect(83, 84, 82, 22)
+                                                        frame:NSMakeRect(83, 124, 82, 22)
                                                        action:@selector(openUserGuide:)];
         [content addSubview:guideButton];
         [content addSubview:[self aboutLabelWithString:@"·"
                                                    font:[NSFont systemFontOfSize:12]
-                                                  frame:NSMakeRect(162, 85, 12, 20)
+                                                  frame:NSMakeRect(162, 125, 12, 20)
                                                   color:NSColor.tertiaryLabelColor]];
         NSButton *githubButton = [self aboutLinkButtonWithTitle:@"GitHub"
-                                                         frame:NSMakeRect(171, 84, 82, 22)
+                                                         frame:NSMakeRect(171, 124, 82, 22)
                                                         action:@selector(openAboutProjectWebsite:)];
         [content addSubview:githubButton];
 
         [content addSubview:[self aboutLabelWithString:@"Designed and developed by Lingyuan Kong and Zhengran Wu,\nwith coding assistance from OpenAI Codex."
                                                    font:[NSFont systemFontOfSize:9.5]
-                                                  frame:NSMakeRect(18, 48, 300, 25)
+                                                  frame:NSMakeRect(18, 88, 300, 25)
                                                   color:NSColor.secondaryLabelColor]];
         NSString *copyright = [bundle objectForInfoDictionaryKey:@"NSHumanReadableCopyright"]
             ?: @"Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.";
@@ -2570,8 +2570,14 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
                                                                           withString:@".\nAll Rights Reserved."];
         [content addSubview:[self aboutLabelWithString:copyrightDisplay
                                                    font:[NSFont systemFontOfSize:9]
-                                                  frame:NSMakeRect(14, 12, 308, 25)
+                                                  frame:NSMakeRect(14, 52, 308, 25)
                                                   color:NSColor.tertiaryLabelColor]];
+        NSTextField *licenseLabel = [self aboutLabelWithString:@"Source-available research software.\nAcademic/non-commercial research use permitted.\nCommercial use requires written authorization."
+                                                         font:[NSFont systemFontOfSize:9]
+                                                        frame:NSMakeRect(14, 9, 308, 35)
+                                                        color:NSColor.secondaryLabelColor];
+        licenseLabel.maximumNumberOfLines = 3;
+        [content addSubview:licenseLabel];
         [self.aboutWindow center];
     }
     [self.aboutWindow makeKeyAndOrderFront:nil];

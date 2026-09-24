@@ -118,7 +118,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         )
         self.assertIn("taglineLabel.maximumNumberOfLines = 2", source)
         self.assertIn("const CGFloat width = 336.0", source)
-        self.assertIn("const CGFloat height = 340.0", source)
+        self.assertIn("const CGFloat height = 380.0", source)
         self.assertIn("self.aboutWindow.titleVisibility = NSWindowTitleVisible", source)
         self.assertIn("self.aboutWindow.titlebarAppearsTransparent = NO", source)
         self.assertIn("aboutLinkButtonWithTitle", source)
@@ -155,6 +155,13 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("Developed with coding assistance from **OpenAI Codex**", readme)
         self.assertIn("[LICENSE](LICENSE)", readme)
         self.assertNotIn("Licensed under the MIT License", readme)
+
+        resources = ROOT / "Gewu Insight.app" / "Contents" / "Resources"
+        self.assertEqual((resources / "LICENSE.txt").read_bytes(), (ROOT / "LICENSE").read_bytes())
+        self.assertEqual(
+            (resources / "THIRD_PARTY_NOTICES.md").read_bytes(),
+            (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes(),
+        )
 
         self.assertTrue(readme.startswith("# Gewu Insight\n"))
         self.assertIn("**Keep research objects visible", readme)
