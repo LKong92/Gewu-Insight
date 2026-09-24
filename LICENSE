@@ -1,5 +1,5 @@
 Gewu Insight Academic and Non-Commercial Research License
-Version 1.0, September 24, 2026
+Version 1.1, September 24, 2026
 
 Copyright © 2026 Lingyuan Kong and Zhengran Wu.
 All rights reserved, except for the limited permissions expressly granted below.
@@ -36,32 +36,36 @@ product development, exclusive commercial exploitation or business operations
 requires separate written authorization. Contact the copyright holders before
 using the Software if the proposed purpose is unclear.
 
-3. Non-commercial sharing of original versions
+3. Non-commercial research sharing
 
-You may share unmodified copies of an official version of the Software, in
-source or binary form, without charge, solely to support Permitted Research Use,
-provided that:
+You may share copies of the Software, including modified versions, derivative
+works and patches, in source or binary form, without charge, solely to support
+Permitted Research Use, provided that:
 
 (a) You include this complete License, preserve copyright and attribution
     notices, and retain applicable third-party licenses and notices;
-(b) You identify the original version and do not imply the authors' endorsement
-    of Your research, distribution or organization;
+(b) You identify the original version, clearly mark modifications and their
+    dates, and do not imply that a modified version is an official release or
+    that the authors endorse Your research, distribution or organization;
 (c) You distribute the Software under these same permissions and restrictions,
     without granting broader rights; and
 (d) the distribution is not part of a commercial product, paid service,
     commercial offering or promotion for commercial advantage.
 
-Each recipient receives permission for the copyright holders' Software directly
-under this License. This sharing permission is not a right to sublicense or
-relicense the Software. You may make and use private modifications for Your own
-Permitted Research Use under Section 2, but You may not publicly distribute or
-publish modified versions, derivative works or patches without separate prior
-written authorization. This applies to source code, binaries, public forks and
-public pull requests. An unmodified build from official source is permitted;
-changing packaging solely to include required notices is not a modified version.
-No other redistribution of modified Software is granted by this License.
-You retain any copyright in Your own original changes; this License does not
-transfer ownership of contributions to the project authors.
+These permissions include public research forks and pull requests within the
+conditions above; no separate written authorization or contributor agreement is
+needed merely to make or share them. Each recipient receives permission for the
+copyright holders' Software directly under this License. License Your original
+modifications under these same research-use and sharing terms when distributing
+them with the Software, to the extent You have authority to do so. This does not
+permit commercial redistribution or broader sublicensing or relicensing.
+
+You retain any copyright in Your own original changes. Sharing a modification
+or submitting a pull request does not transfer its ownership or grant the
+project authors additional commercial licensing rights. Acceptance into the
+official project is a separate decision; maintainers must obtain any additional
+contributor authorization needed for commercial licensing before merging.
+See CONTRIBUTING.md. This License is not a contributor license agreement.
 
 4. Commercial and other reserved uses
 

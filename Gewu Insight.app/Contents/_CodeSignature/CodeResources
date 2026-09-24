@@ -4,9 +4,13 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/CONTRIBUTING.md</key>
+		<data>
+		jRFw/SBWofW1xixQPUqnmE3Ru38=
+		</data>
 		<key>Resources/Gewu Insight User Guide.pdf</key>
 		<data>
-		6wj5T9PeqwzLyhQAFa7e4/xRhWc=
+		bgV0sj3R8pdub+UYc43GsMocsZE=
 		</data>
 		<key>Resources/GewuAboutCalligraphy.png</key>
 		<data>
@@ -54,7 +58,7 @@
 		</data>
 		<key>Resources/LICENSE.txt</key>
 		<data>
-		fyG8rucJZ8jiaVKoCmS739KUz5k=
+		X3Kla71ma/h6O1Ql5u88s3bdmPY=
 		</data>
 		<key>Resources/PaperMonitor.icns</key>
 		<data>
@@ -120,11 +124,18 @@
 			<key>requirement</key>
 			<string>cdhash H"504d5cfb475decf91add332df9ec773addb87f41" or cdhash H"8f0b2f36e0af94e80a9291a3883bec853fc2d8cc"</string>
 		</dict>
+		<key>Resources/CONTRIBUTING.md</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			oFuasZu+TNtButlFB1W7NjJKVQmKll5ogi0QJsmo354=
+			</data>
+		</dict>
 		<key>Resources/Gewu Insight User Guide.pdf</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			jOhnF84+tUvg+AjAbL5fmM6tyXGLszWVXLyeSqThF2E=
+			jtZllagNN7WgjsSH0uX9pmuNzKdvApRa97qLRE3dlY0=
 			</data>
 		</dict>
 		<key>Resources/GewuAboutCalligraphy.png</key>
@@ -208,7 +219,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			Joy8l2ephm4qQTFCHgna9KAiyouUHFntCKsaslxTpU4=
+			HruVP/C3weRw0SSVlrrX+GY0wTW/lSUeJ6j2/4nxmhM=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.icns</key>

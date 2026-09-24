@@ -131,7 +131,7 @@ copies and QA are kept outside the repository in `/private/tmp/gewu-guide-sep24/
   cleared. No authentication setting, permission or literature data was changed;
   no App restart, commit or push was performed.
 
-## Licensing follow-up — September 24, 2026
+## Initial licensing follow-up — September 24, 2026 (v1.0, superseded)
 
 The subsequent licensing-only revision adds the custom academic/non-commercial
 grant to Welcome and a dedicated final copyright page, clarifies that Open Source
@@ -153,3 +153,32 @@ performed. After the user authorized commit/push, the original App was normally
 restarted once: one App/backend and healthy local service were confirmed, and
 the actual About window displayed the new licensing summary before returning
 to Library. No literature mutation or source refresh was requested.
+
+## Research-sharing follow-up — September 24, 2026 (v1.1)
+
+The user subsequently permitted non-commercial research sharing of modified
+versions, derivative works and patches, including public research forks and PRs.
+The former original-only restriction above is historical, not the current rule.
+Welcome, the final copyright page, licensing guides and packaged LICENSE now
+agree. CONTRIBUTING.md separately explains that research sharing needs no CLA,
+whereas upstream commercial licensing of an external contribution requires a
+separately agreed grant. No finalized CLA or signed contributor authorization is
+claimed. The authors' institutional ownership questions are deferred at the
+user's request.
+
+The PDF remains 119 pages with all 914 named destinations. Only pages 8 and 119
+have changed extracted text; both were rendered and visually checked. Screenshots,
+product-operation descriptions and Product Identity chapter flow are unchanged.
+The final 30 Guide/audit tests, six new licensing-consistency tests, 16 macOS
+window/package tests and six PDF structure checks pass. An initial Guide test
+ran before App packaging completed and detected the old bundled PDF; the final
+post-build rerun passes with byte-identical source/bundled PDF and legal files.
+Python syntax, shell syntax, diff checks and the App signature pass. At initial
+delivery, no App restart, commit or push was performed. The user subsequently
+authorized commit/push and explicitly approved a normal App restart. The original
+App was restarted as one App/backend with a healthy local service; Help > User
+Guide displayed the new modified-version research-sharing permissions. The guide
+was then closed, leaving the Library interface available. No literature mutation,
+contribution acceptance or repository-visibility change was requested or performed.
+Consult Git history for delivery status. The earlier release-ZIP signing issue
+and unresolved third-party asset rights remain outside this follow-up.

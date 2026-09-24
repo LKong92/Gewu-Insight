@@ -532,10 +532,11 @@ under an open-source license such as MIT, Apache or GPL.
 
 The [LICENSE](LICENSE) expressly permits academic/non-commercial research use,
 including downloading, installing, building, running, studying and modifying the
-software. Free non-commercial research sharing is limited to **unmodified
-official versions**, with the same license and retained notices. Private research
-modifications are permitted; public distribution of modified versions or patches
-requires separate prior written authorization.
+software. Free non-commercial research sharing of **original and modified
+versions, derivative works and patches** is permitted under the same research-use
+terms, with retained notices and clearly identified modifications. This includes
+public research forks and pull requests; no separate permission is needed for
+sharing that already falls within the license.
 These limited permissions coexist with the All Rights Reserved copyright notice.
 
 Commercial use, commercial redistribution, sublicensing and integration into
@@ -551,3 +552,8 @@ font and artwork permissions. [Licensing explained](docs/LICENSING.md) describes
 research sharing, commercial boundaries and the distinction between source
 availability and an open-source license. The **Open Source Settings** menu
 configures scholarly data sources; it is not a statement of the software license.
+
+External contributions retain their authors' copyright. A pull request alone
+does not grant the project additional commercial licensing rights. Before an
+external contribution is merged, its rights must be cleared under the
+[contribution policy](CONTRIBUTING.md). No finalized CLA is currently in place.

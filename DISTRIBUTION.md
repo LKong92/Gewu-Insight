@@ -8,10 +8,11 @@ configuration and assets together; the App alone is not a standalone installer.
 
 Gewu Insight is source-available research software under the custom
 [Academic and Non-Commercial Research License](LICENSE). Academic/non-commercial
-research users may download, install, run and privately modify it. They may share
-only unmodified official versions free of charge for those purposes under the
-same terms, retaining LICENSE, copyright and third-party notices. Public sharing
-of modified versions or patches requires separate prior written authorization.
+research users may download, install, run and modify it. They may share original
+and modified versions, derivative works and patches free of charge for those
+purposes under the same research-use terms, retaining LICENSE, copyright and
+third-party notices and identifying modifications. Public research forks and
+pull requests within those terms do not require separate permission.
 Commercial use, commercial redistribution, sublicensing and incorporation into
 commercial products or services require separate prior written authorization
 from the copyright holders. See [licensing explained](docs/LICENSING.md).
@@ -55,7 +56,8 @@ It creates a zip under `dist/` containing:
 - `config/`
 - `requirements.txt`
 - `README.md`
-- `LICENSE`, `THIRD_PARTY_NOTICES.md` and `docs/` (including licensing and audit notes)
+- `LICENSE`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md` and `docs/`
+  (including licensing and audit notes)
 - helper scripts
 - empty `data/` and `reports/` directories
 
@@ -91,7 +93,8 @@ such as `~/Applications/PaperMonitor` or `~/PaperMonitor`.
 ## GitHub
 
 For GitHub, commit source files, `Gewu Insight.app`, `config/`, scripts,
-`README.md`, `DISTRIBUTION.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` and `docs/`.
+`README.md`, `DISTRIBUTION.md`, `LICENSE`, `CONTRIBUTING.md`,
+`THIRD_PARTY_NOTICES.md` and `docs/`.
 Keep local data out of git using `.gitignore`.
 
 Describe Gewu as **source-available research software**; use **publicly available

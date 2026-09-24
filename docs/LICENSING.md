@@ -13,15 +13,15 @@ non-commercial research. Research-related education, evaluating the software
 and reproducing scientific results are included. You do not need to request
 individual permission for activities already within those terms.
 
-You may share unmodified official versions free of charge for those purposes,
-with the same license, copyright and third-party notices. Private research
-modifications are allowed for your own permitted use. Public sharing is limited
-to original versions: publishing modified code, binaries, derivative works or
-patches, including a public fork or pull request containing changes, requires
-separate prior written authorization. An unmodified build of official source is
-allowed. Do not imply the authors' endorsement. Recipients receive permission
-directly under the license; sharing is not a right to sell, sublicense or
-relicense Gewu.
+You may share original and modified versions, derivative works and patches free
+of charge for those purposes, in source or binary form, under the same research-use
+terms with retained copyright and third-party notices. Identify the base version,
+mark your changes and their dates, and do not present a modified version as an
+official release or imply the authors' endorsement. Public research forks and
+pull requests within these terms need no separate permission or CLA. Recipients
+receive permission for the original code directly under the license; distributing
+your changes under the same terms does not give anyone unrestricted commercial
+rights or transfer ownership of those changes.
 
 ## What requires written authorization
 
@@ -72,9 +72,17 @@ license.
 
 ## Future contributions and commercial releases
 
-The authors retain the right to license the code they own commercially.
-They do not automatically acquire a contributor's ownership or commercial
-relicensing rights through a pull request. Before accepting external code,
-maintainers must resolve the contribution's rights in a separate written
-agreement if required for the intended commercial licensing model. This page
-is not a copyright assignment or a contributor license agreement.
+The authors retain the right to license code they own or are authorized to
+license commercially. A pull request under the research license does not
+automatically provide additional commercial sublicensing or relicensing rights.
+Before merging external contributions, maintainers must confirm the contributor's
+authority and obtain the additional written grant needed for the project's
+commercial licensing model. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+This merge requirement does not restrict research users from independently
+publishing modifications permitted by LICENSE. No finalized CLA, signature
+collection process or commercial grant from an external contributor is currently
+established by these documents. The intended agreement should preserve contributor
+copyright while expressly addressing commercial use, sublicensing, relicensing
+and any intended transfer to a future project entity. It needs legal review and
+actual agreement; submitting a PR is not treated as signing it.
