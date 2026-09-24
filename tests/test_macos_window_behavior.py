@@ -271,7 +271,9 @@ class MacosWindowBehaviorTests(unittest.TestCase):
 
         self.assertIn("@interface GewuInsightWindow : NSWindow", source)
         self.assertIn('setObject:@"None" forKey:@"AppleActionOnDoubleClick"', source)
-        self.assertNotIn("- (void)sendEvent:(NSEvent *)event", source)
+        event_dispatch = source.split("- (void)sendEvent:(NSEvent *)event", 1)[1].split("- (void)beginNativeWindowDrag", 1)[0]
+        self.assertIn("[super sendEvent:event]", event_dispatch)
+        self.assertNotIn("performWindowDragWithEvent", event_dispatch)
         self.assertNotIn("handleTitlebarDoubleClickAction", source)
         self.assertNotIn("titlebarDoubleClickHandler", source)
         self.assertNotIn("distanceFromTop <= 40.0", source)

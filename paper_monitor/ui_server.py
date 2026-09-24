@@ -59248,33 +59248,37 @@ INDEX_HTML = """<!doctype html>
       const region = $("windowDragRegion");
       const handler = window.webkit?.messageHandlers?.windowDrag;
       if (!region || !handler) return;
-      let dragging = false;
+      let pending = null;
       const post = (type, event) => {
-        handler.postMessage({type, screenX: event.screenX, screenY: event.screenY});
+        handler.postMessage({type, clientX: event.clientX, clientY: event.clientY});
       };
       region.addEventListener("pointerdown", (event) => {
         if (event.button !== 0 || event.target !== region) return;
-        dragging = true;
+        pending = {pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY};
         region.setPointerCapture?.(event.pointerId);
-        post("begin", event);
         event.preventDefault();
       });
       region.addEventListener("pointermove", (event) => {
-        if (!dragging) return;
-        post("move", event);
+        if (!pending || event.pointerId !== pending.pointerId) return;
+        // A click stays in WebKit so double-click zoom/restore is unchanged.
+        if (Math.hypot(event.clientX - pending.clientX, event.clientY - pending.clientY) < 3) return;
+        const start = pending;
+        pending = null;
+        region.releasePointerCapture?.(event.pointerId);
+        post("begin", start);
         event.preventDefault();
       });
       const stop = (event) => {
-        if (!dragging) return;
-        dragging = false;
-        post("end", event);
+        if (!pending || event.pointerId !== pending.pointerId) return;
+        pending = null;
         region.releasePointerCapture?.(event.pointerId);
       };
       region.addEventListener("pointerup", stop);
       region.addEventListener("pointercancel", stop);
+      region.addEventListener("lostpointercapture", stop);
       region.addEventListener("dblclick", (event) => {
         if (event.button !== 0 || event.target !== region) return;
-        dragging = false;
+        pending = null;
         post("toggleFill", event);
         event.preventDefault();
         event.stopPropagation();

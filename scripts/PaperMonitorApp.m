@@ -537,9 +537,35 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @end
 
 @interface GewuInsightWindow : NSWindow
+@property(nonatomic, strong) NSEvent *pendingWindowDragMouseDown;
+- (void)beginNativeWindowDragAtClientPoint:(NSPoint)point inView:(NSView *)view;
 @end
 
 @implementation GewuInsightWindow
+
+- (void)sendEvent:(NSEvent *)event {
+    // WebKit's message arrives asynchronously. Retain the original AppKit
+    // mouse-down, while leaving all event dispatch and hit testing unchanged.
+    if (event.type == NSEventTypeLeftMouseDown) self.pendingWindowDragMouseDown = event;
+    else if (event.type == NSEventTypeLeftMouseUp) self.pendingWindowDragMouseDown = nil;
+    [super sendEvent:event];
+}
+
+- (void)beginNativeWindowDragAtClientPoint:(NSPoint)point inView:(NSView *)view {
+    NSEvent *event = self.pendingWindowDragMouseDown;
+    self.pendingWindowDragMouseDown = nil;
+    if (!event || event.window != self || view.window != self
+        || event.type != NSEventTypeLeftMouseDown
+        || (self.styleMask & NSWindowStyleMaskFullScreen)) return;
+    NSPoint origin = [view convertPoint:event.locationInWindow fromView:nil];
+    NSPoint clientOrigin = NSMakePoint(origin.x,
+        view.isFlipped ? origin.y : NSHeight(view.bounds) - origin.y);
+    if (!NSPointInRect(origin, view.bounds) || !isfinite(point.x) || !isfinite(point.y)
+        || hypot(clientOrigin.x - point.x, clientOrigin.y - point.y) > 2.0) return;
+    // Window Server owns the drag, including edge tiling and Spaces switching.
+    // It may consume mouse-up, so no application drag loop remains to stop.
+    [self performWindowDragWithEvent:event];
+}
 
 @end
 
@@ -578,9 +604,6 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @property(nonatomic, strong) NSMenuItem *citationNamingItem;
 @property(nonatomic, strong) NSMenuItem *listViewItem;
 @property(nonatomic, strong) NSMenuItem *tableViewItem;
-@property(nonatomic) BOOL windowDragging;
-@property(nonatomic) NSPoint windowDragStartPoint;
-@property(nonatomic) NSRect windowDragStartFrame;
 @property(nonatomic) NSRect windowRestoreFrame;
 @property(nonatomic) BOOL trafficLightLayoutScheduled;
 @property(nonatomic) BOOL trafficLightLayoutInProgress;
@@ -1048,38 +1071,20 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     if (![message.name isEqualToString:@"windowDrag"] || ![message.body isKindOfClass:[NSDictionary class]]) {
         return;
     }
+    if (message.webView != self.webView || !message.frameInfo.isMainFrame) return;
     NSDictionary *payload = (NSDictionary *)message.body;
     NSString *type = [payload[@"type"] isKindOfClass:[NSString class]] ? payload[@"type"] : @"";
-    NSNumber *screenXNumber = [payload[@"screenX"] isKindOfClass:[NSNumber class]] ? payload[@"screenX"] : nil;
-    NSNumber *screenYNumber = [payload[@"screenY"] isKindOfClass:[NSNumber class]] ? payload[@"screenY"] : nil;
-    if (!screenXNumber || !screenYNumber) {
-        return;
-    }
-    NSPoint point = NSMakePoint(screenXNumber.doubleValue, screenYNumber.doubleValue);
     if ([type isEqualToString:@"toggleFill"]) {
-        self.windowDragging = NO;
         [self toggleMainWindowFill];
         return;
     }
-    if ([type isEqualToString:@"begin"]) {
-        self.windowDragging = YES;
-        self.windowDragStartPoint = point;
-        self.windowDragStartFrame = self.window.frame;
-        return;
+    if ([type isEqualToString:@"begin"] && [self.window isKindOfClass:GewuInsightWindow.class]) {
+        NSNumber *x = [payload[@"clientX"] isKindOfClass:NSNumber.class] ? payload[@"clientX"] : nil;
+        NSNumber *y = [payload[@"clientY"] isKindOfClass:NSNumber.class] ? payload[@"clientY"] : nil;
+        if (!x || !y) return;
+        [(GewuInsightWindow *)self.window beginNativeWindowDragAtClientPoint:NSMakePoint(x.doubleValue, y.doubleValue)
+            inView:self.webView];
     }
-    if ([type isEqualToString:@"end"] || [type isEqualToString:@"cancel"]) {
-        self.windowDragging = NO;
-        return;
-    }
-    if (![type isEqualToString:@"move"] || !self.windowDragging) {
-        return;
-    }
-    CGFloat dx = point.x - self.windowDragStartPoint.x;
-    CGFloat dy = point.y - self.windowDragStartPoint.y;
-    NSRect frame = self.windowDragStartFrame;
-    frame.origin.x += dx;
-    frame.origin.y -= dy;
-    [self.window setFrame:frame display:YES];
 }
 
 - (void)showAuthorPhotoChooserForAuthorId:(NSNumber *)authorId {
