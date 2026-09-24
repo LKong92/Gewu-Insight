@@ -45,6 +45,7 @@ IMAGE_ROUTES = {
     "/user-guide-assets/add-to-library-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "add-to-library-settings.png",
     "/user-guide-assets/website-links.png": ROOT / "assets" / "user-guide" / "screenshots" / "website-links.png",
     "/user-guide-assets/ai-access.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-access.png",
+    "/user-guide-assets/ai-write-permissions.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-write-permissions.png",
     "/user-guide-assets/ai-new-connection.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-new-connection.png",
     "/user-guide-assets/pdf-rename-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "pdf-rename-settings.png",
     "/user-guide-assets/font-size.png": ROOT / "assets" / "user-guide" / "screenshots" / "font-size.png",

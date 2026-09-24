@@ -186,7 +186,7 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
 
-Version 1.0.0 · Build 1 · September 22, 2026 · Current workflow edition
+Version 1.0.0 · Build 1 · September 24, 2026 · Current workflow edition
 
 \section{Why this workspace exists}\label{why-this-workspace-exists}
 
@@ -504,6 +504,8 @@ Click a top tab to change workspaces and focus that tab. Left/Right then switch 
 
 The compact, flat search control at the top right expands on hover or focus. Each research workspace retains its own query; clear it with ×. On macOS, double-click only blank title-bar space to zoom or restore the window. Tabs, search and other controls do not resize it.
 
+Drag the same blank top area to move the window using macOS window movement. With a neighboring desktop available, hold the dragged window at the left or right screen edge to let macOS move it between desktops. Desktop switching and edge tiling follow your macOS configuration. Start from blank space, not a tab, search field or button.
+
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
 \begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.19\textwidth}>{\RaggedRight\arraybackslash}p{0.29\textwidth}>{\RaggedRight\arraybackslash}p{0.36\textwidth}@{}}
@@ -640,7 +642,7 @@ Folder Loader and ordinary file import are designed to preserve the external sou
 \end{enumerate}
 
 \begin{GewuResult}
-\textbf{Result.} The paper now has a cataloged paper record, a stable Gewu Key, and a Library placement. It may have no local file; that cataloged-only state is valid. A file resource exists only after a file is imported, downloaded, or attached.
+\textbf{Result.} The paper now has a cataloged paper record, a stable Gewu Key, and a Library placement. A cataloged paper may have no local file; that state is valid. A file resource exists only after a file is imported, downloaded, or attached. An independent non-PDF file instead uses an internal storage key without a public Gewu Key in Paper Details.
 \end{GewuResult}
 
 \section{Understand what may now exist}\label{understand-what-may-now-exist}
@@ -943,7 +945,7 @@ When the available evidence is insufficient or contradictory, separate candidate
 
 A network observation can be transient while acquisition is running. Once a result is cataloged as a shared paper record, it has a Gewu Key even if a particular Monitor view does not display that key. A Monitor result may still have no local Paper Files because no file has been downloaded or attached; adding it to Library creates a visible placement rather than inventing a new scholarly identity.
 
-Gewu Insight also uses the same catalog and resource infrastructure for an imported standalone file whose scholarly identity is not yet known. In that case, the catalog record preserves the file and its relationships while later identification can enrich it.
+Gewu Insight also manages independent non-PDF files, such as Markdown overviews, spreadsheets and images. These ordinary files have an internal storage key so that their location and attachments remain trackable, but the App does not display a scholarly Gewu Key for them. A PDF paper can have a public Gewu Key before its DOI or arXiv identity is known; a standalone Markdown note does not become a paper merely by being imported.
 
 \section{Identity corrections should preserve continuity}\label{identity-corrections-should-preserve-continuity}
 
@@ -1130,7 +1132,7 @@ The user-facing type is \textbf{Published version}. A later formal correction ca
 
 \section{Fingerprints and annotations}\label{fingerprints-and-annotations}
 
-When a PDF is imported, attached, or downloaded, its exact SHA-256, content-oriented fingerprint, annotation count, and annotated state are computed as the resource is registered. They do not depend on a later refresh. Exact SHA-256 answers ``are these bytes identical?'' Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.
+In the normal App PDF import, attachment and download workflows, exact SHA-256, content-oriented fingerprint, annotation count, and annotated state are computed as the resource is registered. They do not depend on a later refresh. Exact SHA-256 answers ``are these bytes identical?'' Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.
 
 Gewu Insight counts user-created comments and markup---such as highlights, notes, drawings, stamps, and form edits---as annotations. Structural PDF elements such as publisher hyperlinks, internal navigation links, and ordinary page actions do not make a freshly downloaded publisher or arXiv PDF \textbf{Annotated}.
 
@@ -1145,6 +1147,8 @@ The filesystem must expose practical paths and folders; the UI must expose the m
 
 Do not manually move or rename managed resources in Finder. The bytes may still exist, but the saved path and live workspace can disagree. Use an app-supported move, repair, or restore; do not assume a restart will rediscover an arbitrary manual move.
 \end{quote}
+
+The separate \hyperref[ai-access]{MCP import workflow} requires metadata from the AI and performs file integrity checks without the full PDF identification or image-fingerprint workflow. It never starts Resolve as part of import.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[paper-files]{Understand Paper Files} · \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[storage-model]{How Gewu Insight Stores Files}
@@ -1509,6 +1513,8 @@ A Space with an open folder. AI remains the heading across its folder and conten
 
 \end{minipage}\par\medskip
 
+\textbf{Renaming a managed folder or Space also renames its local storage.} Use the App's Rename command so its main directory, mirrored Associated Files paths and shortcuts stay consistent. Existing paper identities, file contents, classifications and Default choices are retained. A busy-file message means the operation could not finish yet; allow the active file operation to finish and retry. Renaming a Shortcut changes its label rather than its target folder.
+
 \subsection{Choose the right structure}\label{choose-the-right-structure}
 
 {\def\LTcaptype{none} % do not increment counter
@@ -1537,7 +1543,7 @@ Space & An independent project, course, collaboration, or temporary collection. 
 \item
   \textbf{For a move, drag the item to its destination.} Wait for the destination to indicate it can receive the item, then release.
 \item
-  \textbf{Check the breadcrumb and Paper Details.} The visible path and folder membership update immediately.
+  \textbf{Check the breadcrumb and Paper Details.} After the operation completes, the visible path and folder membership reflect the new location.
 \end{enumerate}
 
 Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style. With the keyboard, press \texttt{{\symbolfont ←}} from the leftmost content column to focus this rail, use \texttt{{\symbolfont ↑}} and \texttt{{\symbolfont ↓}} to open another source, then press \texttt{{\symbolfont →}} to enter its content.
@@ -1673,7 +1679,7 @@ In either view, Control-click the folder contents and choose \textbf{Sort by Nam
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Click \textbf{Title}, \textbf{Authors}, \textbf{Year}, or \textbf{Journal}.} The first click sorts ascending: displayed text alphabetically, Year numerically.
+  \textbf{Click \textbf{Title}, \textbf{Authors}, \textbf{Year}, \textbf{Journal}, or \textbf{Time added}.} The first click sorts ascending: displayed text alphabetically, Year numerically, or Time added from oldest to newest.
 \item
   \textbf{Click again to reverse.} The header arrow shows the direction.
 \item
@@ -1682,12 +1688,14 @@ In either view, Control-click the folder contents and choose \textbf{Sort by Nam
 
 Folders stay above papers, and missing metadata stays below known values in either direction. Sorting preserves the selected paper, its identity and its files.
 
+\textbf{Time added} shows when that folder or paper placement was added, in local date and time. It is separate from the publication date and the file's modification time. A Shortcut shows the original placement's time; renaming, moving or refreshing metadata does not reset it. A new copied placement has its own addition time. Click again for newest first. In a narrow window, scroll the table horizontally to reach all five headers; the headers and rows move together.
+
 \par\noindent\begin{minipage}{\linewidth}
 
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/c78a/PaperMonitor-20260516/assets/user-guide/screenshots/library-table.png}\end{center}
 
 \begin{GewuCaption}
-Table View sorting. The Year arrow shows descending order. The same headers work in Library and shortcuts. This existing paper\textquotesingle s Published version remains Default, with a separate Summary in Paper Files.
+Table View sorting. The Time added arrow shows newest first. All five sortable headers are shared by Library, Spaces and shortcuts. This existing paper\textquotesingle s Published version remains Default, with a separate Summary in Paper Files.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -2037,7 +2045,7 @@ Deleting a private managed attachment moves its bytes to macOS Trash before remo
 
 If an imported PDF was matched to the wrong paper, Control-click its card and choose \textbf{Move to Another Paper}. Search the destination in Library by title, DOI, or Gewu Key, select it, and choose \textbf{Move File}. To make it independent, choose \textbf{Create Paper from File}, enter a title, and choose \textbf{Create Paper}. The new paper appears in the current Library folder with a new Gewu Key and no guessed DOI.
 
-Only the selected file changes ownership when using these card commands. Its bytes, file ID, classification and source information remain intact; a name collision may require a unique filename. A source with remaining files keeps its identity and selects another eligible Default. An emptied, unshared source is removed as an independent Library item rather than left as a fileless link. Protected shared relationships can prevent that removal. The new independent paper receives a new Gewu Key and uses the file as its Default. Managed paths follow the change: an attachment goes into the destination bundle in Associated Files; a newly independent file goes into its main folder. Explicit reassignment is respected on repeat imports. Historical analysis text is not rewritten.
+Only the selected file changes ownership when using these card commands. Its bytes, file ID, classification and source information remain intact; a name collision may require a unique filename. A source with remaining files keeps its identity and selects another eligible Default. An emptied, unshared source is removed as an independent Library item rather than left as a fileless link. Protected shared relationships can prevent that removal. For a PDF, the new independent paper receives a new Gewu Key and uses the file as its Default. A detached non-PDF remains an ordinary standalone file with an internal storage key and no public Gewu Key in the App. Managed paths follow the change: an attachment goes into the destination bundle in Associated Files; a newly independent file goes into its main folder. Explicit reassignment is respected on repeat imports. Historical analysis text is not rewritten.
 
 AI Access can perform file ownership moves and rename files only with the separate move or rename permissions described in \hyperref[ai-access]{AI Access}. Reading and adding analyses do not grant these permissions. Existing file contents cannot be edited or overwritten through AI Access.
 
@@ -2102,7 +2110,7 @@ Switching between PDFs in the built-in viewer can briefly flash while the next d
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/c78a/PaperMonitor-20260516/assets/user-guide/screenshots/markdown-quick-look.png}\end{center}
 
 \begin{GewuCaption}
-Built-in Markdown Quick Look. This existing README.md renders headings and links. Remote images remain explicit links; nearby local images can appear inline.
+Built-in Markdown Quick Look. This existing paper note shows Source record collapsed and Properties expanded. Authors, tags and long values stay readable within the window; collapse Properties to reach the formatted body. The preview does not modify the note or Paper Details.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -2131,6 +2139,12 @@ Use & Best for \\
 
 Previewing is read-only from Gewu Insight\textquotesingle s perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change file type, annotation state, source, Default status, or the SQLite paper record.
 \end{quote}
+
+\subsection{Read Markdown properties and long notes}\label{read-markdown-properties-and-long-notes}
+
+Leading YAML metadata is displayed as collapsible \textbf{Properties}. An AI note's separate provenance header appears under \textbf{Source record}. Expand either to inspect its values; collapse it to reach the body. These are values saved in the note, not an instruction to overwrite Paper Details. Invalid metadata falls back to readable source text.
+
+The Markdown preview opens at a reading width that fits the window. Text and long property values wrap; wide tables and code blocks scroll within their own area. Markdown does not need the PDF thumbnail rail. Rendering is local, and an unchanged note can reuse a validated in-memory preview. If Loading Markdown does not finish, follow the \hyperref[troubleshooting]{retry guidance}. Obsidian-specific plugins, diagrams and other extensions are not a guarantee of the built-in reader.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[quick-look-settings]{Quick Look Settings} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[troubleshooting]{Troubleshooting}
@@ -2302,7 +2316,7 @@ A response is not accepted merely because it begins with \texttt{\%PDF-}. Struct
 
 \subsection{Classification follows the file that actually arrived}\label{classification-follows-the-file-that-actually-arrived}
 
-A publisher download is classified from the file and source actually returned. A corrected published version outranks a published version automatically; a publisher reference, First Release, or accepted preview remains an accepted manuscript. A correction notice remains a separate peer and never becomes automatic merely because it came from a publisher.
+A publisher download is classified from the file and source actually returned. A corrected published version outranks a published version automatically; a publisher reference or accepted preview remains an accepted manuscript. Science PDFs recognized as First Release are classified as Accepted manuscript in Gewu, even when the paper metadata already names Science. A correction notice remains a separate peer and never becomes automatic merely because it came from a publisher.
 
 A PDF URL stored in bibliographic metadata is only a retrieval lead. It does not create a Paper Files row until a download actually succeeds, the returned bytes pass validation, and a local resource is registered.
 
@@ -2313,6 +2327,12 @@ If a download is skipped because the local bytes already exist, that skipped ope
 
 A Monitor result is not forced into a Library placement. Where download is available, a local resource can belong to the cataloged paper even before you add that paper to Library or My Publications.
 \end{quote}
+
+\subsection{Science main article and supplementary PDFs}\label{science-main-article-and-supplementary-pdfs}
+
+The Science download workflow obtains and validates the main article first, then appends available supplementary PDFs to the combined reading file. A supplement, reporting checklist or supplementary-only response cannot stand in for the main article. If the main PDF cannot be obtained, the download reports failure instead of registering a supplement as a successful article download.
+
+Inspect the combined PDF and any download message to check what was actually retrieved; access to the article webpage does not guarantee access to every PDF. Non-PDF material is not converted into PDF pages. The file type follows the main article's version, while the displayed filename uses the returned publisher name or a meaningful paper-based fallback. Re-downloading preserves other files and an explicitly chosen Default.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
@@ -2346,7 +2366,7 @@ If a data, image, presentation, or other file was imported as its own Library it
 
 \subsection{Make a Paper Files resource independent again}\label{make-a-paper-files-resource-independent-again}
 
-Drag a resource\textquotesingle s icon or filename from Paper Files onto a Library folder or that folder\textquotesingle s content area. The file leaves its former paper, receives an independent paper record with a new Gewu Key, and moves from Associated Files into the destination\textquotesingle s main folder. Control-clicking the resource and choosing \textbf{Create Paper from File} performs the same separation in the current folder, with an editable title. The former paper keeps its remaining files.
+Drag a resource\textquotesingle s icon or filename from Paper Files onto a Library folder or that folder\textquotesingle s content area. The file leaves its former paper and moves from Associated Files into the destination\textquotesingle s main folder. A PDF becomes an independent paper with a new Gewu Key; a non-PDF becomes an ordinary standalone file with only an internal storage key. Control-clicking the resource and choosing \textbf{Create Paper from File} performs the same separation in the current folder, with an editable title. The former paper keeps its remaining files.
 
 To transfer just one resource between existing papers, use \textbf{Move to Another Paper} or drag it into the other paper\textquotesingle s Paper Files area. A Library paper-row drag adopts the source paper\textquotesingle s files as a group; it removes the former independent identity only when the conversion is safe. A single-file RTF therefore disappears from its former folder and becomes one resource of the destination paper.
 
@@ -2724,6 +2744,10 @@ Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf proje
 
 The Overleaf option creates a project ZIP, copies it to the Desktop, and opens Overleaf using \hyperref[website-link-settings]{Website Links}. The status message reports the saved path. It does not upload your files or create an Overleaf project automatically; import the ZIP yourself on the website.
 
+\subsection{See where a reordered row will land}\label{see-where-a-reordered-row-will-land}
+
+When dragging a publication to change its manual order, a translucent copy follows the pointer. A blue circle and horizontal line mark the insertion position. The other rows stay in place during the drag; release to apply the order. This changes the publication list order, not the paper's file location.
+
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[citation-settings]{Open Source Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
 \end{GewuRelated}
@@ -3000,6 +3024,10 @@ Add Monitored Author. Enter an author name or a profile URL. The empty form is r
 
 \end{minipage}\par\medskip
 
+\subsection{Reorder monitored authors}\label{reorder-monitored-authors}
+
+Drag an author in the left list to change its order. A translucent preview follows the pointer, and a blue circle with a horizontal line shows where it will be inserted. Other authors stay in place until you release. The order does not change the author's profile source or publication records.
+
 \subsection{Review updates}\label{review-updates}
 
 Later refreshes can mark newly discovered publications as unread. Use the \textbf{New} filter and other author/result controls to focus the list. Select \textbf{Date} or \textbf{Citations} to sort; selecting the active sort reverses its direction. \textbf{Conferences · n} opens conference publications in a separate, independently scrolling popover, so they are not missing from the ordinary article list. Close the popover with its close control or Escape.
@@ -3010,11 +3038,17 @@ Control-click \textbf{New} and choose \textbf{Read All}. For one selected author
 
 Opening this tab reuses available local cards, including older cached lists, while the background checks for changes. It does not start another Scholar fetch. Background list updates retain your selection, reading position, open controls and details.
 
-The bottom bar keeps publication checks separate from \textbf{Author metadata · All authors}. Metadata counts cover all monitored authors, not just the selected author, and are recalculated from current missing information even during a daily pause. Ready work, retry waits and papers needing manual lookup are distinct; hover over shortened text for its full message.
+The bottom bar keeps publication checks separate from \textbf{Author metadata · All authors}. \textbf{Checking status...} means that these summary counts are still loading; it does not mean all papers are being repaired. Metadata counts cover all monitored authors, not just the selected author, and are recalculated from current missing information even during a daily pause. Ready work, retry waits and papers needing manual lookup are distinct; hover over shortened text for its full message.
 
 Automatic DOI and abstract completion uses other metadata services, independently of Scholar profile checks. It rotates between authors and reuses shared paper identities: up to 20 papers per batch and 80 per local day, yielding between papers after about two minutes and resting at least five minutes between batches. Recent attempts wait seven days before automatic retry, with at most three automatic attempts per paper. Papers still unresolved then need manual lookup; completed papers are not periodically refreshed. Progress reservations and rest times survive restarting; explicit identifier commands remain available separately.
 
 Scholar requests remain serialized, with 4--8 seconds between requests, 12--24 seconds between profile pages and 45--90 seconds between automatic author checks. Every request checks the shared workspace cooldown again before sending, including My Publications imports. Access restrictions pause Scholar for 24 hours; manual actions and restarts do not bypass or reset that pause. This is Gewu\textquotesingle s protective waiting period, not a promised unblock time from Google.
+
+A red \textbf{Google Scholar paused} message means the shared Scholar access cooldown is active. New restriction messages may identify HTTP 403, HTTP 429 or a verification page; an older generic message may lack that detail. A VPN exit can affect access, but the pause text alone cannot identify the cause. Changing networks or restarting does not clear the saved waiting period. Cached papers and non-Scholar metadata sources remain available.
+
+\subsection{A refresh reports identity review}\label{a-refresh-reports-identity-review}
+
+If one publication conflicts with an existing identity, the refresh preserves existing papers and files and continues with the remaining publications. The result reports how many need review and identifies the first affected record, Gewu Key and reason. Read the full message before editing: incomplete identity evidence, contradictory metadata and a protected merge are different cases. Compare the title, authors and identifiers; do not delete files or create another copy to silence the warning. A review message can persist after the refresh finishes and is not itself a running repair task.
 
 \subsection{Recover after a network interruption}\label{recover-after-a-network-interruption}
 
@@ -3227,7 +3261,7 @@ WebKit follows macOS networking without changing proxies/Clash. When system prox
 \item
   \textbf{Choose the PDF in Details.} For a directly opened PDF or a detected embedded PDF (such as an IEEE full-text viewer), Gewu reads the loaded original and parses its information again. It does not request the PDF from the publisher again. If several loaded PDFs are present, select the intended one first. \textbf{Use Loaded PDF} retries this local read. If WebKit cannot supply the complete original, an error is shown; \textbf{Download PDF Again} explicitly requests another download. On an article page, select a detected link and click \textbf{Get PDF}, or choose a local PDF. Each file must be readable and no larger than 128 MB. Check the filename and leave \textbf{Include this PDF in Paper Files} selected to attach it.
 \item
-  \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
+  \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}, while recognized Science First Release PDFs suggest \textbf{Accepted manuscript}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
 \end{enumerate}
 
 Opening Details, identifying or cancelling imports nothing. Save reuses an existing active Library or Space placement, preferring the selected occurrence of that same paper. Attaching a PDF does not add a root-level entry. To add another location, explicitly choose and confirm its folder. Papers with no active placement use the folder saved in \hyperref[add-to-library-settings]{Setting \textgreater{} Add to Library}, initially \textbf{Library / unsorted}, unless you confirm another folder. An unavailable saved default falls back to unsorted. Review creates no placement; the destination is checked again on Save. Paper Files refreshes immediately. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. \textbf{Show in Library} selects the saved occurrence. Browser keeps the webpage.
@@ -3783,7 +3817,7 @@ The token is shown only after creation. Store it in client configuration, not in
 \begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/c78a/PaperMonitor-20260516/assets/user-guide/screenshots/ai-new-connection.png}\end{center}
 
 \begin{GewuCaption}
-New AI connection. Set the connection name, accessible papers, directory-browsing permission, file-reading permission, analysis-writing permission and expiry before Create Connection. This example leaves optional permissions unchecked.
+New AI connection. The current blank form separates basic permissions from optional write operations. All optional choices are unchecked here. Scroll further down to choose writable collections and expiry, then use Create Connection when ready.
 \end{GewuCaption}
 
 \end{minipage}\par\medskip
@@ -3826,6 +3860,16 @@ Open \textbf{Setting \textgreater{} AI Access} and expand \textbf{Edit write per
 \textbf{Saved} remains beside the editor title even when collapsed. Saved selections survive closing Settings and restarting the App. \textbf{Unsaved changes} requires saving; \textbf{Not saved} retains your draft for retry. Earlier child-only grants show \textbf{Some subfolders only} and stay limited until you explicitly select their root. No write permission is added automatically.
 
 Selected write collections also become readable; other existing read permissions and tokens stay unchanged. An empty selection grants no existing write destination. \textbf{Create Spaces} grants access only to each new Space this connection creates. Choose directory browsing separately if the AI needs to explore the tree.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/c78a/PaperMonitor-20260516/assets/user-guide/screenshots/ai-write-permissions.png}\end{center}
+
+\begin{GewuCaption}
+Saved write permissions. The expanded editor shows operations, blue writable collections, Save Write Access and the saved result. These are this existing connection's choices, not the defaults for a new connection. My Publications is absent from writable collections. Only enable the operations and locations needed for your task.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -3985,7 +4029,7 @@ This example connects a local Codex client to Gewu Insight on the same Mac. Keep
   Save, then choose \textbf{Restart} to reload the MCP connection.
 \end{enumerate}
 
-These fields follow \href{https://learn.chatgpt.com/docs/extend/mcp?surface=cli}{OpenAI\textquotesingle s MCP configuration documentation} (checked September 9, 2026). The same local Codex host shares MCP configuration across the desktop app, CLI and IDE extension.
+These fields follow \href{https://learn.chatgpt.com/docs/extend/mcp?surface=cli}{OpenAI\textquotesingle s MCP configuration documentation} (checked September 24, 2026). The same local Codex host shares MCP configuration across the desktop app, CLI and IDE extension.
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -4569,6 +4613,14 @@ This label is a path-state warning, not a failed metadata lookup: SQLite still k
 
 A large or previously unseen PDF may need an initial structural read and thumbnail render. The main document should appear before the full thumbnail strip. Leave the preview open briefly instead of pressing Space repeatedly; later opens can reuse page information and cached thumbnails. If the viewer never produces a page, use \textbf{Open in Preview} to check whether the file itself is valid.
 
+\section{Markdown stays on Loading Markdown}\label{markdown-stays-on-loading-markdown}
+
+The note is read and formatted locally. Unchanged notes may reopen from a validated memory cache; first opens and changed files need a fresh render. A stalled preview shows an error after about 15 seconds. Close and reopen it to retry, or open the file directly in its normal application. Very large notes show a bounded, marked preview. No metadata refresh, DOI lookup or reimport is needed just to preview Markdown.
+
+\section{Markdown begins with unexpected metadata}\label{markdown-begins-with-unexpected-metadata}
+
+Collapse \textbf{Source record} and \textbf{Properties} to read the body. If a header is malformed, the reader may show its escaped source instead of properties. The preview does not rewrite the original note. Wide tables and code blocks have their own horizontal scrolling.
+
 \section{PDF switching flashes in built-in Quick Look}\label{pdf-switching-flashes-in-built-in-quick-look}
 
 The built-in preview can flash as it loads another PDF. Open \textbf{Setting \textgreater{} Quick Look Settings}, choose \textbf{macOS Quick Look for all files}, and Save to use the system panel for rapid comparison. Up and Down still follow the selected files. This changes the preview method; it does not alter your PDF files or default-file choices.
@@ -4608,6 +4660,10 @@ Try a title fragment, surname or exact identifier. Library supports spelling tol
 \section{A monitor shows no papers}\label{a-monitor-shows-no-papers}
 
 Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, allow scheduled source-level retries to finish, or use the selected subject\textquotesingle s refresh command when a manual retry is needed. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.
+
+\section{Author Monitor shows a red Scholar pause}\label{author-monitor-shows-a-red-scholar-pause}
+
+Check the stated retry time and full status message. A saved access cooldown survives restart and network changes; it is separate from a temporary connection failure or the all-author metadata counter. See \hyperref[author-monitor]{Author Monitor status and recovery}. Repeated refreshes do not remove a cooldown. A completed refresh that says papers need identity review instead concerns those records' identifiers or metadata, not the network.
 
 \section{A journal count and the visible cards disagree}\label{a-journal-count-and-the-visible-cards-disagree}
 

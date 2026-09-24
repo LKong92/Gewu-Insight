@@ -299,8 +299,8 @@ class UserGuideTests(unittest.TestCase):
             "Understand what may now exist",
             "Verify the identity before enriching it",
             "Complete the first Paper Files bundle",
-            "It may have no local file",
-            "cataloged-only state is valid",
+            "may have no local file",
+            "that state is valid",
             "Cataloged and organized",
             "File-backed",
             "Show in Finder",
@@ -767,6 +767,7 @@ class UserGuideTests(unittest.TestCase):
                 "/user-guide-assets/loader-metadata.png",
                 "/user-guide-assets/loader-identifiers.png",
                 "/user-guide-assets/ai-new-connection.png",
+                "/user-guide-assets/ai-write-permissions.png",
                 "/user-guide-assets/browser-home.png",
                 "/user-guide-assets/save-gewu-compact.png",
                 "/user-guide-assets/save-gewu-details.png",
@@ -784,7 +785,7 @@ class UserGuideTests(unittest.TestCase):
         )
 
         screenshot_figures = soup.select("figure.guide-screenshot")
-        self.assertEqual(len(screenshot_figures), 35)
+        self.assertEqual(len(screenshot_figures), 36)
         self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:

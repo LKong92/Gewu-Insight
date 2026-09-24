@@ -435,7 +435,7 @@ export CROSSREF_MAILTO=your.name@example.edu
 Gewu Keys. It is off by default. Create a connection with a paper collection and
 permissions, then copy its MCP configuration into your AI client. Reading file
 contents, browsing directories, adding analyses, creating Spaces/folders,
-importing prepared files and standalone Resolve have separate permissions.
+importing prepared files, moving or renaming folders/files, and standalone Resolve have separate permissions.
 Imports require AI-supplied metadata, reuse DOI/arXiv identities, and preserve
 existing files and Defaults. Write destinations are explicitly selected in AI Access; ordinary App use
 needs no AI token. See [AI Access and API v1](docs/AI_ACCESS.md) for setup, limits
@@ -445,7 +445,8 @@ Choose **Help → User Guide** inside the app. The offline manual covers:
 
 - product philosophy and the persistent paper object;
 - SQLite, visible files, provenance, and safe state changes;
-- Library, Spaces, Paper Files, and version selection;
+- Library and Spaces, five-column Table View including Time added, Paper Files, and version selection;
+- Markdown properties in Quick Look and visible insertion positions for author/publication sorting;
 - Folder Loader, portable export, backup, and migration;
 - My Publications and all three monitors;
 - Browser tabs, retained Home, local address suggestions, bookmarks, history,
