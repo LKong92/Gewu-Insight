@@ -9,6 +9,12 @@ The About illustration remains an identity/credits example; its earlier layout
 omits the new legal summary. Current permissions are stated in the guide text
 and complete LICENSE, so this wording-only change does not require recapture.
 
+September 25 naming follow-up: replace only `open-source.png` with the original
+App's renamed **Literature Data Source** dialog. The complete dialog is retained;
+only blurred surrounding workspace is cropped. Keys remain masked, no service
+controls or credentials are changed, and all other 35 screenshots are unchanged.
+The asset filename and help anchor remain stable for existing links.
+
 ## Capture rules and this revision
 
 - Use only the real original Gewu Insight App, never generated UI, test fixtures,
@@ -67,7 +73,7 @@ and complete LICENSE, so this wording-only change does not require recapture.
 | Browse, Bookmark, and Revisit Websites | [save-gewu-compact.png](../assets/user-guide/screenshots/save-gewu-compact.png) | Sep 16; reviewed Sep 24 | Save to Gewu: compact review. After the article and PDF have been identified, the compact panel keeps File type, Add to Library and the final save action visible. |
 | Browse, Bookmark, and Revisit Websites | [save-gewu-details.png](../assets/user-guide/screenshots/save-gewu-details.png) | Sep 16; reviewed Sep 24 | Save to Gewu: Details. Expanded Details identifies this existing Nature Physics article by its Gewu Key and DOI. Use Key and Automatic control the target; Use Loaded PDF reuses the original file. The PDF is Ready and classified as Published version before saving. |
 | Browse, Bookmark, and Revisit Websites | [library-destination-picker.png](../assets/user-guide/screenshots/library-destination-picker.png) | Sep 13; reviewed Sep 24 | Choose a Library destination. Read the columns from workspace to folder to subfolder. The bottom path follows the selection. Confirm selects a destination; Save to Library performs the import. |
-| Configure Open Source Settings | [open-source.png](../assets/user-guide/screenshots/open-source.png) | Sep 13; reviewed Sep 24 | Open Source Settings. Configure discovery and metadata services in one panel. Saved credentials remain masked; each service has its own Save, Test and Clear controls. |
+| Configure Literature Data Source | [open-source.png](../assets/user-guide/screenshots/open-source.png) | Sep 25 | Literature Data Source. Configure discovery and metadata services in one panel. Saved credentials remain masked; each service has its own Save, Test and Clear controls. |
 | Choose arXiv Discovery Scopes | [arxiv-scope.png](../assets/user-guide/screenshots/arxiv-scope.png) | Sep 13; reviewed Sep 24 | arXiv Scope Settings. Choose subject archives for future Journal Monitor discovery. Each group shows its category count; the displayed Condensed Matter selection is an example of a saved preference. |
 | Choose Which Research Fields Appear Separately | [field-settings.png](../assets/user-guide/screenshots/field-settings.png) | Sep 13; reviewed Sep 24 | Field Settings. Choose which research fields appear as separate filters. Unchecked fields remain searchable under Other Fields. |
 | Choose How Quick Look Opens Files | [quick-look-settings.png](../assets/user-guide/screenshots/quick-look-settings.png) | Sep 13; reviewed Sep 24 | Quick Look Settings. Choose built-in previews for all files, a mixed PDF-and-Markdown/native workflow, or macOS Quick Look for all supported files. |

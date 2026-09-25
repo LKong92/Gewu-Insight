@@ -66,9 +66,8 @@ Those rights do not create permission to commercially use Gewu. Changing the
 repository's visibility is a separate publication decision; installing this
 license does not change GitHub settings.
 
-The existing **Open Source Settings** menu configures scholarly discovery and
-metadata sources. Its name describes that settings panel, not Gewu's software
-license.
+**Setting → Literature Data Source** configures scholarly discovery and metadata
+services. Those services retain their own access policies and terms.
 
 ## Future contributions and commercial releases
 

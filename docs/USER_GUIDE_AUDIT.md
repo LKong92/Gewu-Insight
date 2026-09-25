@@ -4,6 +4,12 @@ Reviewed the complete 49-topic manual against product commit `e3e0a81` and the
 original running macOS App. The guide edition changes; product version remains
 1.0.0 / Build 1. This update changes documentation and illustrations only.
 
+September 25 naming follow-up: **Literature Data Source** is the current menu
+and dialog name. Update all guide references and the one settings screenshot;
+retain the `citation-settings` anchor, credential behavior, and all other images.
+This follow-up includes the corresponding native menu/UI text change, alongside
+the README reorganization and separate development guide.
+
 ## Scope and method
 
 Read every registered topic and reviewed all 35 existing screenshots. Cross-check
@@ -81,7 +87,7 @@ current behavior; a source or UI check does not imply a destructive live test.
 | [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Verify subject matching, numeric counts, stored windows, exclusions and add destination. |
 | [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Add reorder feedback, partial identity review and persisted status meaning; clarify global metadata counts and Scholar restriction/transport distinction without changing source routes. |
 | [Browse, Bookmark, and Revisit Websites](../paper_monitor/user_guide.html#browser) | Retain current live Browser/Save captures and loaded-PDF workflow; qualify Science First Release file-type suggestions. |
-| [Open Source Settings](../paper_monitor/user_guide.html#citation-settings) | Verify source controls, masked credential visibility and separate service tests. |
+| [Literature Data Source](../paper_monitor/user_guide.html#citation-settings) | Verify source controls, masked credential visibility and separate service tests. |
 | [arXiv Scope Settings](../paper_monitor/user_guide.html#arxiv-scope-settings) | Verify future discovery scope and grouped archive settings. |
 | [Field Settings](../paper_monitor/user_guide.html#field-settings) | Verify default fields, Other Fields grouping and unchanged records. |
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Use the current hybrid PDF-and-Markdown label; distinguish explicit all-native mode. |
@@ -134,8 +140,8 @@ copies and QA are kept outside the repository in `/private/tmp/gewu-guide-sep24/
 ## Initial licensing follow-up — September 24, 2026 (v1.0, superseded)
 
 The subsequent licensing-only revision adds the custom academic/non-commercial
-grant to Welcome and a dedicated final copyright page, clarifies that Open Source
-Settings names scholarly sources, and limits the artwork statement to rights the
+grant to Welcome and a dedicated final copyright page, clarifies the role of scholarly-source
+settings, and limits the artwork statement to rights the
 project actually owns. Private research modifications are permitted; public
 sharing is limited to unmodified official versions unless separately authorized.
 Commercial uses require prior written authorization. See

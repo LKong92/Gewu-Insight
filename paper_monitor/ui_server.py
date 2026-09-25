@@ -4027,7 +4027,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError:
             allowed = False
         if not allowed:
-            self.send_error_json(HTTPStatus.FORBIDDEN, "Reveal is available only from local Open Source Settings")
+            self.send_error_json(HTTPStatus.FORBIDDEN, "Reveal is available only from local Literature Data Source")
             return
         provider = payload.get("provider")
         if provider not in {"openalex", "semantic_scholar", "ads"}:
@@ -35534,7 +35534,7 @@ INDEX_HTML = """<!doctype html>
         <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="citationSettingsTitle">
           <div class="settings-modal-head">
             <div>
-              <h2 id="citationSettingsTitle">Open Source Settings</h2>
+              <h2 id="citationSettingsTitle">Literature Data Source</h2>
               <p>Manage sources for discovery, metadata, citations, and version matching.</p>
             </div>
             <button class="settings-modal-close" id="closeCitationSettings" type="button" title="Close settings">×</button>
@@ -57082,7 +57082,7 @@ INDEX_HTML = """<!doctype html>
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
       focusDialogSurface(backdrop);
-      $("citationSettingsStatus").textContent = "Loading open source settings...";
+      $("citationSettingsStatus").textContent = "Loading literature data source settings...";
       $("citationSettingsStatus").className = "citation-settings-status";
       $("openalexCitationSettingsStatus").textContent = "Loading OpenAlex settings...";
       $("openalexCitationSettingsStatus").className = "citation-settings-status";
@@ -57098,7 +57098,7 @@ INDEX_HTML = """<!doctype html>
       try {
         const res = await fetch("/api/settings/citation");
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not load open source settings");
+        if (!res.ok) throw new Error(data.error || "Could not load literature data source settings");
         updateCitationSettingsUi(data.ads || {});
         updateOpenalexSettingsUi(data.openalex || {});
         updateSemanticScholarSettingsUi(data.semantic_scholar || {});
@@ -57109,7 +57109,7 @@ INDEX_HTML = """<!doctype html>
         $("semanticScholarCitationSettingsStatus").textContent = semanticScholarSettingsStatusText(data.semantic_scholar || {});
         $("semanticScholarCitationSettingsStatus").className = `citation-settings-status${data.semantic_scholar?.configured ? " ok" : ""}`;
       } catch (error) {
-        $("citationSettingsStatus").textContent = error.message || "Could not load open source settings";
+        $("citationSettingsStatus").textContent = error.message || "Could not load literature data source settings";
         $("citationSettingsStatus").className = "citation-settings-status err";
         $("openalexCitationSettingsStatus").textContent = error.message || "Could not load OpenAlex settings";
         $("openalexCitationSettingsStatus").className = "citation-settings-status err";

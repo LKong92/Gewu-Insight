@@ -21,9 +21,10 @@
 | `PROJECT_STATE.md`、Guide 审查记录 | 仍只记录上一轮手册更新 | 记录本轮范围、证据与待确认事项 |
 
 `Info.plist` 和构建脚本中的原始版权归属及 All Rights Reserved 保留。
-界面标签 **Open Source Settings** 指文献数据源配置，不是软件许可证；
-本轮保留该控件、锚点和截图，在说明中澄清含义。第三方代码中的 MIT、BSD
-等许可文字也必须保留，不能全局替换“open source”。
+文献数据源配置面板已在 9 月 25 日更名为 **Literature Data Source**，
+以避免与软件许可证混淆；菜单、手册及该设置页截图同步更新，原有接口和
+帮助锚点保留。第三方代码中的 MIT、BSD 等许可文字仍保留，不全局替换
+“open source”。
 
 GitHub 只读检查结果：仓库为 private，description 为空、topics 为空，
 许可证识别为 `NOASSERTION`。没有已发布的开源简介需要撤下。

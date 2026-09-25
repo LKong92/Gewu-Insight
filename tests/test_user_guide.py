@@ -110,7 +110,7 @@ class UserGuideTests(unittest.TestCase):
             "Journal Monitor",
             "Subject Monitor",
             "Author Monitor",
-            "Open Source Settings",
+            "Literature Data Source",
             "arXiv Scope Settings",
             "Field Settings",
             "Quick Look Settings",
@@ -718,7 +718,7 @@ class UserGuideTests(unittest.TestCase):
     def test_guide_is_offline_searchable_and_printable(self) -> None:
         soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
         settings_text = soup.find("article", id="citation-settings").get_text(" ", strip=True)
-        self.assertIn("Configure Open Source Settings", settings_text)
+        self.assertIn("Configure Literature Data Source", settings_text)
         self.assertIn("fixed round dots by default", settings_text)
         self.assertIn("retrieved only on Show", settings_text)
         self.assertIn("cleared on Hide or when settings closes", settings_text)

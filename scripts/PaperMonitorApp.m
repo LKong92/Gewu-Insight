@@ -2144,7 +2144,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     aiAccessItem.target = self;
     NSMenuItem *arxivSettingsItem = [settingMenu addItemWithTitle:@"arXiv Scope Settings" action:@selector(openArxivSettings:) keyEquivalent:@""];
     arxivSettingsItem.target = self;
-    NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Open Source Settings" action:@selector(openCitationSettings:) keyEquivalent:@","];
+    NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Literature Data Source" action:@selector(openCitationSettings:) keyEquivalent:@","];
     citationSettingsItem.target = self;
     NSMenuItem *fieldSettingsItem = [settingMenu addItemWithTitle:@"Field Settings" action:@selector(openFieldSettings:) keyEquivalent:@""];
     fieldSettingsItem.target = self;
