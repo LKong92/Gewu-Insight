@@ -1,11 +1,13 @@
 # Gewu Insight
 
-**A local-first research workspace for discovering, organizing, reading, and
-building understanding from scholarly literature.**
+**A research workspace that keeps papers, their versions, and research context
+connected—from discovery to reuse.**
 
-Bring journal, topic, and author updates into a personal library. Keep each
-paper's PDFs, versions, supplements, and reading notes together, then return to
-the evidence as your research develops.
+Gewu Insight brings continuous literature discovery, organization, and reading
+into one workspace. Each paper retains a shared identity as metadata,
+publication versions, supporting files, and research context accumulate,
+building a lasting research record that researchers can inspect, revisit,
+and reuse.
 
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
@@ -191,8 +193,8 @@ exports do not replace the database. Back up the database **and all managed file
 roots together**, or back up the complete project while the App and service are
 stopped. See [backup and update instructions](docs/DEVELOPMENT.md#safe-updates-and-backups).
 
-Local-first does not mean offline-only. Discovery, metadata, citation counts,
-and publisher access use external services. Availability can depend on a
+The workspace uses a local-first architecture, with online services supporting
+discovery, metadata, citation counts, and publisher access. Availability can depend on a
 service's limits, the network or VPN exit address, and institutional access.
 Gewu uses pacing and cooldowns; it does not bypass paywalls or access controls.
 Configure optional service keys in **Setting → Literature Data Source**.
@@ -230,14 +232,26 @@ recorded separately from the product overview.
 
 ## Name and Chinese origin
 
-Gewu Insight is known in Chinese as **格物洞见**.
+Gewu Insight is known in Chinese as **格物洞见**. The name draws on **格物致知**
+and expresses a research outlook shaped by the practice of physics.
 
-- **格物 · Gewu** — stay close to the research object: papers, sources, versions,
-  and their relationships remain inspectable.
-- **洞见 · Insight** — understanding grows through connected evidence, repeated
-  reading, comparison, and the researcher's judgment.
+- **格物 · Gewu** — begin with concrete phenomena, experimental observations,
+  and questions from nature; keep research in contact with the world it seeks
+  to understand.
+- **洞见 · Insight** — seek the patterns and mechanisms behind phenomena
+  through physical pictures, intuition, imagination, and insightful guesses.
+  Mathematics serves as a tool for developing and expressing that understanding.
 
-**让研究对象保持可见，让证据保持可追，让洞见能够积累。**
+The workspace supports this practice by keeping papers, versions, supporting
+files, and notes connected, so researchers can revisit experimental results,
+compare physical pictures, and pursue emerging ideas. Questions, interpretation,
+and scientific judgment remain with the researcher. Read more in the
+[User Guide's explanation of the name](paper_monitor/user_guide.html#visual-identity).
+
+**Investigate nature through experimental phenomena; seek insight through
+physical pictures and intuition.**
+
+（从实验现象中格物，以物理图像和直觉求洞见。）
 
 ## Copyright and license
 
