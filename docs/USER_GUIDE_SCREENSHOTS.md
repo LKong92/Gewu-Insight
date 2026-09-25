@@ -15,6 +15,14 @@ only blurred surrounding workspace is cropped. Keys remain masked, no service
 controls or credentials are changed, and all other 35 screenshots are unchanged.
 The asset filename and help anchor remain stable for existing links.
 
+September 25 AI Access follow-up: replace only `ai-access.png` with a current
+capture from the original App. The complete visible dialog shows the connection
+summary, all eleven optional write operations, Saved state and the beginning of
+writable collections. The caption explains scrolling for the remaining controls.
+The September 24 new-connection and saved-permissions figures remain unchanged,
+as do all other 35 screenshots. The PDF keeps the AI Access heading, lead and
+overview figure on one page. No connections or permissions were changed.
+
 ## Capture rules and this revision
 
 - Use only the real original Gewu Insight App, never generated UI, test fixtures,
@@ -79,7 +87,7 @@ The asset filename and help anchor remain stable for existing links.
 | Choose How Quick Look Opens Files | [quick-look-settings.png](../assets/user-guide/screenshots/quick-look-settings.png) | Sep 13; reviewed Sep 24 | Quick Look Settings. Choose built-in previews for all files, a mixed PDF-and-Markdown/native workflow, or macOS Quick Look for all supported files. |
 | Choose the Default Add to Library Folder | [add-to-library-settings.png](../assets/user-guide/screenshots/add-to-library-settings.png) | Sep 13; reviewed Sep 24 | Add to Library settings. Choose an existing Library or Space folder, then Save. The shown path is the current saved preference. |
 | Choose Where Website Links Open | [website-links.png](../assets/user-guide/screenshots/website-links.png) | Sep 13; reviewed Sep 24 | Website Links. Choose the browser used by Open Website and the initial Details state of Save to Gewu. The checkbox shown here is a saved user preference; the shipped Details default is collapsed. |
-| Connect an AI to Your Papers | [ai-access.png](../assets/user-guide/screenshots/ai-access.png) | Sep 16; reviewed Sep 24 | AI Access. Existing connections have a separate Allow directory browsing switch. Enable it only for the intended connection; its token and other permissions stay unchanged. Expand New Connection to choose a collection and permissions. |
+| Connect an AI to Your Papers | [ai-access.png](../assets/user-guide/screenshots/ai-access.png) | Sep 25 | AI Access. Current connection summary and all eleven optional write operations, with Saved state and the beginning of writable collections. Scroll down for the remaining collections and Save Write Access. Saved selections illustrate this connection, not new-connection defaults; directory browsing is separate. |
 | Connect an AI to Your Papers | [ai-new-connection.png](../assets/user-guide/screenshots/ai-new-connection.png) | Sep 24 | New AI connection. The current blank form separates basic permissions from optional write operations. All optional choices are unchecked here. Scroll further down to choose writable collections and expiry, then use Create Connection when ready. |
 | Connect an AI to Your Papers | [ai-write-permissions.png](../assets/user-guide/screenshots/ai-write-permissions.png) | Sep 24 | Saved write permissions. The expanded editor shows operations, blue writable collections, Save Write Access and the saved result. These are this existing connection’s choices, not the defaults for a new connection. My Publications is absent from writable collections. Only enable the operations and locations needed for your task. |
 | Set Naming and PDF Rename Rules | [pdf-rename-settings.png](../assets/user-guide/screenshots/pdf-rename-settings.png) | Sep 13; reviewed Sep 24 | PDF Rename Settings. Edit the filename template and inspect its preview before saving. Available tokens appear beside the template. |

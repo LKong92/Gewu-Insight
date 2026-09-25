@@ -213,6 +213,13 @@ def clean_guide_html() -> str:
                 continue
             _retarget_copied_headings(clone, mode=mode)
             section.append(clone)
+        # The tall AI Access overview needs its heading and lead on the same
+        # page. Keep this local to that opening, not every figure or chapter.
+        if topic_id == "ai-access":
+            opening_figure = section.find("figure", class_="guide-screenshot")
+            if opening_figure is not None:
+                section.insert(0, _new_tag(output, "p", "GEWUINTROSTART"))
+                opening_figure.insert_after(_new_tag(output, "p", "GEWUINTROEND"))
         body.append(section)
 
     for lead in body.select("p.lead"):
@@ -691,6 +698,13 @@ def prepare_latex_body(source: str) -> str:
         "GEWURESULTEND", "\n\\end{GewuResult}"
     )
     # Keep each real UI capture with its explanation, including compact settings.
+    # A marked opening is one measured block, so a page break happens before
+    # its heading rather than between the lead and its tall screenshot.
+    source = source.replace(
+        "GEWUINTROSTART", r"\par\noindent\begin{minipage}{\linewidth}"
+    ).replace(
+        "GEWUINTROEND", r"\end{minipage}\par\medskip"
+    )
     source = source.replace(
         "GEWUFIGURESTART", r"\par\noindent\begin{minipage}{\linewidth}"
     ).replace(

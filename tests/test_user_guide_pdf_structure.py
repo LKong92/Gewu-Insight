@@ -150,3 +150,25 @@ def test_related_links_are_preserved_without_numbered_see_also_sections():
     preamble = builder.latex_preamble("0.1", "test")
     assert r"\par\nobreak\vspace{3pt}\nobreak" in preamble
     assert r"\Needspace{9\baselineskip}" in preamble
+
+
+def test_ai_access_opening_keeps_heading_lead_and_first_screenshot_together():
+    builder = _builder_module()
+    cleaned = BeautifulSoup(builder.clean_guide_html(), "html.parser")
+    heading = cleaned.find(id="ai-access")
+    section = heading.parent
+    children = section.find_all(recursive=False)
+    start = next(i for i, child in enumerate(children) if child.get_text() == "GEWUINTROSTART")
+    end = next(i for i, child in enumerate(children) if child.get_text() == "GEWUINTROEND")
+    opening = children[start + 1:end]
+    assert opening[0] is heading
+    assert any("GEWULEADSTART" in child.get_text() for child in opening)
+    images = [img for child in opening for img in child.find_all("img")]
+    assert [Path(img["src"]).name for img in images] == ["ai-access.png"]
+    assert "GEWUFIGUREEND" in opening[-1].get_text()
+    # Only the overview is grouped; detailed permissions and the rest can flow.
+    assert len(cleaned.find_all(string="GEWUINTROSTART")) == 1
+    assert len(cleaned.find_all(string="GEWUINTROEND")) == 1
+    assert section.find("img", src=str(builder.IMAGE_ROUTES["/user-guide-assets/ai-write-permissions.png"]))
+    converted = builder.prepare_latex_body("GEWUINTROSTARTintroGEWUINTROEND")
+    assert converted == r"\par\noindent\begin{minipage}{\linewidth}intro\end{minipage}\par\medskip"

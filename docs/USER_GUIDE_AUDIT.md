@@ -12,6 +12,34 @@ the README reorganization and separate development guide.
 
 ## Scope and method
 
+### AI Access overview follow-up — September 25, 2026
+
+Replace the retained September 16 opening AI Access screenshot with a fresh
+capture of the original App's current dialog. It now shows the connection's
+permission summary, all eleven optional write operations, Saved state and the
+start of writable collections. The caption explains scrolling for the remaining
+collections and Save Write Access, and distinguishes these saved choices from
+new-connection defaults. The September 24 new-connection and saved-permissions
+figures are still current; all other 35 screenshots remain byte-identical.
+
+The first rebuild left the title and lead on page 89 while the tall screenshot
+started on page 90. After the user's layout feedback, the PDF builder now keeps
+this opening heading, lead, screenshot and caption together as one measured
+block. The rule applies only to the AI Access opening; other topics and the
+interactive HTML layout are unchanged.
+
+The HTML and rebuilt PDF agree. The PDF remains 119 pages with 914 named
+destinations and 372 links; changed extracted text is limited to pages 5 and
+89–92. These pages were rendered and visually checked. The AI Access heading
+and screenshot now share page 90, and its table-of-contents link follows them.
+All 30 guide/audit tests plus seven PDF structure checks pass, including the
+new opening-layout regression check and continuous Product Identity chapter rule.
+The App-bundled PDF matches the source PDF, its renewed signature verifies, and
+removing the old/new executable signatures confirms unchanged native code.
+No connection, permission, literature record or runtime source was changed.
+
+### September 24 full review
+
 Read every registered topic and reviewed all 35 existing screenshots. Cross-check
 changed instructions against current UI labels, runtime code and feature contracts;
 retain accurate text and pictures rather than rewriting them for appearance.
