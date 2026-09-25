@@ -47,7 +47,7 @@ individual or corporate agreement must identify the actual parties and terms
 before it is used. Contributors remain free to publish independently under the
 research-sharing permission even if their work is not merged upstream.
 
-Contact: [konglingyuan@westlake.edu.cn](mailto:konglingyuan@westlake.edu.cn).
+Contact: [info@gewu-insight.com](mailto:info@gewu-insight.com).
 
 ## Third-party material
 

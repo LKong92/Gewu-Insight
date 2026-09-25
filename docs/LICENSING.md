@@ -35,7 +35,7 @@ Ordinary academic grants, salaries, tuition and journal publication fees do not
 alone make otherwise permitted research commercial. Work for a commercial
 sponsor's product development, exclusive commercial exploitation or business
 operations requires authorization. Ask about mixed or uncertain uses before
-starting them: [konglingyuan@westlake.edu.cn](mailto:konglingyuan@westlake.edu.cn).
+starting them: [info@gewu-insight.com](mailto:info@gewu-insight.com).
 
 ## What stays yours, and what stays third-party
 

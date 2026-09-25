@@ -75,9 +75,17 @@ class GuideAuditTests(unittest.TestCase):
 
     def test_contact_and_mcp_quota_location_are_explicit(self):
         native = (ROOT / "scripts/PaperMonitorApp.m").read_text()
-        for phrase in ("konglingyuan@westlake.edu.cn", "Gewu Insight — Feedback and Support"):
+        for phrase in ("info@gewu-insight.com", "Gewu Insight — Feedback and Support"):
             self.assertIn(phrase, native)
             self.assertIn(phrase, self.topic("welcome"))
+        for path in ("README.md", "LICENSE", "CONTRIBUTING.md", "docs/LICENSING.md",
+                     "scripts/build_user_guide_pdf.py", "paper_monitor/user_guide.html"):
+            with self.subTest(contact_source=path):
+                contact_source = (ROOT / path).read_text()
+                addresses = set(re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", contact_source))
+                self.assertEqual(addresses, {"info@gewu-insight.com"})
+        self.assertIsNotNone(self.soup.find("article", id="welcome").find(
+            "a", href="http://gewu-insight.com"))
         self.assertIn("default email application", self.topic("welcome"))
         self.assertIn("does not send the message automatically", self.topic("troubleshooting"))
         self.assertIn("not a separate Library or AI Access status meter", self.topic("ai-access"))

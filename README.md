@@ -11,7 +11,8 @@ and reuse.
 
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
-[Quick start](#quick-start-on-macos) · [Explore the workspace](#explore-the-workspace) ·
+[Website](http://gewu-insight.com) · [Quick start](#quick-start-on-macos) ·
+[Explore the workspace](#explore-the-workspace) ·
 [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) ·
 [AI & MCP](#work-with-an-ai-client) · [License](#copyright-and-license)
 
@@ -270,7 +271,7 @@ identifying modifications. This includes public research forks and pull requests
 
 Commercial use, commercial redistribution, sublicensing, and integration into
 commercial products or services require **separate prior written authorization**.
-Contact [konglingyuan@westlake.edu.cn](mailto:konglingyuan@westlake.edu.cn).
+Contact [info@gewu-insight.com](mailto:info@gewu-insight.com).
 Independent research outputs do not inherit the software license merely by using
 Gewu. A pull request does not transfer its author's copyright or grant additional
 commercial rights; see the [contribution policy](CONTRIBUTING.md).

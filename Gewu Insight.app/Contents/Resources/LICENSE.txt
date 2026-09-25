@@ -128,7 +128,7 @@ by itself withdraw these permissions for this version while You comply with it.
 
 8. Written permission and commercial licensing
 
-Contact: konglingyuan@westlake.edu.cn
+Contact: info@gewu-insight.com
 Project: https://github.com/LKong92/Gewu-Insight
 
 Describe the organization, intended use, deployment and redistribution scope

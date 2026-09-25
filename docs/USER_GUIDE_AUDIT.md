@@ -216,3 +216,28 @@ was then closed, leaving the Library interface available. No literature mutation
 contribution acceptance or repository-visibility change was requested or performed.
 Consult Git history for delivery status. The earlier release-ZIP signing issue
 and unresolved third-party asset rights remain outside this follow-up.
+
+## Contact and website follow-up — September 25, 2026
+
+The project contact is now `info@gewu-insight.com` in Help > Contact Us,
+its fallback message, README, licensing/contribution documents, the HTML guide,
+and the generated and App-bundled PDF. The official website link,
+`http://gewu-insight.com`, appears in README's opening navigation and Welcome's
+Contact Us section. This adds the supplied pre-launch address without claiming
+that the website is already available. Licensing terms are unchanged.
+
+The PDF remains 119 pages with all 914 named destinations and 373 links. Only
+pages 11, 117 and 119 have changed extracted text; all three were rendered and
+reviewed. All 36 screenshot files are byte-identical to their previous versions.
+The AI Access opening and continuous Product Identity chapter layout remain intact.
+The 52 guide, audit, licensing and macOS window/package tests and seven PDF
+structure checks pass, along with Python syntax and diff checks. The universal
+App's signature verifies, and source and bundled documents match.
+
+The rebuilt original App was normally restarted. One App and its child backend,
+a healthy local service, and byte-identical served HTML/PDF were confirmed.
+Help > User Guide visibly displays the new contact and website. Contact Us was
+invoked through the native menu, and its recipient was checked in the rebuilt
+executable; no message was sent by this validation. No literature, permission,
+provider configuration or screenshot was changed. Consult Git history for
+commit and push status.

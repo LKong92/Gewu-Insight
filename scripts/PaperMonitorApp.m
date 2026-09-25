@@ -2475,7 +2475,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)contactUs:(id)sender {
-    NSURLComponents *components = [NSURLComponents componentsWithString:@"mailto:konglingyuan@westlake.edu.cn"];
+    NSURLComponents *components = [NSURLComponents componentsWithString:@"mailto:info@gewu-insight.com"];
     components.queryItems = @[
         [NSURLQueryItem queryItemWithName:@"subject" value:@"Gewu Insight — Feedback and Support"]
     ];
@@ -2483,7 +2483,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     if ([[NSWorkspace sharedWorkspace] openURL:components.URL]) return;
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"Could not open your email app";
-    alert.informativeText = @"Set a default email app on your Mac, or contact konglingyuan@westlake.edu.cn directly.";
+    alert.informativeText = @"Set a default email app on your Mac, or contact info@gewu-insight.com directly.";
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
 }
