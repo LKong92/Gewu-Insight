@@ -142,8 +142,10 @@ class AIAccessTests(unittest.TestCase):
         self.assertEqual(content['text'], '# Edited')
         note.unlink()
         self.assertEqual(self.request(route, workspace=True, headers=validation)[0], 404)
-        for asset in ('/markdown-preview-worker.js', '/markdown-it.min.js', '/js-yaml.min.js'):
+        for asset in ('/markdown-preview-worker.js', '/markdown-it.min.js', '/js-yaml.min.js', '/katex.min.js'):
             self.assertEqual(self.request(asset, workspace=True)[0], 200)
+            self.assertEqual(self.request(asset)[0], 401)
+            self.assertEqual(self.request(asset, token=self.token)[0], 401)
 
     def test_host_origin_checks_apply_even_with_valid_credentials(self):
         for headers in ({'Origin': 'https://example.org'}, {'Sec-Fetch-Site': 'cross-site'}, {'Host': 'attacker.example'}):

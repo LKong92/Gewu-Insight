@@ -102,6 +102,13 @@ class MarkdownPreviewTests(unittest.TestCase):
         self.assertIn("Markdown worker checks passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js required")
+    def test_offline_math_and_literal_content(self):
+        result = subprocess.run([shutil.which("node"), str(ROOT / "tests/markdown_math_probe.cjs")],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Markdown math checks passed", result.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js required")
     def test_preview_request_lifecycle(self):
         result = subprocess.run([shutil.which("node"), str(ROOT / "tests/markdown_preview_flow_probe.cjs")],
                                 input=json.dumps(ui_server.INDEX_HTML), capture_output=True, text=True, timeout=20)

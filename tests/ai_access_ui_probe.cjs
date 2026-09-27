@@ -14,7 +14,7 @@ const output=process.env.GEWU_UI_QA_DIR || path.dirname(path.resolve(process.arg
  await page.waitForFunction(()=>state.libraryItemsById.size>0);
  await page.waitForFunction(()=>appBootCompleted);
  await page.waitForLoadState('networkidle');
- let fileCalls=0;page.on('request',r=>{if(r.url().includes('/api/paper-files?'))fileCalls++;});
+ let fileCalls=0;page.on('request',r=>{if(r.url().includes('/api/library/changes?'))fileCalls++;});
  await page.evaluate(()=>{state.mode='library';state.libraryTab='library';state.librarySelection={type:'item',id:[...state.libraryItemsById.keys()][0]};setGewuAIAccessEnabled(false);});
  const before=fileCalls;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await page.waitForTimeout(150);assert.equal(fileCalls,before);
  await page.evaluate(()=>setGewuAIAccessEnabled(true));await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await page.waitForTimeout(250);assert(fileCalls>before);

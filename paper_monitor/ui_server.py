@@ -577,11 +577,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 content_type = "text/javascript; charset=utf-8" if filename.endswith(".js") else "text/css; charset=utf-8"
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type=content_type)
                 return
-            if parsed.path in {"/markdown-preview-worker.js", "/markdown-it.min.js", "/js-yaml.min.js"}:
+            if parsed.path in {"/markdown-preview-worker.js", "/markdown-it.min.js", "/js-yaml.min.js", "/katex.min.js"}:
                 filename = {
                     "/markdown-preview-worker.js": "markdown_preview_worker.js",
                     "/markdown-it.min.js": "vendor/markdown-it/markdown-it.min.js",
                     "/js-yaml.min.js": "vendor/js-yaml/js-yaml.min.js",
+                    "/katex.min.js": "vendor/katex/katex.min.js",
                 }[parsed.path]
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type="text/javascript; charset=utf-8")
                 return
@@ -706,6 +707,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/page-proxy":
                 self.handle_page_proxy(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/library/changes":
+                self.handle_library_changes(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/library/bootstrap":
                 self.handle_library_bootstrap(parse_qs(parsed.query))
@@ -1919,6 +1923,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(snapshot)
+
+    def handle_library_changes(self, query: dict[str, list[str]]) -> None:
+        from .library_live import changes
+        storage = Storage(self.configured_db_path)
+        try:
+            result = changes(storage, since=first(query, "since"),
+                             folder_ids=query.get("folder_id", []),
+                             paper_id=str(first(query, "paper_id") or ""))
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(result)
 
     def handle_library_search(self, query: dict[str, list[str]]) -> None:
         search_query = clean_text(first(query, "q") or "")[:300]
@@ -26992,6 +27010,11 @@ INDEX_HTML = """<!doctype html>
     .library-markdown-document a[data-markdown-url] { color: #245e87; cursor: pointer; text-decoration: underline; }
     .library-markdown-document img { max-width: 100%; height: auto; }
     .library-markdown-document hr { border: 0; border-top: 1px solid #dce2e9; margin: 1.4em 0; }
+    .library-markdown-math-inline { display: inline-block; max-width: 100%; vertical-align: middle; overflow-x: auto; overflow-y: hidden; }
+    .library-markdown-math-block { max-width: 100%; margin: 1em 0; padding: .25em 0; overflow-x: auto; overscroll-behavior-x: contain; }
+    .library-markdown-document math { font-size: 1.08em; white-space: nowrap; overflow-wrap: normal; }
+    .library-markdown-math-block math { width: max-content; min-width: 100%; margin: 0; }
+    .library-markdown-math-error code { white-space: pre-wrap; overflow-wrap: anywhere; }
     .library-markdown-properties { min-width: 0; margin: 0 0 16px; padding: 10px 14px; border: 1px solid #dce2e9; border-radius: 8px; background: #f8fafc; font-size: 13px; }
     .library-markdown-properties summary { cursor: pointer; color: #536579; font-weight: 600; }
     .library-markdown-properties-grid { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr); gap: 7px 16px; margin: 12px 0 0; }
@@ -46710,15 +46733,141 @@ INDEX_HTML = """<!doctype html>
     }
 
     window.setGewuAIAccessEnabled = (enabled) => { state.aiAccessEnabled = enabled === true; };
+    let libraryExternalCursor = null;
+    let libraryExternalPending = false;
+    function libraryExternalRefreshAllowed() {
+      const active = document.activeElement;
+      return state.aiAccessEnabled && state.libraryLoaded && state.mode === "library"
+        && state.libraryTab !== "my-publications" && !IS_STANDALONE_LOADER_WINDOW
+        && !librarySearchIsActive() && Boolean($("libraryColumns"))
+        && !document.hidden && !state.libraryDragPayload && !state.libraryRefreshPromise
+        && !state.libraryInlineAddFolderId && !state.libraryRenamingFolderId && !state.libraryRenamingItemId
+        && !Object.keys(state.libraryFolderLoadPromises).length
+        && !Object.keys(state.paperFileRequests).length
+        && !document.querySelector(".settings-backdrop.open, .finder-drop-backdrop.open, .library-context-menu.open")
+        && !(active?.matches("input, textarea, select") || active?.isContentEditable);
+    }
+
+    function libraryExternalViewKey() {
+      return JSON.stringify([state.mode, state.libraryTab, state.librarySelection,
+        state.libraryActiveFolderId, state.libraryCurrentFolderId, state.libraryPathRevision,
+        state.libraryPaperResourceSelection, state.query, state.libraryContentView,
+        state.libraryTableSort, state.librarySortMode]);
+    }
+
+    async function pollExternalLibraryChanges() {
+      if (libraryExternalPending || !libraryExternalRefreshAllowed()) return;
+      libraryExternalPending = true;
+      const viewKey = libraryExternalViewKey();
+      const folderIds = [...new Set([...libraryColumnFolderIds(), libraryDisplayRootId(),
+        state.libraryActiveFolderId, state.libraryCurrentFolderId].map(Number).filter(Boolean))].slice(0, 64);
+      const selectedItem = state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id) : null;
+      const query = new URLSearchParams();
+      if (libraryExternalCursor !== null) query.set("since", libraryExternalCursor);
+      folderIds.forEach(id => query.append("folder_id", id));
+      if (selectedItem?.paper_id) query.set("paper_id", selectedItem.paper_id);
+      try {
+        const res = await fetch(`/api/library/changes?${query}`, {cache: "no-store"});
+        if (!res.ok) return;
+        const data = await res.json();
+        // A user navigation/edit during the request wins. Retry the same cursor
+        // against the new view; never acknowledge an update we did not apply.
+        if (!libraryExternalRefreshAllowed() || libraryExternalViewKey() !== viewKey) return;
+        if (data.changed) applyExternalLibraryChanges(data);
+        libraryExternalCursor = data.cursor;
+      } catch (_) {
+        // A temporary service failure is retried; do not replace user status.
+      } finally {
+        libraryExternalPending = false;
+      }
+    }
+
+    function applyExternalLibraryChanges(data) {
+      const columns = $("libraryColumns");
+      if (!columns) return;
+      const previousSelection = libraryEntryKey(state.librarySelection);
+      const tabType = state.libraryTab?.split("-")[0];
+      const oldTab = tabType === "workspace" ? state.libraryWorkspaceTabs[Number(state.libraryTab.split("-")[1])]
+        : tabType === "shortcut" ? state.libraryShortcutTabs[Number(state.libraryTab.split("-")[1])] : null;
+      captureLibraryColumnScrollTops();
+      const horizontal = columns.scrollLeft;
+      const resourceScroll = columns.querySelector(".library-resource-body")?.scrollTop || 0;
+      const focusedRow = document.activeElement?.closest("[data-library-type][data-library-id]");
+      const focusIdentity = focusedRow ? [focusedRow.dataset.libraryType, focusedRow.dataset.libraryId] : null;
+      state.libraryPathRevision += 1;
+      state.libraryFolders = data.folders;
+      state.libraryItems = [];
+      state.libraryLoadedFolderIds = new Set();
+      state.libraryFolderLoadPromises = {};
+      state.libraryPaperLocationsLoaded.clear();
+      state.libraryPaperLocationRequests = {};
+      state.libraryRemoteSearchSequence += 1;
+      resetRemoteLibrarySearch();
+      state.libraryShortcutTabs = data.shortcut_tabs;
+      state.libraryWorkspaceTabs = data.workspace_tabs;
+      rebuildLibraryIndexes();
+      for (const child of data.children || []) applyLibraryFolderChildren(child);
+      // Keep the same Space/Shortcut by stable identity, not by its old index.
+      if (oldTab) {
+        const tabs = tabType === "workspace" ? state.libraryWorkspaceTabs : state.libraryShortcutTabs;
+        const index = tabs.findIndex(tab => tab.tab_id === oldTab.tab_id);
+        state.libraryTab = index >= 0 ? `${tabType}-${index}` : "library";
+      }
+      const fallback = libraryDisplayRootId();
+      if (!libraryFolderIsWithin(state.libraryActiveFolderId, fallback)) state.libraryActiveFolderId = fallback;
+      if (!libraryFolderIsWithin(state.libraryCurrentFolderId, fallback)) state.libraryCurrentFolderId = fallback;
+      const selectionFolder = state.librarySelection?.type === "item"
+        ? libraryItemById(state.librarySelection.id)?.folder_id : state.librarySelection?.id;
+      if (!librarySelectionExists(state.librarySelection) || !libraryFolderIsWithin(selectionFolder, fallback)) {
+        state.librarySelection = {type: "folder", id: state.libraryActiveFolderId};
+      }
+      for (const id of Object.keys(state.libraryColumnSelections)) {
+        if (!libraryFolderById(id) || !librarySelectionExists(state.libraryColumnSelections[id])) delete state.libraryColumnSelections[id];
+      }
+      state.paperFilesByPaperId = {};
+      applyPaperFilesPayloads(data.paper_files);
+      if (!selectedLibraryPaperResource()) state.libraryPaperResourceSelection = {paperId: "", resourceId: 0};
+      pruneLibraryClipboard();
+      pruneLibraryRangeSelection();
+      renderLibraryShortcutTabs();
+      $("reportTitle").textContent = libraryViewTitle();
+      const heading = $("libraryNavigationHeader")?.querySelector(".library-table-folder-title");
+      if (heading) heading.textContent = libraryViewTitle();
+      renderLibraryColumns();
+      if (previousSelection !== libraryEntryKey(state.librarySelection)) renderLibraryDetail();
+      const shell = $("libraryShell");
+      wireLibraryResourceInteractions(shell);
+      wireLibraryColumnInteractions(shell);
+      restoreLibraryColumnScrollTops();
+      columns.scrollLeft = horizontal;
+      const resourceBody = columns.querySelector(".library-resource-body");
+      if (resourceBody) resourceBody.scrollTop = resourceScroll;
+      if (focusIdentity) {
+        const row = [...columns.querySelectorAll("[data-library-type][data-library-id]")]
+          .find(el => el.dataset.libraryType === focusIdentity[0] && el.dataset.libraryId === focusIdentity[1]);
+        row?.focus({preventScroll: true});
+      }
+      const path = $("libraryPathBar");
+      if (path) {
+        path.title = librarySelectionPathText();
+        const parts = path.querySelector(".library-path-parts");
+        if (parts) parts.innerHTML = librarySelectionPathMarkup();
+      }
+      // Paper Details, its drafts and the Quick Look DOM/scroll remain intact.
+      // Updated resources become available immediately in Paper Files.
+    }
+
     window.addEventListener("focus", () => {
-      // Refresh only on returning from an AI client, with AI access enabled.
-      // No idle polling, and disabled AI access changes no file-loading work.
-      if (!state.aiAccessEnabled || state.mode !== "library" || document.querySelector(".settings-backdrop.open")) return;
-      const paperId = state.libraryTab === "my-publications"
-        ? selectedMyPublicationPaper()?.paper_id
-        : state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id)?.paper_id : null;
-      if (paperId) loadPaperFiles(paperId, {force: true}).catch(() => {});
+      pollExternalLibraryChanges();
+      // Preserve the existing on-focus attachment refresh for My Publications.
+      if (state.aiAccessEnabled && state.mode === "library" && state.libraryTab === "my-publications"
+          && !document.querySelector(".settings-backdrop.open")) {
+        const id = selectedMyPublicationPaper()?.paper_id;
+        if (id) loadPaperFiles(id, {force: true}).catch(() => {});
+      }
     });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) pollExternalLibraryChanges(); });
+    window.setInterval(pollExternalLibraryChanges, 3000);
 
     async function loadPaperFiles(paperId, {force = false} = {}) {
       const key = String(paperId || "");
@@ -50874,6 +51023,17 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       root.innerHTML = `<div class="library-file-preview markdown"><article class="library-markdown-document">${data.html}${data.truncated ? '<p class="library-markdown-truncated">[Preview truncated]</p>' : ""}</article></div>`;
+      // WebKit can underestimate an accented MathML expression's intrinsic
+      // width. Measure the actual math once, then size its scroll container.
+      // Batch reads before writes; max-width still bounds genuinely long math.
+      const mathWidths = [...root.querySelectorAll(".library-markdown-math-inline math")].map(math => {
+        const box = math.closest(".library-markdown-math-inline");
+        const width = math.getBoundingClientRect().width;
+        return {box, width, clipped: width > box.getBoundingClientRect().width + .5};
+      });
+      mathWidths.forEach(({box, width, clipped}) => {
+        if (clipped) box.style.width = `${Math.ceil(width)}px`;
+      });
       root.querySelectorAll("[data-markdown-url]").forEach((link) => {
         link.addEventListener("click", (event) => {
           event.preventDefault();

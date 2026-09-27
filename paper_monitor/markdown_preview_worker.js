@@ -7,6 +7,127 @@ const escape = markdown.utils.escapeHtml;
 let revision = 0;
 let currentRead = null;
 
+// Tokenize math before Markdown's escape/emphasis rules can alter TeX. Code
+// spans/fences and YAML properties keep their ordinary literal treatment.
+function mathEscaped(source, position) {
+  let slashes = 0;
+  while (position > 0 && source[--position] === '\\') slashes++;
+  return slashes % 2 === 1;
+}
+
+markdown.inline.ruler.before('escape', 'gewu_math_inline', (state, silent) => {
+  const start = state.pos;
+  const dollar = state.src[start] === '$' && state.src[start + 1] !== '$'
+    && state.src[start - 1] !== '$';
+  const paren = state.src.startsWith('\\(', start);
+  if (!dollar && !paren) return false;
+  const begin = start + (dollar ? 1 : 2);
+  if (dollar && (/\s/.test(state.src[begin] || ' ') || /\d/.test(state.src[start - 1] || ''))) return false;
+  const close = dollar ? '$' : '\\)';
+  // Bound scanning even for a file full of unmatched delimiters. A blank line
+  // ends the paragraph; an ordinary soft line break is allowed inside math.
+  const limit = Math.min(state.posMax, begin + 8192);
+  const candidate = state.src.slice(begin, limit);
+  const paragraphEnd = candidate.search(/\n\s*\n/);
+  let offset = candidate.indexOf(close);
+  while (offset !== -1 && (paragraphEnd < 0 || offset < paragraphEnd)) {
+    const end = begin + offset;
+    if (!mathEscaped(state.src, end)) {
+      const tex = state.src.slice(begin, end);
+      if (dollar) {
+        // Do not join "$5 and $10" or "$5, $10, and $20" into a formula.
+        // A digit-starting expression containing prose/spaces is deliberately
+        // conservative; authors can use \\( ... \\) for ambiguous expressions.
+        if (state.src[end + 1] === '$' || /\s/.test(state.src[end - 1])
+            || /\d/.test(state.src[end + 1] || '')) return false;
+        if (/^\d/.test(tex) && /\s/.test(tex) && !/[\\^_=+*/<>]/.test(tex)) return false;
+      }
+      if (!tex.trim()) return false;
+      if (!silent) {
+        const token = state.push('gewu_math_inline', 'math', 0);
+        token.content = tex;
+        token.markup = state.src.slice(start, begin);
+        token.meta = {source: state.src.slice(start, end + close.length)};
+      }
+      state.pos = end + close.length;
+      return true;
+    }
+    offset = candidate.indexOf(close, offset + close.length);
+  }
+  return false;
+});
+
+markdown.block.ruler.after('fence', 'gewu_math_block', (state, startLine, endLine, silent) => {
+  if (state.sCount[startLine] - state.blkIndent >= 4) return false;
+  const start = state.bMarks[startLine] + state.tShift[startLine];
+  const opening = /^(\$\$(?!\$)|\\\[)/.exec(state.src.slice(start, state.eMarks[startLine]));
+  if (!opening) return false;
+  const close = opening[0] === '$$' ? '$$' : '\\]';
+  let line = startLine;
+  let found = false;
+  // Fences and indented code precede this rule. getLines retains the current
+  // list/blockquote indentation rules, including matrix row backslashes.
+  for (; line < endLine; line++) {
+    if (line > startLine && state.sCount[line] < state.blkIndent && !state.isEmpty(line)) break;
+    const text = state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]);
+    const trimmed = text.trimEnd();
+    const end = trimmed.length - close.length;
+    if (end >= (line === startLine ? opening[0].length : 0)
+        && trimmed.endsWith(close) && !mathEscaped(trimmed, end)
+        && !(close === '$$' && trimmed[end - 1] === '$')) {
+      found = true;
+      break;
+    }
+    // An incomplete display must not absorb later paragraphs/headings.
+    if (line > startLine && (state.isEmpty(line) || /^(?:#{1,6}\s|`{3}|~{3})/.test(text))) break;
+    if (state.eMarks[line] - start > 16384) break;
+  }
+  if (!found) return false;
+  if (silent) return true;
+  const source = state.getLines(startLine, line + 1, state.blkIndent, false).trim();
+  const token = state.push('gewu_math_block', 'math', 0);
+  token.block = true;
+  token.map = [startLine, line + 1];
+  token.markup = opening[0];
+  token.content = source.slice(opening[0].length, -close.length).trim();
+  token.meta = {source};
+  state.line = line + 1;
+  return true;
+}, {alt: ['paragraph', 'reference', 'blockquote', 'list']});
+
+function renderMath(tokens, index, options, env) {
+  const token = tokens[index];
+  const display = token.type === 'gewu_math_block';
+  const tag = display ? 'div' : 'span';
+  const className = display ? 'library-markdown-math-block' : 'library-markdown-math-inline';
+  const fallback = () => `<${tag} class="${className} library-markdown-math-error" title="Formula shown as source"><code>${escape(token.meta.source)}</code></${tag}>`;
+  env.mathCount = (env.mathCount || 0) + 1;
+  env.mathChars = (env.mathChars || 0) + token.content.length;
+  if (token.content.length > 8192 || env.mathCount > 512 || env.mathChars > 65536) return fallback();
+  // Load only when a document actually contains math. A missing local engine
+  // fails this request and remains retryable through the existing worker flow.
+  if (typeof katex === 'undefined') importScripts('/katex.min.js');
+  try {
+    const html = katex.renderToString(token.content, {
+      displayMode: display, output: 'mathml', throwOnError: true,
+      strict: code => code === 'htmlExtension' ? 'error' : 'ignore',
+      trust: false, maxExpand: 1000, maxSize: 20,
+      macros: {},
+    });
+    // Native MathML needs no external CSS or web fonts and keeps the existing
+    // bounded DOM budget useful for research notes containing many equations.
+    if (html.length > 40000 || (env.mathHtml || 0) + html.length > 150000) return fallback();
+    env.mathHtml = (env.mathHtml || 0) + html.length;
+    return `<${tag} class="${className}"${display ? ' role="region" aria-label="Formula" tabindex="0"' : ''}>${html}</${tag}>`;
+  } catch (_) {
+    // Never include parser error HTML, execute trusted TeX extensions, or let
+    // a broken expression prevent the rest of the note from being rendered.
+    return fallback();
+  }
+}
+markdown.renderer.rules.gewu_math_inline = renderMath;
+markdown.renderer.rules.gewu_math_block = renderMath;
+
 // Only leading YAML mappings are properties. Later rules, Setext headings and
 // fenced examples stay in the Markdown body. Older saved analyses may contain
 // a Gewu provenance mapping followed by the author's own front matter.

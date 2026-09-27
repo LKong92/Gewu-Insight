@@ -100,6 +100,17 @@ source map 内嵌源文件进一步与下表五个子组件发布包逐字匹配
 也未随产品打包 npm CLI。不要把整个 npm 开发依赖树误认为运行分发物。
 本轮补齐上述已内嵌组件的许可证原文；不改动任何 JS 字节或现有上游 LICENSE。
 
+### September 27, 2026：离线 Markdown 公式
+
+新增 KaTeX 0.18.9 浏览器包（MIT），来自官方 npm tarball：
+https://registry.npmjs.org/katex/-/katex-0.18.9.tgz 。下载时核对 registry
+发布的 SHA-512 integrity；随仓库保存的 `katex.min.js` 与包内文件逐字一致，
+SHA-256 为 `155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2`。
+完整 MIT 版权声明保存在同目录 LICENSE 及 THIRD_PARTY_NOTICES.md。
+此功能仅使用 MathML 输出，由平台排版，不分发 KaTeX 字体、CSS、CLI
+或 npm 依赖。该组件保留自身 MIT 许可，不套用 Gewu 的科研用途限制；
+此次新增运行文件未引入 GPL/AGPL 组件。此补充不改变此前尚待解决的素材权限问题。
+
 ## 可选运行工具、系统库与开发工具
 
 | 组件 | 当前使用方式 | 授权判断及边界 |

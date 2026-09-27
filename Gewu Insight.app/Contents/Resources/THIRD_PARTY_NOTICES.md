@@ -21,6 +21,41 @@ The bundles differ from the official releases only by omitted source-map links.
 | linkify-it | 6.0.0 | MIT | Embedded in markdown-it |
 | punycode.js | 2.3.1 | MIT | Embedded in markdown-it |
 | js-yaml | 4.2.0 | MIT | paper_monitor/vendor/js-yaml/js-yaml.min.js |
+| KaTeX | 0.18.9 | MIT | paper_monitor/vendor/katex/katex.min.js |
+
+## KaTeX 0.18.9
+
+Added September 27, 2026 for offline Markdown math. Official package:
+https://registry.npmjs.org/katex/-/katex-0.18.9.tgz
+
+Only the unmodified browser JavaScript bundle is shipped. MathML output uses
+the platform renderer; KaTeX web fonts, CSS, CLI and npm dependencies are not
+bundled. The complete upstream license is also in
+`paper_monitor/vendor/katex/LICENSE`.
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2013-2020 Khan Academy and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## markdown-it 15.0.1
 
