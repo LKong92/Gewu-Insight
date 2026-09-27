@@ -14,7 +14,8 @@ and reuse.
 [Website](http://gewu-insight.com) · [Quick start](#quick-start-on-macos) ·
 [Explore the workspace](#explore-the-workspace) ·
 [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) ·
-[AI & MCP](#work-with-an-ai-client) · [License](#copyright-and-license)
+[AI & MCP](#work-with-an-ai-client) · [Citation](#citation) ·
+[License](#copyright-and-license)
 
 **Version 1.0.0 · Build 1** · Native macOS App · Source-available research software
 
@@ -230,6 +231,21 @@ integration. See [release scope](docs/RELEASE_1.0.0.md) and
 The [HTML manual](paper_monitor/user_guide.html) is the source for the bundled
 PDF. [Guide coverage and screenshot provenance](docs/USER_GUIDE_AUDIT.md) are
 recorded separately from the product overview.
+
+## Citation
+
+If you use Gewu Insight in your research, please cite the accompanying paper.
+The manuscript is being prepared for arXiv; its identifier and link will be added
+here after it is posted. Until then, the provisional reference is:
+
+> Kong, L. & Wu, Z. A stateful research information infrastructure for scientific
+> discovery. Manuscript in preparation (2026).
+
+Citation metadata is also available in [CITATION.cff](CITATION.cff) for GitHub's
+**Cite this repository** feature.
+
+<!-- After arXiv posting, update this reference and CITATION.cff together with
+     the confirmed author list, title, year, arXiv identifier and canonical URL. -->
 
 ## Name and Chinese origin
 

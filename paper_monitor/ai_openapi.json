@@ -1289,7 +1289,7 @@
     },
     "/api/v1/tools/import_paper": {
       "post": {
-        "summary": "Import an uploaded PDF and AI-supplied metadata into folder_id. All required metadata must be researched and provided by the caller. Genuine absent DOI/arXiv is null. NEVER use Resolve to satisfy or follow up import. No PDF identifier extraction, online metadata lookup or enrichment queue. Same DOI/arXiv reuses an authorized existing Gewu Key, adds placement and appends different bytes to Paper Files, preserving its Default. Exact bytes reuse the file. Requires papers:import.",
+        "summary": "Import an uploaded PDF and AI-supplied metadata into folder_id. All required metadata must be researched and provided by the caller. Genuine absent DOI/arXiv is null. NEVER use Resolve to satisfy or follow up import. No PDF identifier extraction, online metadata lookup or enrichment queue. Same DOI/arXiv reuses an authorized existing Gewu Key, adds placement and appends different bytes to Paper Files. Preserve a manual Default; otherwise use automatic publication-version priority and synchronize managed storage. Exact bytes reuse the file without reclassification. Requires papers:import.",
         "operationId": "import_paper",
         "security": [
           {
@@ -1546,7 +1546,7 @@
     },
     "/api/v1/tools/add_paper_file": {
       "post": {
-        "summary": "Append an uploaded file of any format to an authorized writable Gewu Key. Keep the existing Default; store new attachments in Associated Files. Exact bytes reuse the existing file. Never overwrite content. Requires files:add.",
+        "summary": "Append an uploaded file of any format to an authorized writable Gewu Key. Preserve a manual Default; otherwise classified publication versions follow automatic priority (Corrected published, Published, Accepted manuscript, Preprint). The selected Default becomes the managed main file; the other files stay in Associated Files. Supplements and analyses do not take automatic Default. Exact bytes reuse the existing file without reclassification. Never overwrite content. Requires files:add.",
         "operationId": "add_paper_file",
         "security": [
           {

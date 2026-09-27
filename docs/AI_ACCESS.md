@@ -354,9 +354,13 @@ Example `import_paper` arguments (replace the illustrative IDs and metadata):
 
 A matching DOI or arXiv identity reuses the **existing Gewu Key**. The requested
 destination receives a placement of that same work. Different incoming PDF
-bytes are retained as another Paper File in **Associated Files**; the existing
-main file and Default are preserved even if the incoming classification has
-higher automatic priority. Exact unchanged bytes reuse the existing resource
+bytes are retained as another Paper File. A valid **manually selected Default**
+is preserved. Otherwise, eligible publication versions follow the App’s automatic
+priority: **Corrected published version → Published version → Accepted manuscript
+→ Preprint**. This also applies to `add_paper_file`. The selected Default becomes
+the managed main file; other versions move to **Associated Files**, with folder
+aliases synchronized. Supplements, analyses and source data do not take automatic
+Default. Exact unchanged bytes reuse the existing resource and classification
 and retain the new import provenance. Newly supplied, nonconflicting DOI/arXiv
 evidence is retained so later imports through either identifier reuse the key.
 Existing bibliography is preserved; use the separately permitted metadata tool
@@ -373,7 +377,9 @@ Versions/Supplements/Files subfolders. Multiple placements share that bundle
 and use the existing filesystem aliases. Folder IDs and ownership determine
 those paths; the caller does not have to calculate or send server disk paths.
 External linked originals remain in place. AI imports never overwrite an
-existing file or set a different Default for an existing work.
+existing file or turn an automatic selection into a manual choice. A higher-ranked
+publication version may become the automatic Default; an explicit manual choice
+remains until the user returns to automatic selection.
 
 ### Explicit Resolve remains separate
 

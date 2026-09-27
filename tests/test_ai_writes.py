@@ -116,9 +116,10 @@ class AIWriteTests(unittest.TestCase):
         args=self.import_args(upload);args['resolve']=True
         self.assertEqual(self.call('import_paper',args,token=token)[0],400)
 
-    def test_same_identity_adds_placement_and_different_pdf_without_changing_default(self):
+    def test_same_identity_adds_placement_and_different_pdf_without_changing_manual_default(self):
         token=self.enable_writes();first=self.call('import_paper',self.import_args(self.upload(token)),token=token)[1]
         paper=self.storage.paper_for_key(first['gewu_key']);default=self.storage.resolve_default_paper_resource(paper['paper_id'])
+        ui_server.set_preferred_paper_file(self.storage,paper['paper_id'],default['id'])
         original=Path(default['stored_path']).read_bytes()
         folder=self.call('create_folder',{'parent_id':1,'name':'New topic','request_id':'folder-test-001'},token=token)[1]
         writer=PdfWriter();writer.add_blank_page(width=321,height=456);out=io.BytesIO();writer.write(out)

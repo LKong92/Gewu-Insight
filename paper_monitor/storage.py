@@ -3503,7 +3503,10 @@ class Storage:
             resource
             for resource in resources
             if resource.get("exists")
-            and (resource.get("added_via") not in {"inventory_conflict", "ai_import_attachment"} or resource.get("file_type_override"))
+            # Appending through MCP is provenance, not a manual Default choice.
+            # Classified publication versions use the same ranking as UI imports;
+            # unresolved identity conflicts still require explicit review.
+            and (resource.get("added_via") != "inventory_conflict" or resource.get("file_type_override"))
             and normalize_paper_file_type(resource.get("file_type"))
             in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
         ]
