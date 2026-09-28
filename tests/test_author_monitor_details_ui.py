@@ -29,11 +29,12 @@ assert.match(result.text, /Daily limit reached · 4 ready/);
 assert.match(result.text, /3 need manual lookup/);
 state.authorMonitorMetadataWork = {status:'running', eligible:4, current:1, total:2};
 assert.equal(authorMonitorIdleActivity('secondary').live, true);
-state.authorMonitorMetadataWork = {status:'waiting_retry', waiting_retry:2};
+// Completed queue snapshots include eligible; its absence means still loading.
+state.authorMonitorMetadataWork = {status:'waiting_retry', eligible:0, waiting_retry:2};
 assert.match(authorMonitorIdleActivity('secondary').text, /2 waiting for retry/);
-state.authorMonitorMetadataWork = {status:'needs_manual', needs_manual:3};
+state.authorMonitorMetadataWork = {status:'needs_manual', eligible:0, needs_manual:3};
 assert.match(authorMonitorIdleActivity('secondary').text, /Automatic attempts finished/);
-state.authorMonitorMetadataWork = {status:'complete'};
+state.authorMonitorMetadataWork = {status:'complete', eligible:0};
 assert.match(authorMonitorIdleActivity('secondary').text, /No missing information queued/);
 '''
         subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)

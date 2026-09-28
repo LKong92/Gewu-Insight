@@ -16,7 +16,7 @@ from .browser_store import ensure_browser_schema
 from .workflow_store import ensure_workflow_schema, PUBLICATION_REMOVED_BY_USER
 from .ai_store import ensure_ai_schema
 from .resource_dedup import ensure_schema as ensure_resource_dedup_schema
-from . import paper_identity
+from . import paper_identity, publication_notices
 from .text import (
     is_placeholder_publication_title,
     normalize_doi,
@@ -27,7 +27,7 @@ from .text import (
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 21
+STORAGE_SCHEMA_VERSION = 22
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -38,6 +38,10 @@ PAPER_FILE_TYPES = (
     "published_version",
     "corrected_published_version",
     "correction_notice",
+    "retraction_notice",
+    "expression_of_concern",
+    "withdrawal_notice",
+    "addendum",
     "supplementary_material",
     "peer_review_file",
     "perspective",
@@ -152,8 +156,9 @@ def legacy_paper_file_type(
     parse = str(parse_status or "").strip().lower()
     if parse in {"invalid", "failed", "corrupt", "unparseable"}:
         return "invalid_file"
-    if re.search(r"\b(author|publisher)?\s*(correction|erratum|corrigendum)\b", name):
-        return "correction_notice"
+    notice_type = publication_notices.title_kind(Path(name).stem)
+    if notice_type:
+        return notice_type
     if "peer review" in name or "reviewer report" in name or "decision letter" in name:
         return "peer_review_file"
     if role == "publication_version":
@@ -186,6 +191,10 @@ def legacy_role_projection(file_type: Any) -> tuple[str, str, str]:
             "Corrected published version",
         ),
         "correction_notice": ("other", "", "Correction notice"),
+        "retraction_notice": ("other", "", "Retraction notice"),
+        "expression_of_concern": ("other", "", "Expression of concern"),
+        "withdrawal_notice": ("other", "", "Withdrawal notice"),
+        "addendum": ("other", "", "Addendum"),
         "supplementary_material": ("supplement", "", "Supplementary material"),
         "peer_review_file": ("other", "", "Peer review file"),
         "perspective": ("other", "", "Perspective"),
@@ -751,6 +760,7 @@ class Storage:
                 ensure_workflow_schema(self.conn)
                 ensure_ai_schema(self.conn)
                 ensure_resource_dedup_schema(self.conn)
+                publication_notices.ensure_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -772,6 +782,8 @@ class Storage:
                     ensure_resource_dedup_schema(self.conn)
                 if schema_version < 21:
                     ensure_ai_schema(self.conn)
+                if schema_version < 22:
+                    publication_notices.ensure_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -2040,6 +2052,10 @@ class Storage:
         return paper_identity.for_key(self, key)
 
     def upsert_paper(self, paper: dict[str, Any], *, replace_bibliographic_metadata: bool = False, commit: bool = True) -> bool:
+        try:
+            publication_notices.guard(self, paper, commit=commit)
+        except publication_notices.NoticeReviewRequired:
+            return False
         with paper_identity.transaction(self, commit):
             payload = paper_identity.prepare(self, paper)
             if payload is None:
@@ -2052,6 +2068,7 @@ class Storage:
             return accepted
 
     def merge_paper_missing_metadata(self, paper: dict[str, Any], *, source_name: str, commit: bool = True) -> bool:
+        publication_notices.guard(self, paper, commit=commit)
         with paper_identity.transaction(self, commit):
             payload = paper_identity.prepare(self, paper)
             if payload is None:
@@ -2062,6 +2079,7 @@ class Storage:
             return changed
 
     def refresh_paper_metadata(self, paper_id: str, paper: dict[str, Any], *, linked_preprint_id: str = "") -> dict[str, Any] | None:
+        publication_notices.guard(self, paper)
         paper_id = self.resolve_paper_id(paper_id)
         with paper_identity.transaction(self):
             current = self.get_paper(paper_id)
@@ -2075,6 +2093,7 @@ class Storage:
 
     def apply_identifier_correction(self, paper_id: str, paper: dict[str, Any], edit: dict[str, Any]) -> dict[str, Any]:
         """Apply verified metadata only to the explicitly edited object, never merge it."""
+        publication_notices.guard(self, paper)
         from . import identifier_correction
         paper_id = self.resolve_paper_id(paper_id)
         with paper_identity.transaction(self):
@@ -3382,6 +3401,10 @@ class Storage:
                 display_name=display_name or path.name,
             )
         )
+        if inferred_kind == 'pdf':
+            resolved_type = publication_notices.title_kind(Path(display_name or path.name).stem) or resolved_type
+        if resolved_type in publication_notices.KINDS:
+            file_role, version_role, version_label = legacy_role_projection(resolved_type)
         projected_role, projected_version, projected_label = legacy_role_projection(resolved_type)
         if (
             str(file_type or "").strip()

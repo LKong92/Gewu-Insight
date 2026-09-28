@@ -413,6 +413,13 @@ def evaluate_files(
 
         if is_paper_candidate(record):
             result["paper_candidates_seen"] += 1
+            from ..publication_notices import describe
+            notice=describe(record)
+            if notice:
+                result.setdefault('publication_notices',[]).append({'title':record['title'],'status':'relation_review'})
+                result['resources_or_attachments_to_import'] += int(source_exists)
+                result['warnings'].append(f"Publication notice: {record['filename']}. Will attach to an explicitly identified original or retain for relation review; no independent paper.")
+                continue
             identity = paper_identity(record, dedupe_keys)
             if not identity:
                 result["skipped"] += 1
@@ -527,6 +534,37 @@ def execute_import(
 
             if is_paper_candidate(record):
                 result["paper_candidates_seen"] += 1
+                from .. import publication_notices as notices
+                notice = notices.describe_known(storage,record)
+                if notice:
+                    parent = notices.target(storage, notice)
+                    event_id = notices.record(storage, record, notice, parent, commit=True)
+                    if parent: notices.adopt_pending_files(storage,event_id,parent)
+                    file_path = reusable_path or (copy_record(record, target_root=target_root) if source_exists else '')
+                    if file_path:
+                        if parent:
+                            from .. import ui_server as ui
+                            resource = ui.attach_file_to_paper(storage, paper_id=parent['paper_id'],
+                                filename=record['filename'],content=Path(file_path).read_bytes(),
+                                file_type=notice['kind'],added_via='inventory_notice')
+                            notices.attach(storage,event_id,resource['id'])
+                            # Remove only the redundant private copy from this call.
+                            if record.get('_new_copy') == file_path and file_path != storage.resource_local_path(resource):
+                                Path(file_path).unlink()
+                        else:
+                            resource_id = upsert_resource(storage,record,batch_id=batch_id,paper_id=None,stored_path=file_path)
+                            notices.attach(storage,event_id,resource_id)
+                        storage.conn.commit()
+                        result['resources_or_attachments_to_import'] += 1
+                    if parent and result['preserve_folders']:
+                        folder_id = ensure_folder_path(storage,record['parent_relative_path'],folder_cache)
+                        _,created = ensure_imported_library_item(storage,paper_id=parent['paper_id'],folder_id=folder_id,display_name='')
+                        result['library_items_created' if created else 'library_items_existing'] += 1
+                    result.setdefault('publication_notices',[]).append({'notice_id':event_id,'status':'linked' if parent else 'needs_relation'})
+                    if not parent:
+                        result['warnings'].append(f"Publication notice {event_id} retained for relation review: {record['filename']}. Supply the original article DOI; no independent paper was created.")
+                    if parent: reconcile_imported_layout(storage,parent['paper_id'],target_root,result)
+                    continue
                 identity = paper_identity(record, dedupe_keys)
                 if not identity:
                     result["skipped"] += 1
@@ -854,6 +892,7 @@ def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
         "page_count": int_or_none(raw.get("page_count")),
         "parse_status": clean_text(raw.get("parse_status")),
         "parse_error": clean_text(raw.get("parse_error")),
+        "publication_notice": raw.get("publication_notice"),
     }
     filename = record["filename"] or Path(record["source_path"]).name
     if is_system_metadata_filename(filename):
@@ -1071,6 +1110,14 @@ def pdf_metadata(path: Path) -> dict[str, Any]:
         metadata["arxiv_id"] = arxiv_id
     if not metadata["title"]:
         metadata["title"] = path.name
+    from ..publication_notices import from_front_matter
+    notice = from_front_matter(metadata['title'],text)
+    if notice:
+        metadata['publication_notice'] = notice
+        # The first DOI on a notice page can be the original article's DOI.
+        if metadata['doi'] in notice['related_dois']:
+            alternatives = {normalize_doi(m) for m in re.findall(r'10\.\d{4,9}/[^\s<>]+',text)} - set(notice['related_dois'])
+            metadata['doi'] = next(iter(alternatives)) if len(alternatives)==1 else ''
     return metadata
 
 
@@ -1458,6 +1505,10 @@ def _upsert_resource(
         except OSError:
             fingerprint = None
     duplicate = find_existing(storage, paper_id, fingerprint_path) if paper_id else None
+    if not paper_id and fingerprint:
+        row=storage.conn.execute('SELECT * FROM resources WHERE paper_id IS NULL AND sha256=? AND size_bytes=? AND stored_path=?',
+            (fingerprint.sha256,record['size_bytes'],stored_path)).fetchone()
+        duplicate=dict(row) if row else None
     if duplicate:
         remember_source(storage, duplicate['id'], record, fingerprint.sha256 if fingerprint else '', batch_id)
         extra = record.pop('_new_copy', '')
@@ -1473,7 +1524,7 @@ def _upsert_resource(
         storage.conn.commit()
         if discard:
             Path(extra).unlink(missing_ok=True)
-        return
+        return int(duplicate['id'])
     # A source may be edited in place without changing its length. Preserve its
     # old resource/version instead of ON CONFLICT overwriting its stored path.
     origin = record['source_path']
@@ -1486,6 +1537,9 @@ def _upsert_resource(
         if record.get("kind") == "pdf" and parse_status in {"failed", "invalid", "unparseable", "corrupt"}
         else ("preprint" if clean_text(record.get("arxiv_id") or "") else "unknown")
     )
+    from ..publication_notices import describe
+    notice = describe(record)
+    if notice: file_type=notice['kind']
     annotation_state = (
         "annotated"
         if fingerprint and fingerprint.is_annotated
@@ -1534,6 +1588,7 @@ def _upsert_resource(
     )
     remember_source(storage, int(cursor.lastrowid), record, fingerprint.sha256 if fingerprint else '', batch_id)
     storage.conn.commit()
+    return int(cursor.lastrowid)
 
 
 def import_metadata(record: dict[str, Any], *, batch_id: str, stored_path: str) -> dict[str, Any]:

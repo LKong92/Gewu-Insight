@@ -1,7 +1,7 @@
 // Execute the product renderers and key/delete handlers against synthetic files.
 const assert = require('node:assert/strict'), vm = require('node:vm');
 const html = require('node:fs').readFileSync(0, 'utf8');
-const names = ['libraryPaperResourcesColumnMarkup', 'paperFilesPanelMarkup',
+const names = ['publicationNoticesMarkup', 'libraryPaperResourcesColumnMarkup', 'paperFilesPanelMarkup',
   'orderedLibraryPaperResources', 'moveLibraryPaperResourceSelection',
   'deleteSelectedLibraryPaperResource', 'handleLibraryPaperResourceKeydown'];
 const code = names.map(name => {

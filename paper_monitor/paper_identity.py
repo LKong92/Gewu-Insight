@@ -348,7 +348,7 @@ RELATIONS = {
  # longer creates this table. Preserve its feed/paper membership on merge.
  'journal_feed_entries':('feed_key',),
 }
-SIMPLE = {'resources','publication_import_items','paper_metadata_refreshes','ai_analyses'}
+SIMPLE = {'resources','publication_import_items','paper_metadata_refreshes','ai_analyses','publication_notices'}
 SPECIAL = {'paper_aliases','paper_identifiers','paper_identity_conflicts','author_monitor_card_cache','author_monitor_card_cache_dirty'}
 
 

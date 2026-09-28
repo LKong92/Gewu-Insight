@@ -1289,7 +1289,7 @@
     },
     "/api/v1/tools/import_paper": {
       "post": {
-        "summary": "Import an uploaded PDF and AI-supplied metadata into folder_id. All required metadata must be researched and provided by the caller. Genuine absent DOI/arXiv is null. NEVER use Resolve to satisfy or follow up import. No PDF identifier extraction, online metadata lookup or enrichment queue. Same DOI/arXiv reuses an authorized existing Gewu Key, adds placement and appends different bytes to Paper Files. Preserve a manual Default; otherwise use automatic publication-version priority and synchronize managed storage. Exact bytes reuse the file without reclassification. Requires papers:import.",
+        "summary": "Import an uploaded PDF and AI-supplied metadata into folder_id. Correction/erratum/retraction notices require publication_notice relation metadata and attach to an existing writable original article; their own DOI stays separate and they never become automatic Default. All required metadata must be researched and provided by the caller. Genuine absent DOI/arXiv is null. NEVER use Resolve to satisfy or follow up import. No PDF identifier extraction, online metadata lookup or enrichment queue. Same DOI/arXiv reuses the existing Gewu Key and adds a writable placement, including uncollected provider/Monitor metadata or managed Monitor download PDFs. Unreadable private collections, notes, annotated or external files require user access review (import_access_required). Active downloads return paper_busy; staged uploads remain retryable. General read permissions are unchanged. Different bytes append to Paper Files. Preserve a manual Default; otherwise use automatic publication-version priority and synchronize managed storage. Exact bytes reuse the file without reclassification. Requires papers:import.",
         "operationId": "import_paper",
         "security": [
           {
@@ -1356,6 +1356,40 @@
                   "metadata": {
                     "type": "object",
                     "properties": {
+                      "publication_notice": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "For a correction, erratum, retraction or other notice: identify the ORIGINAL article explicitly. The notice DOI remains separate; never import a notice as a research paper. Import the original first if absent. No Resolve runs during import.",
+                        "required": [
+                          "kind",
+                          "related_dois",
+                          "evidence_url"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "correction_notice",
+                              "retraction_notice",
+                              "expression_of_concern",
+                              "withdrawal_notice",
+                              "addendum"
+                            ]
+                          },
+                          "related_dois": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 20,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "evidence_url": {
+                            "type": "string",
+                            "description": "Publisher or registry URL establishing which original article this notice updates."
+                          }
+                        }
+                      },
                       "title": {
                         "type": "string",
                         "minLength": 1,
@@ -1696,6 +1730,40 @@
                   "metadata": {
                     "type": "object",
                     "properties": {
+                      "publication_notice": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "description": "For a correction, erratum, retraction or other notice: identify the ORIGINAL article explicitly. The notice DOI remains separate; never import a notice as a research paper. Import the original first if absent. No Resolve runs during import.",
+                        "required": [
+                          "kind",
+                          "related_dois",
+                          "evidence_url"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "correction_notice",
+                              "retraction_notice",
+                              "expression_of_concern",
+                              "withdrawal_notice",
+                              "addendum"
+                            ]
+                          },
+                          "related_dois": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 20,
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "evidence_url": {
+                            "type": "string",
+                            "description": "Publisher or registry URL establishing which original article this notice updates."
+                          }
+                        }
+                      },
                       "title": {
                         "type": "string",
                         "minLength": 1,

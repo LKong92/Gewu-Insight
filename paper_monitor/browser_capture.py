@@ -439,6 +439,7 @@ class BrowserCaptureService:
 
     def save(self, capture: Capture, storage, payload: dict) -> dict:
         from . import ui_server as ui
+        from . import publication_notices as notices
         with capture.lock:
             if capture.result:
                 return capture.result
@@ -455,13 +456,22 @@ class BrowserCaptureService:
             if file_type not in FILE_TYPES:
                 raise ValueError("Choose a supported PDF file type.")
             paper = dict(capture.paper)
+            notice = notices.describe_known(storage,paper)
+            notice_id = None
+            if notice:
+                parent = notices.target(storage,notice)
+                notice_id = notices.record(storage,paper,notice,parent,commit=True)
+                if not parent:
+                    raise notices.NoticeReviewRequired('Publication notice retained for relation review. Import the original article first and supply its DOI relation; no independent paper was created. You can also attach this PDF to the original article as a notice in Paper Files.')
+                paper = parent
+                file_type = notice['kind']
             # Recheck canonical identity immediately before writing: another
             # capture may have saved it while this review panel was open.
             matches = paper_identity.find(storage, paper)
             if len(matches) > 1:
                 raise ValueError("More than one article matches. Review the target again.")
             matched = matches[0] if matches else None
-            if capture.reviewed_identifiers is not None and (not matched or paper_identity.identifiers(storage, matched) != capture.reviewed_identifiers):
+            if not notice and capture.reviewed_identifiers is not None and (not matched or paper_identity.identifiers(storage, matched) != capture.reviewed_identifiers):
                 raise ValueError("The target identifiers changed while this panel was open. Review the article again.")
             if matched:
                 if storage.paper_identity_conflict_reasons(matched, paper):
@@ -490,6 +500,9 @@ class BrowserCaptureService:
                         content=capture.path.read_bytes(), file_type=file_type, file_source=file_source,
                         source_detail=source_detail, source_url=persistent_url(capture.pdf_source_url),
                         added_via="browser_capture")
+                    if notice_id:
+                        notices.attach(storage,notice_id,resource['id'])
+                        resource = storage.get_paper_resource(resource['id'])
                     duplicate = bool(resource.get("duplicate"))
                     # Repair only unclassified Browser captures on an explicit
                     # re-save. Keep the same resource/key, all known peer types,

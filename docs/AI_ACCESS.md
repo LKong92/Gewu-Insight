@@ -312,6 +312,15 @@ gain the public Gewu Key field shown in the App for PDF papers. The existing API
 field `gewu_key` carries that internal handle; `item_kind: file` identifies an
 ordinary-file import. It does not turn an overview into an academic paper.
 
+Publication notices additionally require `publication_notice` with `kind`,
+`related_dois` and `evidence_url`. The notice's own DOI stays in `metadata.doi`;
+the related DOI identifies an existing writable original article. The import
+returns that original Gewu Key and stores the notice in Associated Files without
+making it the automatic Default. Missing or ambiguous relations must be resolved
+by the AI before retrying; import never runs Resolve. See
+[publication notice handling](PUBLICATION_NOTICES.md) for the contract and
+historical compatibility rules.
+
 `import_paper.metadata` requires all of:
 
 | Field | Meaning |
@@ -366,10 +375,25 @@ evidence is retained so later imports through either identifier reuse the key.
 Existing bibliography is preserved; use the separately permitted metadata tool
 to fill missing fields. Similar titles alone never merge records.
 
+Uncollected provider/Monitor records can also be reused during `import_paper`,
+even when they were not previously readable through this connection. The caller
+must supply the metadata and exact DOI/arXiv identity and choose a writable
+destination. This includes old provider metadata with no current Monitor link,
+and uncollected PDFs downloaded into the App's managed download cache. Existing
+registered files and their classification are retained; the ordinary archive
+workflow moves the Default to the destination and other versions to Associated
+Files. Legacy main-PDF records are registered before exact-byte deduplication.
+The new placement grants normal collection access only after import is saved;
+this exception does not expand search, read, attachment or metadata-write tools.
+
 If DOI and arXiv point to different existing records, return `identity_conflict`
-and preserve both. If a matching work is outside the connection's readable
-collection, import is refused without disclosing that record or adding an
-out-of-scope placement. The user must adjust access through AI Access if needed.
+and preserve both. An unreadable match with Library/Space/Recycle or My
+Publications membership, private imports, notes, known annotations, linked
+external files or files shared with another work is not adopted automatically.
+Import returns `import_access_required` without disclosing its Key, paths or
+contents. The user can review AI Access permissions or add the work through the
+App, then retry. An active download returns `paper_busy`; retry after it finishes.
+Both failures preserve the staged upload, existing records and files.
 
 The main file of a new file-backed object is placed in its Library/Space folder.
 Other files use the existing mirrored **Associated Files** bundle and its

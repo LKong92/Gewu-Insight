@@ -121,6 +121,56 @@ class BrowserCaptureTests(unittest.TestCase):
     def count(self, table):
         return self.storage.conn.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]
 
+    def test_long_publisher_filename_remains_a_readable_pdf_after_save(self):
+        names = [
+            'Adv Funct Materials - 2026 - Wang - Physics%E2%80%90Grounded Materials Artificial Intelligence for Reliable Materials Discovery.pdf',
+            '材料发现与人工智能' * 30 + '.PDF',
+        ]
+        for index, name in enumerate(names):
+            with self.subTest(filename=name):
+                capture = self.begin(doi='10.1234/long-name-' + str(index))
+                content = self.pdf()
+                with patch.object(ui, 'extract_identifier_from_pdf_or_title', return_value={}), patch.object(ui, 'pdf_layout_title_candidates', return_value=[]):
+                    self.service.upload(capture, content, filename=name)
+                self.review(capture)
+                result = self.save(capture, include_pdf=True, file_type='published_version')
+                self.assertTrue(result['ok'], result)
+                files = self.storage.list_paper_resources(result['paper_id'])
+                self.assertEqual(len(files), 1)
+                resource = files[0]
+                path = Path(self.storage.resource_local_path(resource))
+                self.assertEqual(path.suffix.lower(), '.pdf')
+                self.assertEqual(resource['kind'], 'pdf')
+                self.assertEqual(resource['mime_type'], 'application/pdf')
+                self.assertTrue(self.storage.resource_is_pdf(resource))
+                self.assertEqual(path.read_bytes(), content)
+                self.assertEqual(self.storage.resolve_default_paper_resource(result['paper_id'])['id'], resource['id'])
+                self.assertEqual(ui.canonical_pdf_path_for_paper(self.storage.get_paper(result['paper_id'])), path)
+                self.assertLessEqual(len(path.name), 120)
+                self.assertLessEqual(len(path.name.encode('utf-8')), 220)
+
+    def test_long_attachment_names_keep_type_and_validate_pdf_before_writing(self):
+        self.paper()
+        with self.assertRaisesRegex(ValueError, 'not a valid PDF'):
+            ui.attach_file_to_paper(self.storage, paper_id='first', filename='Long title ' * 30 + '.pdf', content=b'<html>Sign in</html>')
+        self.assertEqual(self.count('resources'), 0)
+        for suffix in ['.md', '.csv']:
+            content = ('content for ' + suffix).encode()
+            resource = ui.attach_file_to_paper(self.storage, paper_id='first',
+                filename='分析数据' * 60 + suffix, content=content, added_via='browser_capture')
+            path = Path(self.storage.resource_local_path(resource))
+            self.assertEqual(path.suffix, suffix)
+            self.assertEqual(resource['kind'], suffix.lstrip('.'))
+            self.assertEqual(resource['mime_type'], ui.mimetypes.guess_type('file' + suffix)[0] or 'application/octet-stream')
+            self.assertFalse(self.storage.resource_is_pdf(resource))
+            self.assertEqual(path.read_bytes(), content)
+
+    def test_filename_policy_preserves_short_names_and_existing_folder_policy(self):
+        for name in ['Article.PDF', 'Notes.md', 'data.tar.gz', '100%20literal.pdf']:
+            self.assertEqual(ui.finder_safe_name(name, preserve_extension=True), name)
+        folder = 'A long folder name ' * 15 + '.pdf'
+        self.assertEqual(ui.finder_safe_name(folder), folder[:120])
+
     def test_uploaded_original_is_parsed_once_and_metadata_is_recomputed(self):
         from paper_monitor import pdf_utils
         first = self.begin()

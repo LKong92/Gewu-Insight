@@ -201,7 +201,8 @@ class AIWriteTests(unittest.TestCase):
         self.storage.conn.execute("UPDATE papers SET doi='10.5555/ai-example' WHERE paper_id='outside'");self.storage.conn.commit()
         token=self.enable_writes(selection={'kind':'papers','keys':[self.key]})
         result=self.call('import_paper',self.import_args(self.upload(token)),token=token)
-        self.assertEqual(result[0],404,result[1])
+        self.assertEqual(result[0],403,result[1])
+        self.assertEqual(result[1]['code'],'import_access_required')
         self.assertEqual(self.storage.conn.execute("SELECT count(*) FROM library_items WHERE paper_id='outside'").fetchone()[0],0)
 
     def test_identity_evidence_is_retained_and_identical_bytes_reuse_resource(self):

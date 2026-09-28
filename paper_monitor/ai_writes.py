@@ -1,5 +1,6 @@
 """Explicit, scoped writes. Imports never extract identifiers or query metadata."""
 from __future__ import annotations
+from contextlib import ExitStack, nullcontext
 import hashlib
 import json
 import mimetypes
@@ -54,7 +55,19 @@ def validate_metadata(value, *, partial=False):
         fail(400, 'metadata_required', 'AI must supply metadata before import. Missing: ' + ', '.join(missing) + '. Find these facts externally and retry; import never invokes Resolve.')
     result = dict(value)
     for key, val in value.items():
-        if key == 'authors':
+        if key == 'publication_notice':
+            from .publication_notices import KINDS
+            valid = (isinstance(val,dict) and set(val)=={'kind','related_dois','evidence_url'}
+                     and val.get('kind') in KINDS and isinstance(val.get('related_dois'),list)
+                     and 0 < len(val['related_dois']) <= 20
+                     and all(isinstance(d,str) and re.fullmatch(r'10\.\d{4,9}/\S+',doi(d)) for d in val['related_dois'])
+                     and isinstance(val.get('evidence_url'),str))
+            if valid:
+                u = urlparse(val['evidence_url'])
+                valid = u.scheme in ('http','https') and bool(u.hostname) and not u.username and not u.password
+            if not valid: fail(400,'invalid_notice_relation','Supply a notice kind, original article DOI(s), and an HTTP(S) evidence URL without credentials.')
+            result[key] = {**val,'related_dois':sorted({doi(d) for d in val['related_dois']})}
+        elif key == 'authors':
             valid = isinstance(val, list) and 0 < len(val) <= 1000 and all(isinstance(a,str) and a.strip() and len(a)<=300 for a in val)
         elif key in ('doi', 'arxiv_id'):
             valid = val is None or isinstance(val,str) and bool(val.strip())
@@ -87,6 +100,7 @@ def metadata_payload(meta, paper_id, grant):
     raw = {'authors': meta.get('authors', []), 'ai_metadata': {'connection_id': grant['id'],
            'source_url': meta.get('source_url',''), 'supplied_at': utc_now(), 'verified_by_gewu': False}}
     if meta.get('arxiv_id'): raw['arxiv_id'] = meta['arxiv_id']
+    if meta.get('publication_notice'): raw['publication_notice'] = meta['publication_notice']
     raw.update({k:meta[k] for k in ('volume','issue','pages') if k in meta})
     return {'paper_id': paper_id, 'title': meta.get('title',''), 'doi': meta.get('doi') or '',
             'journal': meta.get('journal',''), 'publication_date':meta.get('publication_date',''),
@@ -141,7 +155,8 @@ def unlink_owned(path, identity):
 
 def finish_import(storage, grant, result):
     from .ai_service import paper_for_key, file_metadata
-    from . import ui_server as ui
+    from .download import paper_download_lock
+    from .file_layout import reconcile
     paper = paper_for_key(storage, grant, result['gewu_key'])
     resource = storage.get_paper_resource(result['file']['file_id'])
     if not resource or resource['paper_id'] != paper['paper_id'] or not Path(storage.resource_local_path(resource)).is_file():
@@ -149,9 +164,11 @@ def finish_import(storage, grant, result):
     if result.get('folder_id'): require_folder(storage,grant,result['folder_id'])
     else: require_paper(storage,grant,paper['storage_key'])
     try:
-        ui.sync_all_pdf_aliases_for_paper(storage,paper['paper_id'],preserve_canonical_name=True)
+        with paper_download_lock(storage.db_path, paper['paper_id'], blocking=False):
+            reconcile(storage, paper['paper_id'])
         result['layout_pending'] = False
     except (OSError, ValueError):
+        storage.conn.rollback()
         result['layout_pending'] = True
         result['message'] = 'File saved; shortcut synchronization is pending. Retry this exact request to finish.'
     resource = storage.get_paper_resource(resource['id'])
@@ -165,6 +182,9 @@ def apply_metadata(storage, grant, paper, meta):
     """Fill missing values; preserve originals and report competing facts."""
     from . import paper_identity, ui_server as ui
     incoming = metadata_payload(meta,paper['paper_id'],grant)
+    from .publication_notices import describe_known
+    if describe_known(storage,incoming):
+        fail(409,'publication_notice_requires_attachment','A publication notice cannot replace article metadata. Import it with its original article relation instead.')
     candidates = paper_identity.find(storage,incoming)
     if any(p['paper_id'] != paper['paper_id'] for p in candidates):
         fail(409,'identity_conflict','The supplied identifiers belong to another record. Existing identities were preserved.')
@@ -192,13 +212,16 @@ def apply_metadata(storage, grant, paper, meta):
 def execute_write(storage, authorization, operation, args):
     from .ai_service import WRITE_LOCK, require_scope
     from .ai_contract import ORGANIZE_TOOLS
+    from .publication_notices import NoticeReviewRequired
+    from .publication_jobs import MUTATION_LOCK
     if operation in ORGANIZE_TOOLS:
         from .ai_organize import execute_organize
         return execute_organize(storage, authorization, operation, args)
     if operation in ('resolve_paper','get_resolve_status'):
         from .ai_resolve import execute_resolve
         return execute_resolve(storage,authorization,operation,args)
-    with WRITE_LOCK, ai_uploads.LOCK:
+    import_lock = MUTATION_LOCK if operation in ('import_paper', 'import_file', 'add_paper_file') else nullcontext()
+    with WRITE_LOCK, import_lock, ai_uploads.LOCK:
         grant=authenticate(storage,authorization); require_scope(grant,WRITE_SCOPES[operation])
         allowed={
             'create_space':{'name','request_id'}, 'create_folder':{'parent_id','name','request_id'},
@@ -228,7 +251,10 @@ def execute_write(storage, authorization, operation, args):
                 save_receipt(storage,grant,operation,key,digest,result);storage.conn.commit()
                 return result
             except BaseException: storage.conn.rollback();raise
-        return import_file(storage,authorization,grant,operation,args,key,digest)
+        try:
+            return import_file(storage,authorization,grant,operation,args,key,digest)
+        except NoticeReviewRequired as exc:
+            fail(409,'notice_review_required',str(exc))
 
 
 def create_folder(storage,authorization,grant,operation,args,key,digest):
@@ -268,13 +294,19 @@ def create_folder(storage,authorization,grant,operation,args,key,digest):
 
 
 def import_file(storage,authorization,grant,operation,args,key,digest):
-    from . import ui_server as ui, paper_identity
-    from .ai_service import require_scope, paper_for_key, file_metadata
+    from . import ui_server as ui, paper_identity, publication_notices as notices
+    from .ai_service import require_scope, file_metadata
     from .resource_dedup import find_content, remember_source
     from .resource_fingerprint import sha256_for_file
     from .file_layout import bundle_path
     from .file_layout_journal import write_json
+    from .ai_import_identity import reusable_paper
+    from .download import paper_download_lock
     meta=validate_metadata(args.get('metadata')) if operation=='import_paper' else None
+    notice = notices.describe_known(storage,meta) if meta else None
+    if meta and (notice or args.get('file_type') in notices.KINDS):
+        if not notice or not meta.get('publication_notice'):
+            fail(400,'notice_relation_required','This is a publication notice. Supply metadata.publication_notice with its kind, original article DOI and evidence_url. Import the original article first; import never runs Resolve.')
     if operation=='add_paper_file': paper=require_paper(storage,grant,args.get('gewu_key')); folder_id=None
     else: folder_id=require_folder(storage,grant,args.get('folder_id'));paper=None
     upload,source=ai_uploads.get_upload(storage,grant,args.get('upload_id'))
@@ -282,24 +314,47 @@ def import_file(storage,authorization,grant,operation,args,key,digest):
     if operation=='import_paper' and suffix!='.pdf': fail(400,'pdf_required','Use import_file for a standalone non-PDF file.')
     if operation=='import_file' and suffix=='.pdf': fail(400,'metadata_required','Import an independent PDF with import_paper and AI-supplied metadata.')
     kind=args.get('file_type') or ('unknown' if suffix=='.pdf' else 'other')
+    if notice: kind=notice['kind']
+    elif suffix=='.pdf': kind=notices.title_kind(Path(upload['filename']).stem) or kind
+    if meta and not notice and kind in notices.KINDS:
+        fail(400,'notice_relation_required','A notice PDF needs explicit original-article relation metadata before import. The upload remains available for retry.')
     if kind not in ui.PAPER_FILE_TYPES or kind=='invalid_file': fail(400,'invalid_file_type','Choose an available Paper Files classification.')
     if suffix=='.pdf' and not ui.is_valid_pdf_file(source): fail(400,'invalid_pdf','The uploaded PDF is invalid.')
     # Exact-byte identity is sufficient for safe deduplication. Do not decompress
     # every PDF image/content stream merely to compute an advisory fingerprint.
     if sha256_for_file(source)!=upload['sha256']: fail(409,'file_changed','The staged file changed. Upload it again.')
     destination=None;temporary=None;identity=None;journal=None;committed=False
+    locks=ExitStack()
+    def lock_paper(paper_id):
+        # Never wait for a downloader while holding SQLite's writer lock: its
+        # registration needs that transaction too. The staged upload is retryable.
+        try:
+            locks.enter_context(paper_download_lock(storage.db_path,paper_id,blocking=False))
+        except ValueError:
+            fail(409,'paper_busy','This paper is being updated. Retry this request after it finishes; the upload is still available.')
     storage.conn.execute('BEGIN IMMEDIATE')
     try:
         grant=authenticate(storage,authorization);require_scope(grant,WRITE_SCOPES[operation])
         if folder_id: require_folder(storage,grant,folder_id)
-        if paper: paper=require_paper(storage,grant,paper['storage_key'])
+        if paper:
+            lock_paper(paper['paper_id'])
+            paper=require_paper(storage,grant,paper['storage_key'])
         reused=False
-        if meta:
+        notice_id=None
+        if notice:
+            parent=notices.target(storage,notice)
+            if not parent:
+                fail(409,'notice_target_required','The notice needs one unambiguous original article already in the writable collection. Import that article first, or resolve multiple/uncertain relations externally, then retry. No PDF scan or Resolve ran.')
+            lock_paper(parent['paper_id'])
+            paper=require_paper(storage,grant,parent['storage_key']);reused=True
+            notice_id=notices.record(storage,meta,notice,paper)
+        elif meta:
             incoming=metadata_payload(meta,'ai_'+uuid.uuid4().hex,grant)
             candidates=paper_identity.find(storage,incoming)
             if len(candidates)>1: fail(409,'identity_conflict','The supplied identifiers point to multiple records. No new identity or file was created.')
             if candidates:
-                paper=paper_for_key(storage,grant,candidates[0]['storage_key']);reused=True
+                lock_paper(candidates[0]['paper_id'])
+                paper=reusable_paper(storage,grant,candidates[0]);reused=True
                 old_ids={k:v for k,v in paper_identity.identifiers(storage,paper) if k in ('doi','arxiv')}
                 new_ids={k:v for k,v in paper_identity.identifiers(storage,incoming) if k in ('doi','arxiv')}
                 if any(k in old_ids and old_ids[k]!=v for k,v in new_ids.items()):
@@ -334,13 +389,15 @@ def import_file(storage,authorization,grant,operation,args,key,digest):
                 canonical=Path(storage.resource_local_path(default)).resolve()
                 directory=bundle_path(ui,canonical,paper['storage_key']) or ui.associated_work_dir_for_paper(storage,paper_id)
                 directory=directory/ui.associated_resource_subdir(role)
+            elif kind in notices.KINDS:
+                directory=ui.associated_work_dir_for_paper(storage,paper_id)/ui.associated_resource_subdir(role)
             else:
                 if not folder_id:
                     folder_id=next(r[0] for r in storage.conn.execute("SELECT folder_id FROM library_items WHERE paper_id=? AND COALESCE(trashed_at,'')='' ORDER BY id",(paper_id,)) if r[0] in writable_folders(storage,grant))
                 directory=ui.local_copy_dir_for_library_folder(storage,folder_id)
             safe_directory(directory,[ui.LIBRARY_LOCAL_COPY_ROOT,ui.SPACES_LOCAL_COPY_ROOT,ui.ASSOCIATED_FILES_ROOT,ui.MY_PUBLICATIONS_LOCAL_COPY_ROOT])
             directory.mkdir(parents=True,exist_ok=True)
-            destination=ui.unique_path_in_dir(directory/ui.finder_safe_name(upload['filename']))
+            destination=ui.unique_path_in_dir(directory/ui.finder_safe_name(upload['filename'],preserve_extension=True))
             # Journal an owned inode before publishing the final name. Linking is
             # exclusive: a racing external file is never overwritten or deleted.
             fd, temp_name=tempfile.mkstemp(prefix='.gewu-ai-',dir=directory)
@@ -358,16 +415,20 @@ def import_file(storage,authorization,grant,operation,args,key,digest):
                 added_via='ai_import_attachment' if default else 'ai_import',sha256=upload['sha256'],
                 annotation_state='unknown' if suffix=='.pdf' else 'unannotated',
                 mime_type=mimetypes.guess_type(upload['filename'])[0] or 'application/octet-stream',commit=False)
-            if not default:
+            if not default and kind not in notices.KINDS:
                 raw=ui.parse_raw_json(paper)
                 raw['file_layout']={'canonical_path':str(destination),'default_resource_id':resource['id'],'version':1,'links_pending':True}
                 storage.conn.execute('UPDATE papers SET primary_resource_id=?,main_pdf_path=?,merged_pdf_path=?,original_filename=?,import_kind=?,raw_json=? WHERE paper_id=?',
                     (resource['id'] if suffix=='.pdf' else None,str(destination) if suffix=='.pdf' else '',str(destination) if suffix=='.pdf' else '',upload['filename'],suffix.lstrip('.') or 'file',json.dumps(raw,ensure_ascii=False),paper_id))
+        if notice_id:
+            notices.attach(storage,notice_id,resource['id'])
+            resource=storage.get_paper_resource(resource['id'])
         remember_source(storage,resource['id'],{'source_path':'ai-upload:'+upload['upload_id'],'size_bytes':upload['size_bytes'],'kind':suffix.lstrip('.'),'connection_id':grant['id'],'source_url':(meta or {}).get('source_url','')},upload['sha256'],key)
         result={'gewu_key':paper['storage_key'],'item_kind':'file' if operation=='import_file' else 'paper',
                 'folder_id':folder_id,'membership_id':(member or {}).get('id'),'reused_paper':reused,
                 'reused_file':bool(duplicate),'file':file_metadata(resource),'upload_id':upload['upload_id'],
                 'metadata_resolution':'not_requested','layout_pending':True}
+        if notice_id: result['publication_notice_id']=notice_id
         save_receipt(storage,grant,operation,key,digest,result);storage.conn.commit();committed=True
         if journal: journal.unlink(missing_ok=True)
         return finish_import(storage,grant,result)
@@ -378,3 +439,5 @@ def import_file(storage,authorization,grant,operation,args,key,digest):
             if temporary and identity: unlink_owned(temporary,identity)
             if journal: journal.unlink(missing_ok=True)
         raise
+    finally:
+        locks.close()

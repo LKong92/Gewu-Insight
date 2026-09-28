@@ -120,6 +120,8 @@ def paper_details(storage, paper):
     result = metadata(paper)
     result['files'] = [file_metadata(r, (default or {}).get('id', 0)) for r in resources]
     result['default_file_id'] = (default or {}).get('id')
+    from .publication_notices import for_paper
+    result['publication_notices'] = for_paper(storage,paper['paper_id'])
     return result
 
 

@@ -1406,6 +1406,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             resources = storage.list_paper_resources(paper_id)
             resolved = storage.resolve_default_paper_resource(paper_id)
+            from .publication_notices import for_paper
+            notices = for_paper(storage,paper['paper_id'])
             paper = storage.get_paper(paper_id) or paper
         finally:
             storage.close()
@@ -1419,6 +1421,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "default_resource_id": int((resolved or {}).get("id") or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
                 "files": paper_resources_to_api(resources),
+                "publication_notices": notices,
             }
         )
 
@@ -10094,6 +10097,7 @@ def paper_resources_to_api(resources: Iterable[dict[str, Any]]) -> list[dict[str
 
 
 def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]:
+    from .publication_notices import for_paper
     paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
@@ -10110,6 +10114,7 @@ def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]
         "default_resource_id": int((resolved or {}).get("id") or 0),
         "resolved_resource_id": int((resolved or {}).get("id") or 0),
         "files": paper_resources_to_api(resources),
+        "publication_notices": for_paper(storage,paper_id),
         "paper": paper_to_api(paper),
     }
 
@@ -21538,10 +21543,21 @@ def existing_path_or_empty(path: str) -> str:
     return path if requested.exists() else ""
 
 
-def finder_safe_name(value: str, fallback: str = "Untitled") -> str:
+def finder_safe_name(value: str, fallback: str = "Untitled", *, preserve_extension: bool = False) -> str:
     clean = " ".join(str(value or "").strip().split()) or fallback
     clean = re.sub(r"[/:\0]+", "-", clean)
     clean = clean.strip(" .")
+    if preserve_extension:
+        # File attachment names must retain their type after truncation. Folder
+        # names keep the existing policy. Leave room for collision/temp suffixes
+        # under the filesystem's 255-byte component limit, including Unicode.
+        suffix = Path(clean).suffix
+        if len(suffix) >= 120 or len(suffix.encode("utf-8")) >= 220:
+            suffix = ""
+        stem = clean[:-len(suffix)] if suffix else clean
+        stem = stem[:120 - len(suffix)]
+        stem = stem.encode("utf-8")[:220 - len(suffix.encode("utf-8"))].decode("utf-8", errors="ignore")
+        return (stem.rstrip(" .") or "File") + suffix
     return clean[:120] or fallback
 
 
@@ -22493,12 +22509,15 @@ def attach_file_to_paper(
         version = "other"
     elif role != "publication_version":
         version = ""
-    safe_name = finder_safe_name(Path(filename or "Attached File").name, "Attached File")
+    safe_name = finder_safe_name(Path(filename or "Attached File").name, "Attached File", preserve_extension=True)
     suffix = Path(safe_name).suffix.lower()
     resolved_type = normalize_paper_file_type(
         file_type
         or legacy_paper_file_type(role, version, display_name=safe_name)
     )
+    from .publication_notices import title_kind, KINDS
+    if suffix == '.pdf': resolved_type=title_kind(Path(safe_name).stem) or resolved_type
+    if resolved_type in KINDS: role,version,version_label=legacy_role_projection(resolved_type)
     if suffix == ".pdf" and not is_valid_pdf_bytes(content):
         raise ValueError("The selected file is not a valid PDF")
     digest = hashlib.sha256(content).hexdigest()
@@ -31112,6 +31131,39 @@ INDEX_HTML = """<!doctype html>
     }
     .paper-files-add-controls .action { min-height: 25px; padding: 3px 8px; font-size: 10px; }
     .paper-files-body { display: grid; gap: 0; padding: 4px 7px 6px; }
+    .paper-files-notice {
+      min-width: 0;
+      margin: 0 0 7px;
+      border: 1px solid #dfe5ec;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.78);
+      color: #536173;
+      padding: 7px 8px;
+      font-size: 10.5px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .paper-files-notice > summary {
+      color: #294b6d;
+      font-size: 10.5px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .paper-files-notice > summary:focus-visible {
+      outline: 2px solid rgba(61, 118, 174, 0.5);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+    .paper-files-notice-date {
+      color: #7b8491;
+      font-size: 9px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .paper-files-notice-content { display: grid; gap: 6px; padding-top: 7px; }
+    .paper-files-notice-content > p { margin: 0; }
+    .paper-files-notice-content > a { color: #294b6d; font-size: 10px; }
+    .paper-files-notice-hint { color: #7b8491; font-size: 9px; }
     .paper-files-panel.is-collapsed .paper-files-head { border-bottom: 0; }
     .paper-files-panel.is-collapsed .paper-files-add-controls,
     .paper-files-panel.is-collapsed .paper-files-body { display: none; }
@@ -46036,7 +46088,7 @@ INDEX_HTML = """<!doctype html>
             <div class="library-resource-inspector-title"><strong>Paper Files</strong><span class="library-resource-count">${snapshot ? `${files.length} item${files.length === 1 ? "" : "s"}` : "Loading"}</span></div>
             <div class="library-resource-paper-title" title="${escapeAttr(title)}">${escapeHtml(title)}</div>
           </header>
-          <div class="library-resource-body" role="list" aria-label="Paper Files">${rows}</div>
+          <div class="library-resource-body" role="list" aria-label="Paper Files">${publicationNoticesMarkup(snapshot)}${rows}</div>
           <input type="file" data-library-resource-file-input hidden multiple>
         </section>
       `;
@@ -46555,6 +46607,16 @@ INDEX_HTML = """<!doctype html>
       return state.paperFilesByPaperId[String(paperId || "")] || null;
     }
 
+    function publicationNoticesMarkup(snapshot) {
+      return (snapshot?.publication_notices || []).map(notice => {
+        const label = paperFileRoleLabel({file_type: notice.kind});
+        const doi = String(notice.doi || "");
+        const link = doi ? `<a href="https://doi.org/${escapeAttr(encodeURIComponent(doi))}" target="_blank" rel="noopener noreferrer">${escapeHtml(doi)}</a>` : "";
+        const date = notice.publication_date ? ` <span class="paper-files-notice-date">· ${escapeHtml(notice.publication_date)}</span>` : "";
+        return `<details class="paper-files-notice"><summary>${escapeHtml(label)}${date}</summary><div class="paper-files-notice-content"><p>${escapeHtml(notice.title || "")}</p>${link}<p class="paper-files-notice-hint">Notice about this article. Original article and files retained.</p></div></details>`;
+      }).join("");
+    }
+
     function applyPaperFilesPayloads(payloads) {
       (Array.isArray(payloads) ? payloads : []).forEach((payload) => {
         const paperId = String(payload?.paper_id || "");
@@ -46572,6 +46634,10 @@ INDEX_HTML = """<!doctype html>
         published_version: "Published version",
         corrected_published_version: "Corrected published version",
         correction_notice: "Correction notice",
+        retraction_notice: "Retraction notice",
+        expression_of_concern: "Expression of concern",
+        withdrawal_notice: "Withdrawal notice",
+        addendum: "Addendum",
         supplementary_material: "Supplementary material",
         peer_review_file: "Peer review file",
         perspective: "Perspective",
@@ -46602,6 +46668,10 @@ INDEX_HTML = """<!doctype html>
         ["published_version", "Published version"],
         ["corrected_published_version", "Corrected published version"],
         ["correction_notice", "Correction notice"],
+        ["retraction_notice", "Retraction notice"],
+        ["expression_of_concern", "Expression of concern"],
+        ["withdrawal_notice", "Withdrawal notice"],
+        ["addendum", "Addendum"],
         ["supplementary_material", "Supplementary material"],
         ["peer_review_file", "Peer review file"],
         ["perspective", "Perspective"],
@@ -46727,7 +46797,7 @@ INDEX_HTML = """<!doctype html>
             </span>
             <span class="paper-files-current-summary" title="${escapeAttr(currentSummary)}">${escapeHtml(currentSummary)}</span>
           </div>
-          <div class="paper-files-body">${paper?.preprint_id ? `<div class="paper-files-sync-row"><button class="action" type="button" data-action="sync-arxiv-versions">Sync Versions</button></div>` : ""}${body}</div>
+          <div class="paper-files-body">${publicationNoticesMarkup(snapshot)}${paper?.preprint_id ? `<div class="paper-files-sync-row"><button class="action" type="button" data-action="sync-arxiv-versions">Sync Versions</button></div>` : ""}${body}</div>
         </section>
       `;
     }

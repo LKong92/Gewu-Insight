@@ -11,6 +11,16 @@ ORGANIZE_TOOLS = {'move_folder', 'rename_folder', 'move_file', 'rename_file'}
 UPLOAD_SCOPES = ('papers:import', 'files:import', 'files:add')
 REQUEST_ID = {'type': 'string', 'pattern': '^[a-zA-Z0-9_-]{8,100}$'}
 METADATA_FIELDS = {
+    'publication_notice': {
+        'type': 'object', 'additionalProperties': False,
+        'description': 'For a correction, erratum, retraction or other notice: identify the ORIGINAL article explicitly. The notice DOI remains separate; never import a notice as a research paper. Import the original first if absent. No Resolve runs during import.',
+        'required': ['kind', 'related_dois', 'evidence_url'],
+        'properties': {
+            'kind': {'type': 'string', 'enum': ['correction_notice', 'retraction_notice', 'expression_of_concern', 'withdrawal_notice', 'addendum']},
+            'related_dois': {'type': 'array', 'minItems': 1, 'maxItems': 20, 'items': {'type': 'string'}},
+            'evidence_url': {'type': 'string', 'description': 'Publisher or registry URL establishing which original article this notice updates.'},
+        },
+    },
     'title': {'type': 'string', 'minLength': 1, 'maxLength': 2000},
     'authors': {'type': 'array', 'minItems': 1, 'maxItems': 1000, 'items': {'type': 'string', 'minLength': 1, 'maxLength': 300}},
     'publication_type': {'type': 'string', 'enum': ['journal_article', 'preprint', 'other']},
