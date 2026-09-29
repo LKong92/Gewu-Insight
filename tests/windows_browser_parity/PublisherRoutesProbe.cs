@@ -9,7 +9,17 @@ internal sealed partial class WorkspaceWindow
     async Task CheckPublisherRoutesAsync()
     {
         byte[] expected = await File.ReadAllBytesAsync(Path.Combine(dataRoot, "publisher.pdf"));
+        var browserCore = selected!.View!.CoreWebView2;
+        string originalPage = browserCore.Source;
+        var fixtureCookie = browserCore.CookieManager.CreateCookie("gewuNatureFixture", "shared", ".nature.com", "/");
+        fixtureCookie.IsSecure = true;
+        browserCore.CookieManager.AddOrUpdateCookie(fixtureCookie);
         foreach (var (scenario, publisher, host, target) in new[] {
+            ("nature-session", "nature", "www.nature.com", ""),
+            ("nature-idp", "nature", "www.nature.com", "idp.nature.com"),
+            ("nature-cdn", "nature", "www.nature.com", "media.springernature.com"),
+            ("nature-cross-publisher", "nature", "www.nature.com", "www.science.org"),
+            ("nature-lookalike", "nature", "www.nature.com", "nature.com.unverified.example"),
             ("acs-cdn", "acs", "pubs.acs.org", "acs.figshare.com"),
             ("oup-cdn", "oup", "academic.oup.com", "oup.silverchair-cdn.com"),
             ("oup-watermark", "oup", "academic.oup.com", "watermark.silverchair.com"),
@@ -73,6 +83,7 @@ internal sealed partial class WorkspaceWindow
                         _ => "location.href='/main.pdf'" };
                     string button = "<button type='button' onclick=\"" + action + "\">Download PDF</button>";
                     string body = scenario == "form" ? "<form>"+button+"</form>" : scenario == "ambiguous" ? button+button : button;
+                    if (scenario == "nature-session") body = "<script>if(document.cookie.includes('gewuNatureFixture=shared')) { const m=document.createElement('meta');m.name='citation_pdf_url';m.content='/main.pdf';document.head.append(m); }</script>";
                     string initial = scenario == "popup-unexpected" ? "window.open('/main.pdf','_blank');" : "";
                     bytes = Encoding.UTF8.GetBytes("<!doctype html><title>PDF control fixture</title><script>window.__stamp='original';document.cookie='popupFixture=yes;Secure;SameSite=Lax';fetch('/state.json');"+initial+"</script>"+body);
                 }
@@ -90,7 +101,7 @@ internal sealed partial class WorkspaceWindow
             ControlAdded += ChildAdded;
             using var context = Command(new { publisher_download_kind = "publisher-main-pdf", publisher_download_name = publisher });
             var request = new PublisherRequest(context.RootElement);
-            bool denied = scenario is "wrong-tenant" or "acs-cloud" or "ambiguous" or "form" or "once" or
+            bool denied = scenario is "nature-cross-publisher" or "nature-lookalike" or "wrong-tenant" or "acs-cloud" or "ambiguous" or "form" or "once" or
                 "popup-unverified" or "popup-local" or "popup-redirect" or "popup-nested" or "popup-unexpected" or "popup-cancel" or "popup-close";
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(denied ? 4 : 12));
             string pathOut = Path.Combine(dataRoot, "route-" + scenario + ".pdf");
@@ -100,6 +111,11 @@ internal sealed partial class WorkspaceWindow
             finally { ControlAdded -= ChildAdded; }
             Check(denied ? error != null : error == null && File.ReadAllBytes(pathOut).SequenceEqual(expected), "publisher route original bytes and result: " + scenario + " " + error?.Message + (error != null && !denied ? " requests="+string.Join(",",requests)+" children="+children.Count : ""));
             Check(!leaked, "publisher route excludes workspace authentication: " + scenario);
+            if (scenario == "nature-session") {
+                Check(requests.Any(u => u.EndsWith("/main.pdf")) && browserCore.Source == originalPage,
+                    "Nature hidden download retains the visible Browser session and webpage");
+            }
+            if (scenario is "nature-cross-publisher" or "nature-lookalike") Check(requests.Count == 1, "Nature download stops unapproved redirect before contacting target: " + scenario);
             if (scenario is "wrong-tenant" or "acs-cloud") Check(requests.Count == 1, "unreviewed tenant/cloud redirect stops before request: " + scenario);
             if (scenario is "ambiguous" or "form") Check(requests.All(u => !u.EndsWith("/main.pdf")), "uncertain/form PDF control is never activated: " + scenario);
             if (scenario == "once") Check(await core.ExecuteScriptAsync("window.__clicks") == "1", "a PDF control is activated at most once per page");
@@ -112,5 +128,6 @@ internal sealed partial class WorkspaceWindow
             if (scenario == "popup-cancel") Check(error is OperationCanceledException && !File.Exists(pathOut), "cancelled publisher popup produces no output");
             Controls.Remove(view);
         }
+        browserCore.CookieManager.DeleteCookie(fixtureCookie);
     }
 }

@@ -21,6 +21,65 @@ class PaperFilesInteractionTests(unittest.TestCase):
         result = subprocess.run(["node", "-e", script + "\n(async () => {\n" + code + "\n})().catch(error => {console.error(error); process.exit(1);});"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_forced_refresh_supersedes_an_older_empty_read(self):
+        self.run_js(["paperFilesSnapshot", "loadPaperFiles"], r'''
+global.state = {mode:'report', paperFilesByPaperId:{}, paperFileRequests:{}};
+const replies = [];
+global.libraryItemById = () => null;
+global.fetch = () => new Promise(resolve => replies.push(files => resolve({ok:true,json:async()=>({paper_id:'paper',files})})));
+const older = loadPaperFiles('paper');
+const newer = loadPaperFiles('paper', {force:true});
+assert.equal(replies.length, 2);
+replies[1]([{id:5}]); await newer;
+replies[0]([]); await older;
+assert.deepEqual(paperFilesSnapshot('paper').files, [{id:5}]);
+''')
+
+    def test_download_replaces_monitor_empty_cache_before_supplement_failure(self):
+        self.run_js(["paperFilesSnapshot", "applyPaperFilesPayloads", "loadPaperFiles",
+                     "applyPaperPdfDownloadResult", "requestPaperPdfDownload",
+                     "downloadPublishedPdfInBackground", "downloadScienceSupplementaryPdfs"], r'''
+global.state = {mode:'report', libraryTab:'library', librarySelection:{id:9},
+ paperFilesByPaperId:{paper:{paper_id:'paper',files:[]}}, paperFileRequests:{}};
+global.pendingNativePublisherDownloads = new Map();
+let updated = [], renders = 0, failSupplement = false, sequence = 0;
+global.updatePaperState = (id,paper) => updated.push(paper);
+global.libraryItemById = () => ({paper_id:'paper'});
+global.renderLibraryNavigationContent = options => {assert.equal(options.preserveRows,true); renders++;};
+const saved = {paper:{paper_id:'paper',merged_pdf_path:'/Publisher.pdf'},
+ paper_files:[{paper_id:'paper',files:[{id:5,file_type:'published_version',is_default:true}]}]};
+const fallback = {url:'https://www.science.org/pdf',kind:'aaas-published-pdf',
+ followup:{url:'https://www.science.org/article',kind:'aaas-supplement-discovery'}};
+let response = {result:{status:'success'}, ...saved};
+global.fetch = async () => ({ok:true,json:async()=>response});
+global.window = {crypto:{randomUUID:()=>String(++sequence)}, setTimeout:()=>1, clearTimeout(){},
+ webkit:{messageHandlers:{publisherPdfDownload:{postMessage(message) {
+   const pending = pendingNativePublisherDownloads.get(message.token);
+   if (message.context.publisher_download_kind === 'aaas-published-pdf') pending.resolve(saved);
+   else {
+     assert.equal(paperFilesSnapshot('paper').files[0].id,5);
+     if (failSupplement) pending.reject(Error('Supplement unavailable'));
+     else pending.resolve({supplement_urls:[]});
+   }
+ }}}}};
+// A direct download from Journal Monitor replaces its cached empty list.
+await requestPaperPdfDownload({paper_id:'paper'});
+assert.equal(paperFilesSnapshot('paper').files[0].id,5);
+assert.equal(renders,0);
+// Switching to Library during the native download updates the selected list.
+state.mode='library'; state.paperFilesByPaperId.paper={files:[]};
+response = {result:{status:'failed'},browser_fallback:fallback}; failSupplement=true;
+await assert.rejects(requestPaperPdfDownload({paper_id:'paper'}),/Supplement unavailable/);
+assert.equal(paperFilesSnapshot('paper').files[0].id,5);
+assert.equal(updated.at(-1).merged_pdf_path,'/Publisher.pdf');
+assert.equal(renders,1);
+// A publisher with no supplements must retain its saved main-paper result.
+failSupplement=false; fallback.followup.kind='publisher-supplement-discovery';
+const result=await requestPaperPdfDownload({paper_id:'paper'});
+assert.equal(result.paper.merged_pdf_path,'/Publisher.pdf');
+assert.equal(result.paper_files[0].files[0].id,5);
+''')
+
     def test_saved_files_replace_empty_cache_and_supersede_inflight_reads(self):
         self.run_js(["paperFilesSnapshot", "applyPaperFilesPayloads", "loadPaperFiles"], r'''
 global.state = {mode:'browser', paperFilesByPaperId:{paper:{paper_id:'paper',files:[]}}, paperFileRequests:{}};

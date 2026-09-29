@@ -9,7 +9,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Set-Location -LiteralPath $repoRoot
-. (Join-Path $PSScriptRoot 'windows_signing.ps1')
+. (Join-Path $PSScriptRoot 'windows_release.ps1')
+if ($Version -notmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') { throw 'Version must have the form major.minor.patch.' }
 if ($InnoCompiler -and -not $SigningConfiguration) {
     throw 'Installer builds require a publisher signing configuration. See docs/WINDOWS_SIGNING.md.'
 }
@@ -56,6 +57,8 @@ if ($InnoCompiler) {
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
     $installerPath = Join-Path $repoRoot "dist/installers/Gewu-Insight-Windows-Preview-$Version-x64-Setup.exe"
     Assert-GewuRsaSignature (Get-AuthenticodeSignature -LiteralPath $installerPath) $installerPath -RequireTimestamp
+    & (Join-Path $PSScriptRoot 'test_windows_release.ps1') -PayloadPath $payload -InstallerPath $installerPath -Version $Version `
+        -ReportPath (Join-Path $repoRoot "dist/installers/Gewu-Insight-Windows-Preview-$Version-preflight.json")
 }
 if (-not $signing) { Write-Warning 'Unsigned development payload only; no installer was built or accepted for distribution.' }
 Write-Output "Windows preview payload: $payload"

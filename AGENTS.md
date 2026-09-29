@@ -29,6 +29,7 @@
 - Windows parity excludes Apple Passwords/AutoFill, Safari source sync, and macOS system Quick Look; the user does not need those Apple-specific capabilities.
 - Windows product updates include backing up, installing the verified Preview, reopening the original App, and checking its version/data. Do not wait for a separate installation request after the user asks to continue fixes or feature alignment. Respect an explicit source-only request or an actual installation blocker; commit/push still require explicit authorization.
 - Keep local upgrades efficient: reuse existing installation/backup scripts and validated artifacts when unchanged. Keep a verified recovery backup and check the installed version, startup and data integrity; repeat or broaden checks only for changed behavior, failures or unresolved concerns. Batch independent checks instead of adding many separate tool rounds.
+- Windows updates require the signed release builder and a fresh `scripts/test_windows_release.ps1` check before closing the original App. Do not recreate temporary unsigned installers or treat a previously allowed unsigned version as release acceptance. A static pass still requires isolated startup and installed-version/data checks.
 - Notify the user promptly once installation and essential verification succeed, before lengthy documentation cleanup. Keep the handoff concise; when explaining elapsed time, distinguish actual installer time from preparation, backup, verification and documentation time.
 
 ## Commit Messages

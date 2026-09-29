@@ -1,5 +1,41 @@
 # Windows Preview — 实现与验收状态
 
+## 2026-09-29：0.1.20 独立桌面外壳加载本地源码
+
+- 根据用户最新选择，`Start Gewu Insight.cmd` 默认启动现有完整 0.1.20 外壳，通过本地 `.venv` 运行仓库源码；保留原生菜单、Browser 与 PDF 桥接。默认不再打开 Chrome，`--web` 仅为可选模式。启动器拒绝低于 0.1.20 的外壳，避免遗漏该版原生 Nature 修复；6 个关键 Python/Web 文件与 0.1.20 包一致。详见 [源码桌面使用说明](WINDOWS_SOURCE_DESKTOP.md)。
+- 相同 0.1.20 DLL 现已通过隔离启动和原资料库启动，实际 About 显示 0.1.20，Library、Browser/历史记录可见；正常关闭后服务退出、锁释放，实际 CMD 入口重开通过。系统此次允许相同组件的原因未确定；未运行安装器或改系统信任设置，旧 0.1.19 安装及恢复备份保留。这不等于未签名包通过正式发布检查。
+- 7 项启动器检查、6 项下载回退检查及 Python 编译通过；2,266 个外壳包文件哈希一致，原库受保护表与 19 个研究文件保持一致：schema 18，4,442 papers / 39 Publications / 10 items / 5 folders / 6 resources，完整性 OK、外键错误 0。仅自动监控状态设置随启动变化；未重复实际机构权限下载。证据及增量备份：`tmp/windows-desktop-source-20260929/`；既有完整恢复备份：`tmp/windows-source-20260929/`。无 commit/push 或公开发布。
+
+## 2026-09-11：反复安装失败的发布流程整改；签名身份待确定
+
+- 多次未签名本地更新虽曾启动成功，未解决新版组件信任。当前 0.1.20 的 2,266 个文件清单一致，但 375 个二进制中 75 个未签名，Setup 也未签名；新静态预检准确阻止接受此包，不启动它或关闭原 0.1.19。用户确认无现成签名证书/账户，本机代码签名证书数量 0、SAC 保持 ON（1）。
+- 新增 `scripts/windows_release.ps1` / `scripts/test_windows_release.ps1`，重新核验清单完整性、每个 EXE/DLL/PYD 的实际 RSA 签名、主程序/安装器时间戳及发布者/版本一致性。接入标准签名构建和当前待执行升级入口，报告明确静态检查不等于运行验收；AGENTS 禁止继续复制临时未签名安装路径。不会因为旧检查结果成功就跳过本次签名检查。
+- 26 项新检查（17 项真实临时文件/路径检查、9 项明确模拟签名元数据的策略检查）与原 5 项真实签名/Inno 防护通过；PowerShell 语法、Python 升级脚本编译及 diff 通过。签名及新安装尚未完成，需要真实发布者身份和相应签名服务；未购买、注册、提交外部复核、改变许可证/安全/信任设置或 commit/push。详见 [签名与发布状态](WINDOWS_SIGNING.md)。
+
+## 2026-09-11：0.1.20 Nature 会话回退已实现；系统拦截，尚未安装
+
+- Wu / Nature Physics `10.1038/s41567-026-03462-6` 在原 Browser 显示 Institute of Science Tokyo 全文权限，普通 Python PDF 请求却返回 HTTP 200 HTML、`cookies_not_supported`。后台候选及原生出版商分支遗漏 Nature，未使用已有共享 Browser profile 回退。补齐 `10.1038/` 候选、`nature.com` 与精确 `media.springernature.com` 原生范围；沿用原字节校验、80 秒/64 MB、附件分类和成功快照同步，未扩大全局来源策略。
+- 98 项相关 Python 测试中 97 通过、1 项平台跳过；Python 编译、diff、.NET 构建通过。新增 `--publisher-only` 隔离范围，125 项原生检查通过，包含合成 Browser 会话共享、原页面保留、Nature 身份/CDN 重定向及跨出版商/仿冒地址拦截。完整旧原生套件先在无关 Loader 状态等待超时；未将局部通过称作全套通过。原有 NU1900 审计索引不可达仍在。
+- 0.1.20 payload 和本地未签名安装器已生成，但同一 payload 两次启动均被应用程序控制阻止：12:07:57、12:08:43 JST 的 .NET Runtime 日志明确指向 `dist/windows-preview-0.1.20/Gewu Insight.dll`，`0x800711C7`，DLL SHA-256 `beaf7b4d6c7e63078c4505eaf89065fe712617ea91159ce3d108130480e2f211`。**没有执行安装，当前仍为 0.1.19**；未改系统安全/信任设置，也未绕过拦截。0.1.19 已验证恢复备份保留，0.1.20 安装、安装后数据/实际后台下载验收待解除正规分发阻塞后进行。
+- 原 0.1.19 Browser > Save to Gewu > Details > Get PDF 实际返回 Ready，并验证该 DOI 与 Published version。后续检查发现用户此前 12:01:30 已将同一论文 PDF 拖入现有 Library item 10 / unsorted；资源 6 存在，552,427 bytes，Published version / Default，原 UI 已显示 Paper Files 1 item。本轮未重复入库或修改原文件。证据：`tmp/nature-download-0.1.20/`、`tmp/install-0.1.20-20260911/`。无 commit/push 或 Mac 分支改动。
+
+## 2026-09-11：0.1.19 已修复并安装下载后的 Paper Files 同步
+
+- Joglekar / Science `10.1126/science.aek6943` 的 `Publisher.pdf` 实际已登记（786,627 bytes，Published version / Default）；Journal Monitor 下载仅更新文章状态，未替换 Library 先前缓存的空附件列表。原文件存在，无需重新下载或修改正式资料。
+- `/api/download` 现在返回已登记的 Paper Files 快照。直接下载及原生出版商下载的每次主文/补充文件成功响应立即同步缓存；后续补充材料失败仍保留已保存主文。空补充材料发现结果保留主文元数据。强制附件刷新不再复用更早的在途请求，旧空列表回复不能覆盖新快照。复用既有登记、分类和默认文件逻辑，无 schema 变更。
+- 129 项相关测试中 128 通过、1 项平台跳过；包含真实 JavaScript 并发/缓存/原生回调及临时 SQLite 下载响应回归。Python 编译、4 个内联 JS 语法、diff 和 .NET 构建通过；原有 NU1900 审计索引不可达及 Python 字符串转义警告仍在。包内服务/API/MCP 两次、开发包原生两次及安装位置原生一次隔离启动通过。
+- 2,338 文件恢复备份已验证；安装器退出 0（11:44:44–11:45:01 JST，约 17 秒）。2,266 个安装清单文件、原库全部表摘要及 18 个研究文件一致；schema 18，2,688 papers / 39 Publications / 9 Library items / 5 folders / 5 resources，完整性 OK、外键错误 0。原 App 正常关闭/重开，可见 PID 15364，文件版本 0.1.19；实际 Library 选中 Joglekar 后 Paper Files 显示 1 item、Publisher.pdf、Published version、Default。没有再次下载论文、直接修补正式资料或改变安全设置；无 commit/push 或 Mac 分支改动。
+- 安装器 SHA-256 `80e09bde59eca87b866072c5744173b715fe77e67553c1892b4cf8ee230b18d5`；DLL `24ef9122b9b8d0dfe80e275e20eaaa37043deab9fee1f2e754441a366a9b6570`。证据与备份：`tmp/paper-files-0.1.19/`、`tmp/install-0.1.19-20260911/`。
+
+## 2026-09-11：0.1.18 已修复并安装 Journal Monitor 历史补抓
+
+- 复现 2026-09-09 只有 39 篇，且 `missingJournals=[]`。此前按用户要求清理 papers 后，旧 fetch_runs 成功状态保留，打开日期不会自动补回。本次通过原 App 的明确日期刷新补抓，未恢复整库备份。
+- arXiv 官方 recent 页面将 295 个 ID 归入 9 月 9 日；按提交时间推算公告日的旧历史 API 路线漏掉其中 181 个，并夹带其他公告日记录。新增近 10 天且官方 recent 页面完整覆盖时的按日抓取，严格核对日标题、数量和唯一 ID；范围外仍使用原 API 路线。最新公告就绪判断不变。共用新投稿/cross-list 元数据解析；官方公告时间在 ID 元数据合并、存储 upsert、后台补全中保持一致，后续 API 推算不能覆盖已核实公告日。ID 元数据请求的零重试修正为至少一次 HTTP 尝试。
+- 8 项新增回归和 32 项 arXiv/自动监控/更新回归通过；71 项来源归属、资源、论文身份检查通过，共 111 项。Python 编译、diff 和 .NET 编译通过。初次测试中的 GBK 子进程输入错误在 UTF-8 运行环境下复验通过；新测试读取 raw 字段的错误也已修正。实际官方网络抓取在临时 SQLite 精确匹配 295 个 ID。元数据 Export API 返回 429 时保留待补全状态；本次从已核验旧备份补回 181 条缺少的摘要，不恢复/改写论文文件及用户笔记。
+- 安装包复用 1,887 个已核验运行时文件；2,265 个清单文件与安装位置一致。恢复备份验证排除 SQLite 临时 WAL/SHM；原数据逻辑摘要及 17 个持久研究文件保持一致。安装器退出 0，11:06:44–11:07:00 JST（约 16 秒）；原 App 正常关闭/重开、API/资源核验通过，版本 0.1.18，窗口可见 PID 14120。开发包及安装路径的第二次隐藏桌面启动间歇返回 DLL 初始化错误；相同开发包重新两次启动通过，安装位置第一次隔离启动和实际原 App 两次普通启动通过，未将失败掩盖为全部隐藏检查通过。
+- 安装后通过原 App 接口补抓 arXiv，再按官方日期将剩余 2 条记录从 9 月 9 日移至 9 月 10 日；未删除论文。最终 Sep-9 数据 **383 total**：Nature 19、Nature Communications 23、Nature Physics 6、Nature Materials 1、Nature Nanotechnology 1、PRL 30、PRX 1、Nano Letters 7、arXiv 295。原 App 实际显示 **166 shown**，保留现有 Physics / Materials Science / Quantum Information 和 arXiv 分类筛选，窗口停留在 Sep-9。Mac 的 212 仍需其分项数量和筛选设置才能逐项核对。
+- 39 Publications / 8 Library items / 5 folders / 4 resources、研究文件和此前 2,082 个 papers 的下载/分析状态均保留；schema 18，完整性 OK、外键错误 0。无 commit/push、Mac 分支、安全或信任设置变更。安装器 SHA256 `98d62f71ae4157afe136463d3f682d351c616732a8bf4d50afb70097bfcd0d37`；DLL `81215b285a816e9ab8fe42a321b091734c78e2e6abc49e37bbf620d83b8ae217`。证据：`tmp/journal-repair-20260909/`、`tmp/windows-parity-0.1.18/`、`tmp/install-0.1.18-20260911/`。
+
 ## 2026-09-10：0.1.17 已同步最新 Mac AI/MCP 更新并安装
 
 - 重新只读核对并获取远端 `main`，发现 `2a12320..9ea2bb3b8160aa931667afc1c412608627f2f473` 的两个新提交。三方适配 `f4dc266` 的已撤销连接隐藏/活动记录独立滚动，以及 `9ea2bb3` 的 MCP 原始文件交付/只追加分析。保留 Windows UTF-8 STDIO、重启端口跟随、私有工作区与回收事务；没有合并 Mac 分支或 commit/push。

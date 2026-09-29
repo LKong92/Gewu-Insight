@@ -6,6 +6,22 @@ from paper_monitor.ui_server import published_pdf_browser_fallback
 
 
 class PublishedPdfBrowserFallbackTests(unittest.TestCase):
+    def test_nature_failure_uses_browser_session_for_the_published_pdf(self):
+        paper = {"doi": "10.1038/s41567-026-03462-6", "journal": "Nature Physics"}
+        article = "https://www.nature.com/articles/s41567-026-03462-6"
+        supplement = {
+            "kind": "publisher-supplement-discovery", "publisher": "nature",
+            "url": article, "referer": article, "fallback_urls": [],
+        }
+        self.assertEqual(published_pdf_browser_fallback(paper, {"status": "failed"}), {
+            "kind": "publisher-main-pdf", "publisher": "nature",
+            "url": article + ".pdf", "referer": article, "followup": supplement,
+        })
+        self.assertEqual(published_pdf_browser_fallback(paper, {
+            "status": "partial", "message": "main PDF saved as merged PDF; no PDF supplement found",
+        }), supplement)
+        self.assertIsNone(published_pdf_browser_fallback(paper, {"status": "success"}))
+
     def test_aaas_failure_offers_only_official_published_pdf(self):
         fallback = published_pdf_browser_fallback(
             {"doi": "https://doi.org/10.1126/sciadv.adw9449"},

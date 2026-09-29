@@ -981,6 +981,31 @@ class PaperResourceStorageTests(unittest.TestCase):
                 if shared:
                     self.assertEqual(self.storage.get_paper_resource(other["id"])["stored_path"], str(source))
 
+    def test_download_handler_returns_registered_paper_files(self) -> None:
+        paper_id = "paper-http-download-files"
+        self.add_paper(paper_id)
+        downloaded_path = self.write_pdf("Download/Published.pdf")
+        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler.configured_db_path = self.db_path
+        handler.send_json = MagicMock()
+
+        def download(**kwargs):
+            kwargs["storage"].update_download_status(
+                paper_id, status="partial", main_pdf_path=str(downloaded_path),
+                merged_pdf_path=str(downloaded_path),
+            )
+            return {"status": "partial", "merged_pdf_path": str(downloaded_path)}
+
+        with patch.object(ui_server, "download_paper", side_effect=download):
+            handler.handle_download({"paper_id": paper_id})
+
+        response = handler.send_json.call_args.args[0]
+        snapshot = response["paper_files"][0]
+        self.assertEqual(snapshot["paper_id"], paper_id)
+        self.assertEqual(len(snapshot["files"]), 1)
+        self.assertTrue(snapshot["files"][0]["exists"])
+        self.assertEqual(snapshot["files"][0]["id"], response["paper"]["primary_resource_id"])
+
     def test_preferred_paper_file_http_handler_accepts_any_valid_file(self) -> None:
         self.add_paper("paper-http-current-role")
         current_path = self.write_pdf("HTTP Role/Published.pdf")

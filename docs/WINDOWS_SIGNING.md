@@ -1,6 +1,121 @@
 # Windows signing and local installation recovery
 
-## Current result: 0.1.13 installed and normally reopened (2026-09-10)
+## Current direction: 0.1.20 desktop shell with local source (2026-09-29)
+
+The user clarified that Gewu must retain its independent desktop window and
+match 0.1.20. The default CMD launcher now starts the existing complete 0.1.20
+build with this checkout's Python service. About confirms 0.1.20; Library and
+embedded Browser/history render, and normal close/service exit/lock release and
+CMD reopening pass. The 0.1.20 Nature Python and C# fixes are both included.
+See [Desktop from Source](WINDOWS_SOURCE_DESKTOP.md). Source Web is optional
+through `--web`; the installed 0.1.19 and its verified recovery backup remain.
+
+The exact formerly blocked 0.1.20 DLL now passes isolated source startup and
+the original-Library launch; why Windows allows it now is unknown. All 2,266
+payload hashes match. Protected DB tables and 19 research files remain intact:
+schema 18, 4,442 papers, 39 Publications, 10 Library items, 5 folders, 6 resources,
+integrity OK/zero foreign-key errors. Only automatic monitor state settings
+change. Seven launcher checks, six download-fallback checks and Python compile
+pass. Evidence: `tmp/windows-desktop-source-20260929/`; the earlier full recovery
+backup remains in `tmp/windows-source-20260929/`.
+
+This is the user's explicitly chosen source-desktop delivery, with no installer,
+signing enrollment, security/trust changes, external submission or commit/push.
+The fresh unsigned release-preflight failure below remains valid; local startup
+does not satisfy formal release acceptance. Do not request a signing identity
+for this chosen source route. Real publisher download acceptance is not repeated
+in this run.
+
+## Earlier direction: Source Web, superseded by desktop source (2026-09-29)
+
+The user rejected solutions requiring publisher signing and explicitly accepted
+the source web interface with a convenient launcher. `Start Gewu Insight.cmd`
+now opens the existing Library using the source Python service and the default
+browser; see [Source Web](WINDOWS_SOURCE_WEB.md). Do not continue asking for a
+publisher identity or signing account for this chosen route. The native release
+checks remain in place for any future desktop release.
+
+Fresh static checks still reject the unchanged 0.1.20 desktop package: 2,266
+manifest hashes match, 75 of 375 binaries lack valid RSA signatures, and Setup
+is unsigned. Installed 0.1.19 was independently verified by file version and
+SHA-256. No blocked component or installer was retried. The original App was
+closed normally, a 2,339-file recovery backup verified, and Source Web started
+through the actual CMD launcher. Four authenticated/health endpoint checks,
+2,266 unchanged installed payload hashes, all protected database table digests
+and 19 research files pass: schema 18, 4,442 papers, 39 Publications, 10 Library
+items, 5 folders, 6 resources, integrity OK and zero foreign-key errors. Only
+the automatic arXiv retry-state setting changed during startup.
+
+Three new launcher checks pass, including real subprocess authentication and
+exclusive locking; the original native App's lock also rejects a source launch.
+The pre-existing isolated source smoke, Python compile and scoped diff checks
+pass. Chrome exposes a `Gewu Insight - Google Chrome` window, but Computer Use
+stopped before visual inspection because it could not confidently determine
+the browser URL; no full visual acceptance is claimed. Evidence and recovery
+backup: `tmp/windows-source-20260929/`; fresh native preflight:
+`tmp/windows-delivery-20260929/release-preflight.json`.
+
+This is a working source-service alternative, not a completed 0.1.20 desktop
+upgrade. Native Browser/PDF integration and the native Nature change are not
+delivered. No security-policy change, external submission, commit, push or public
+release occurred. The historical RSA-only explanation below reflects the earlier
+guidance; Microsoft's current signing page now also lists ECC support. The
+project's existing RSA-only release check has not been broadened or revalidated
+for ECC as part of this source-only task.
+
+## Earlier result: 0.1.19 running; 0.1.20 blocked; release checks strengthened (2026-09-11)
+
+The repeated failures were never permanently resolved by the earlier unsigned
+local installations. The 0.1.20 application-control error identifies the new
+Gewu DLL (`0x800711C7`); the unchanged package has 375 binary components, 300
+valid RSA signatures and 75 unsigned files. The unsigned Setup is another
+untrusted component. These are component trust failures, not a damaged Library
+or a Nature subscription failure. A prior unsigned release running does not
+establish acceptance of a later build. The actual installed version remains
+0.1.19; the blocked 0.1.20 installer has not been run.
+
+The user confirms having no existing signing certificate or service account.
+Read-only certificate-store checks also find zero code-signing certificates;
+Smart App Control stays ON (1). Publisher identity (individual/organization and
+country) is pending before selecting a compatible service. The current official
+[Artifact Signing prerequisites](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart)
+allow individuals in the US/Canada and organizations in the documented countries,
+including Japan; do not infer eligibility from the computer's locale. The
+proprietary/free-use license and earlier refusal of external file review remain.
+No purchase, registration, submission or security/trust change was performed.
+
+`scripts/windows_release.ps1` and `scripts/test_windows_release.ps1` now enforce
+fresh static checks of every payload file against its manifest, real RSA
+signatures on every EXE/DLL/PYD, verified timestamps on the Gewu shell and Setup,
+consistent publisher identity, and matching payload/installer versions. Extra,
+missing, modified, linked, duplicate or unsafe manifest paths stop acceptance.
+The report is stored outside the payload and explicitly says
+`RuntimeValidated: false`: static checks do not replace real startup tests.
+The standard builder calls the check after signed installer creation. The pending
+0.1.20 upgrade and direct install scripts call it before closing the working App
+or executing Setup; cached process-creation checks are insufficient. Future
+updates must use this flow, not temporary unsigned Inno recipes.
+
+```powershell
+./scripts/test_windows_release.ps1 -PayloadPath dist/windows-preview-0.1.20 `
+  -InstallerPath PATH_TO_SIGNED_SETUP -Version 0.1.20 `
+  -ReportPath tmp/release-preflight.json
+```
+
+Validation: 26 release checks pass (17 real disposable-manifest/guard cases plus
+9 policy cases with explicitly synthetic signature/version metadata), and the
+existing 5 real signing/Inno safeguards pass. Four PowerShell syntax checks,
+upgrade-script Python compilation and diff checks pass. The actual unchanged
+0.1.20 release fails preflight with its 2,266 file hashes intact and the 75
+unsigned components/unsigned Setup reported; it is not launched. Evidence:
+`tmp/install-0.1.20-20260911/release-preflight.json`,
+`tmp/release-preflight-859b485f2a3a4c4fb33fbb34ab37958a/`,
+`tmp/signing checks $literal 9b9d503ef1624211955274ac616aa95f/`.
+No real signed Gewu release has been produced or accepted yet. Signing credentials
+and subsequent installed/runtime verification remain necessary; this is not a
+promise that every future operating-system or dependency failure is impossible.
+
+## Earlier result: 0.1.13 installed and normally reopened (2026-09-10)
 
 The verified 0.1.13 payload was packaged with the existing temporary local
 unsigned Inno recipe and installed successfully at 18:40 JST (exit 0, no Windows

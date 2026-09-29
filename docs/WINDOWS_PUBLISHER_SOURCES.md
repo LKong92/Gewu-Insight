@@ -5,6 +5,18 @@ delivery hosts; it does not establish a user's subscription or bypass any access
 check. Every redirect still passes both the reviewed source policy and the
 requested publisher scope.
 
+Reviewed 2026-09-11 for the pending 0.1.20 Nature fallback: `10.1038/` DOI
+downloads now offer the existing shared-Browser publisher route when ordinary
+HTTP fails. The native scope permits `nature.com` and its subdomains (including
+the publisher identity redirect) and the exact `media.springernature.com` host.
+The [Nature Materials article page](https://www.nature.com/articles/s41563-026-02734-z)
+links its publisher images and supplementary information from that delivery host.
+These hosts already pass the shared source policy; the global allowlist is
+unchanged. Browser session sharing is verified with synthetic cookies in an
+isolated profile, without exporting user cookies or operating authentication
+controls. The packaged 0.1.20 DLL is currently blocked by Windows application
+control, so this fallback is not installed or accepted against the live article.
+
 | Added source | Primary evidence and scope |
 | --- | --- |
 | `acs.figshare.com` | [ACS research-data policy](https://www.acs.org/policy/publicpolicies/science-policy/highqualityscience.html) identifies its partnership for article supporting information; the [ACS repository](https://acs.figshare.com/) identifies the tenant. Only this tenant is included; arbitrary Figshare, ndownloader or S3 hosts are not allowed. |

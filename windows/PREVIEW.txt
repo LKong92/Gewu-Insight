@@ -83,5 +83,7 @@ File > Open Data Folder shows the actual Library folder. A selected existing
 Library is recorded in %USERPROFILE%\.gewu-insight\preview-workspace.txt.
 New Libraries use %USERPROFILE%\Gewu Insight Preview. A missing selected database
 stops startup; the app does not silently replace it with an empty Library.
-Uninstall removes the app and retains Library data. Close the app before
-installing an update. This development installer is not digitally signed.
+Uninstall removes the app and retains Library data. Installable releases require
+a trusted publisher signature on Setup and all executable components. An unsigned
+development payload is not an accepted update. Keep the current app running until
+the new release passes signature, file-integrity and isolated startup checks.

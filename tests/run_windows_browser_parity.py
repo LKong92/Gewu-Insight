@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--dotnet", required=True, type=Path)
     parser.add_argument("--python", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--publisher-only", action="store_true", help="Run only publisher and download integration checks")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]
     output = args.output.resolve()
@@ -49,7 +50,7 @@ def main():
     command = subprocess.list2cmdline([
         str(executable), "--workspace", str(workspace), "--source", str(repo),
         "--python", str(args.python.resolve()),
-    ])
+    ] + (["--publisher-only"] if args.publisher_only else []))
     process = thread = None
     result = {"success": False, "workspace": str(workspace)}
     print(json.dumps({"workspace": str(workspace), "hidden_desktop": True}), flush=True)

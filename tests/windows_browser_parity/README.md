@@ -15,6 +15,14 @@ and its child processes. It refuses output outside repository `tmp`, disables
 automatic monitoring, and closes the entire test process tree. WebView2 may need
 normal desktop permissions outside a restricted execution sandbox.
 
+Add `--publisher-only` to run the publisher/download and native drag checks without
+the unrelated Loader/cache/history suites. Its result explicitly records
+`scope: publisher`; success is not a full-suite result. Nature cases seed a
+synthetic cookie into the disposable visible Browser profile and require the
+hidden downloader to retain that session while leaving the original page intact.
+They also cover Nature identity/CDN redirects and rejected lookalike or
+cross-publisher destinations. No personal browser cookies are read or changed.
+
 Checks also cover local Home/native-history traversal, retained forms, cancelled
 Home departures, same-document branches, original popup POST bodies/opener,
 Win32 key-message routing for Ctrl+L/Ctrl+F/Ctrl+[, source-workspace return, a

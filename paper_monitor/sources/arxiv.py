@@ -277,6 +277,18 @@ def fetch_arxiv_condensed_matter(
             raise RuntimeError(f"arXiv latest listing check failed: {listing_error}") from listing_error
         raise RuntimeError("arXiv latest listing has not advanced to the expected announcement yet")
 
+    # Submission timestamps cannot reconstruct delayed or holiday announcements.
+    # Prefer the publisher's dated batches whenever the recent archive covers them.
+    try:
+        recent = fetch_recent_arxiv_listing_for_window(
+            start_date=start_date, end_date=end_date,
+            categories=selected_categories or ARXIV_DEFAULT_CATEGORIES,
+        )
+        if recent is not None:
+            return enrich_arxiv_listing_metadata(recent)
+    except Exception as exc:
+        listing_error = listing_error or exc
+
     papers: list[dict[str, Any]] = []
     query = arxiv_query(selected_categories or ARXIV_DEFAULT_CATEGORIES, start_date, end_date)
     try:
@@ -356,7 +368,8 @@ def fetch_arxiv_by_ids(
             "https://export.arxiv.org/api/query",
             params={"id_list": ",".join(batch), "max_results": len(batch)},
             timeout=timeout,
-            max_retries=max_retries,
+            # The HTTP helper counts attempts; zero retries still needs one.
+            max_retries=max(1, max_retries),
         )
         root = ET.fromstring(response.content)
         papers.extend(normalize_arxiv_entry(entry) for entry in root.findall("atom:entry", ATOM_NS))
@@ -407,7 +420,10 @@ def enrich_arxiv_listing_metadata(papers: list[dict[str, Any]]) -> list[dict[str
                 merged[key] = value
         detail_raw = detail.get("raw") if isinstance(detail.get("raw"), dict) else {}
         merged_raw = {**raw, **detail_raw}
-        merged_raw["metadata_source"] = "arxiv_latest_listing+id_list"
+        merged_raw["metadata_source"] = str(raw.get("metadata_source") or "arxiv_latest_listing") + "+id_list"
+        for key in ("announcement_at_utc", "announcement_source"):
+            if raw.get(key):
+                merged_raw[key] = raw[key]
         merged_raw["metadata_detail_status"] = "complete"
         # The listing date is the authoritative announcement date for the user's
         # local calendar, even if the API's submitted timestamp maps differently.
@@ -474,6 +490,67 @@ def search_arxiv_works(
     if not papers and listing_error:
         raise RuntimeError(f"arXiv latest listing failed and Export API returned no papers: {listing_error}")
     return papers
+
+
+
+def parse_arxiv_recent_listing(html: str, *, local_tz: tzinfo | None = None) -> dict[date, list[dict[str, Any]]]:
+    soup = BeautifulSoup(html, "html.parser")
+    target_tz = local_tz or local_timezone()
+    batches: dict[date, list[dict[str, Any]]] = {}
+    months = {name: index for index, name in enumerate(
+        ("", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))}
+    for articles in soup.select("dl#articles"):
+        heading = articles.find("h3", recursive=False)
+        text = clean_text(heading.get_text(" ", strip=True)) if heading else ""
+        match = re.fullmatch(r"[A-Za-z]+, (\d{1,2}) ([A-Za-z]+) (\d{4}) \(showing (\d+) of (\d+) entries ?\)", text)
+        if not match:
+            raise ValueError("arXiv recent listing has an unrecognized daily heading")
+        day, month, year, shown, total = match.groups()
+        if shown != total:
+            raise ValueError("arXiv recent daily listing is incomplete")
+        listing_date = date(int(year), months[month], int(day))
+        announcement = arxiv_announcement_at(listing_date - timedelta(days=1)).astimezone(timezone.utc)
+        local_day = announcement.astimezone(target_tz).date()
+        papers = []
+        pending_id = ""
+        for child in articles.children:
+            if getattr(child, "name", None) == "dt":
+                link = child.select_one('a[title="Abstract"]')
+                pending_id = strip_arxiv_version(arxiv_id_from_url(str(link.get("href") or ""))) if link else ""
+            elif getattr(child, "name", None) == "dd" and pending_id:
+                paper = arxiv_listing_paper(child, pending_id, local_day.isoformat(), announcement)
+                paper["raw"]["metadata_source"] = "arxiv_recent_listing"
+                papers.append(paper)
+                pending_id = ""
+        if len({paper["paper_id"] for paper in papers}) != int(total) or local_day in batches:
+            raise ValueError("arXiv recent listing does not contain the complete daily batch")
+        batches[local_day] = papers
+    if not batches:
+        raise ValueError("arXiv recent listing did not include dated batches")
+    return batches
+
+
+def fetch_recent_arxiv_listing_for_window(
+    *, start_date: date, end_date: date, categories: list[str],
+) -> list[dict[str, Any]] | None:
+    # The recent endpoint covers a few announcement days, not arbitrary history.
+    # Avoid an extra request for older windows and keep today's readiness gate.
+    today = datetime.now(local_timezone()).date()
+    if end_date >= today or start_date < today - timedelta(days=10):
+        return None
+    archive = arxiv_archive_for_categories(categories)
+    response = request_with_retries(
+        "GET", f"https://arxiv.org/list/{archive}/recent",
+        params={"skip": 0, "show": 2000},
+        headers={"Accept": "text/html,application/xhtml+xml"},
+        timeout=ARXIV_API_TIMEOUT, max_retries=ARXIV_API_MAX_RETRIES,
+    )
+    batches = parse_arxiv_recent_listing(response.text)
+    if start_date < min(batches) or end_date > max(batches):
+        return None
+    selected = set(categories)
+    return [paper for day, papers in batches.items() if start_date <= day <= end_date
+            for paper in papers if selected.intersection(paper["raw"]["categories"])]
 
 
 def fetch_latest_arxiv_listing_for_window(
@@ -583,53 +660,55 @@ def parse_arxiv_latest_listing(html: str, *, local_tz: tzinfo | None = None) -> 
             pending_id = ""
             if section not in {"new", "cross"}:
                 continue
-            title_node = child.select_one(".list-title")
-            author_node = child.select_one(".list-authors")
-            subject_node = child.select_one(".list-subjects")
-            primary_node = child.select_one(".list-subjects .primary-subject")
-            abstract_node = child.select_one("p.mathjax")
-            comment_node = child.select_one(".list-comments")
-            journal_ref_node = child.select_one(".list-journal-ref")
-            title = descriptor_text(title_node, "Title:") or "(Untitled)"
-            subject_text = clean_text(subject_node.get_text(" ", strip=True) if subject_node else "")
-            categories = re.findall(r"\(([A-Za-z-]+(?:\.[A-Za-z-]+)?)\)", subject_text)
-            primary_text = clean_text(primary_node.get_text(" ", strip=True) if primary_node else "")
-            primary_match = re.search(r"\(([A-Za-z-]+(?:\.[A-Za-z-]+)?)\)", primary_text)
-            primary_category = primary_match.group(1) if primary_match else (categories[0] if categories else "")
-            authors = [clean_text(link.get_text(" ", strip=True)) for link in (author_node.select("a") if author_node else [])]
-            papers.append(
-                {
-                    "paper_id": "arxiv_" + safe_slug(arxiv_id, 90),
-                    "doi": "",
-                    "title": normalize_publication_title(title) or "(Untitled)",
-                    "journal": ARXIV_JOURNAL_NAME,
-                    "publication_date": publication_date,
-                    "abstract": clean_text(abstract_node.get_text(" ", strip=True) if abstract_node else ""),
-                    "abstract_source": "arxiv",
-                    "url": f"https://arxiv.org/abs/{arxiv_id}",
-                    "landing_url": f"https://arxiv.org/abs/{arxiv_id}",
-                    "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
-                    "source": "arxiv",
-                    "type": "preprint",
-                    "type_crossref": "",
-                    "publisher_section": "preprint",
-                    "section_allowed": True,
-                    "raw": {
-                        "arxiv_id": arxiv_id,
-                        "versioned_arxiv_id": arxiv_id,
-                        "authors": [author for author in authors if author],
-                        "categories": categories,
-                        "primary_category": primary_category,
-                        "published": "",
-                        "updated": "",
-                        "announcement_at_utc": announcement_utc.isoformat(timespec="seconds"),
-                        "journal_ref": descriptor_text(journal_ref_node, "Journal-ref:"),
-                        "comment": descriptor_text(comment_node, "Comments:"),
-                        "metadata_source": "arxiv_latest_listing",
-                    },
-                }
-            )
+            papers.append(arxiv_listing_paper(child, arxiv_id, publication_date, announcement_utc))
     return listing_date, papers
+
+def arxiv_listing_paper(child: Any, arxiv_id: str, publication_date: str, announcement_utc: datetime) -> dict[str, Any]:
+    title_node = child.select_one(".list-title")
+    author_node = child.select_one(".list-authors")
+    subject_node = child.select_one(".list-subjects")
+    primary_node = child.select_one(".list-subjects .primary-subject")
+    abstract_node = child.select_one("p.mathjax")
+    comment_node = child.select_one(".list-comments")
+    journal_ref_node = child.select_one(".list-journal-ref")
+    title = descriptor_text(title_node, "Title:") or "(Untitled)"
+    subject_text = clean_text(subject_node.get_text(" ", strip=True) if subject_node else "")
+    categories = re.findall(r"\(([A-Za-z-]+(?:\.[A-Za-z-]+)?)\)", subject_text)
+    primary_text = clean_text(primary_node.get_text(" ", strip=True) if primary_node else "")
+    primary_match = re.search(r"\(([A-Za-z-]+(?:\.[A-Za-z-]+)?)\)", primary_text)
+    primary_category = primary_match.group(1) if primary_match else (categories[0] if categories else "")
+    authors = [clean_text(link.get_text(" ", strip=True)) for link in (author_node.select("a") if author_node else [])]
+    return {
+        "paper_id": "arxiv_" + safe_slug(arxiv_id, 90),
+        "doi": "",
+        "title": normalize_publication_title(title) or "(Untitled)",
+        "journal": ARXIV_JOURNAL_NAME,
+        "publication_date": publication_date,
+        "abstract": clean_text(abstract_node.get_text(" ", strip=True) if abstract_node else ""),
+        "abstract_source": "arxiv",
+        "url": f"https://arxiv.org/abs/{arxiv_id}",
+        "landing_url": f"https://arxiv.org/abs/{arxiv_id}",
+        "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
+        "source": "arxiv",
+        "type": "preprint",
+        "type_crossref": "",
+        "publisher_section": "preprint",
+        "section_allowed": True,
+        "raw": {
+            "arxiv_id": arxiv_id,
+            "versioned_arxiv_id": arxiv_id,
+            "authors": [author for author in authors if author],
+            "categories": categories,
+            "primary_category": primary_category,
+            "published": "",
+            "updated": "",
+            "announcement_at_utc": announcement_utc.isoformat(timespec="seconds"),
+            "journal_ref": descriptor_text(journal_ref_node, "Journal-ref:"),
+            "comment": descriptor_text(comment_node, "Comments:"),
+            "metadata_source": "arxiv_latest_listing",
+            "announcement_source": "arxiv_listing",
+        },
+    }
 
 
 def arxiv_listing_date_from_soup(soup: BeautifulSoup) -> date | None:

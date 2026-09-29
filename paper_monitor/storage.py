@@ -2028,6 +2028,9 @@ class Storage:
 
         if existing:
             merged = dict(existing)
+            existing_raw = self._paper_raw_dict(existing)
+            incoming_announcement = incoming_raw.get("announcement_source") == "arxiv_listing"
+            existing_announcement = existing_raw.get("announcement_source") == "arxiv_listing"
             for key in [
                 "doi",
                 "title",
@@ -2048,7 +2051,8 @@ class Storage:
             ]:
                 value = payload.get(key)
                 if key == "publication_date" and payload.get("source") == "arxiv" and value not in (None, ""):
-                    merged[key] = value
+                    if incoming_announcement or not existing_announcement:
+                        merged[key] = value
                     continue
                 if key == "section_allowed" and value is not None:
                     merged[key] = value
@@ -2058,8 +2062,14 @@ class Storage:
                     continue
                 if value not in (None, "") and _is_blank_existing(key, merged.get(key)):
                     merged[key] = value
-            existing_raw = self._paper_raw_dict(existing)
             merged_raw = dict(incoming_raw) if replace_bibliographic_metadata or not existing_raw else dict(existing_raw)
+            # Keep the calendar date and its authoritative timestamp together.
+            # A later API submission-time estimate must not move a listed paper.
+            announcement_raw = incoming_raw if incoming_announcement else existing_raw
+            if incoming_announcement or existing_announcement:
+                for key in ("announcement_at_utc", "announcement_source"):
+                    if announcement_raw.get(key):
+                        merged_raw[key] = announcement_raw[key]
             existing_sources = (
                 existing_raw.get("_paper_monitor_sources")
                 if isinstance(existing_raw.get("_paper_monitor_sources"), list)

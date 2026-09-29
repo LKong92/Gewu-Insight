@@ -1476,12 +1476,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     if folder_id:
                         sync_alias_for_library_item(storage, paper_id, folder_id)
             sync_all_pdf_aliases_for_paper(storage, paper_id)
+            files_snapshot = paper_files_state_payload(storage, paper_id)
             paper = storage.get_paper(paper_id)
         finally:
             storage.close()
         response_payload: dict[str, Any] = {
             "result": result,
             "paper": paper_to_api(paper) if paper else None,
+            "paper_files": [files_snapshot],
         }
         browser_fallback = published_pdf_browser_fallback(paper, result)
         if browser_fallback:
@@ -9225,6 +9227,10 @@ def retry_pending_arxiv_metadata(storage: Storage, selected_date: date, now: dat
         if not existing:
             continue
         detail_raw = {**(existing.get("_raw") or {}), **(detail.get("raw") or {})}
+        for key in ("announcement_at_utc", "announcement_source"):
+            value = (existing.get("_raw") or {}).get(key)
+            if value:
+                detail_raw[key] = value
         detail_raw["metadata_source"] = "arxiv_latest_listing+id_list"
         detail_raw["metadata_detail_status"] = "complete"
         detail["raw"] = detail_raw
@@ -45700,7 +45706,7 @@ INDEX_HTML = """<!doctype html>
       const key = String(paperId || "");
       if (!key) return null;
       if (!force && state.paperFilesByPaperId[key]) return state.paperFilesByPaperId[key];
-      if (state.paperFileRequests[key]) return state.paperFileRequests[key];
+      if (!force && state.paperFileRequests[key]) return state.paperFileRequests[key];
       const request = fetch(`/api/paper-files?paper_id=${encodeURIComponent(key)}`)
         .then(async (res) => {
           const data = await res.json();
@@ -49961,7 +49967,24 @@ INDEX_HTML = """<!doctype html>
           pendingNativePublisherDownloads.delete(token);
           reject(error);
         }
+      }).then((data) => {
+        // Each saved main/supplement file is visible even if a later step fails.
+        applyPaperPdfDownloadResult(context?.paper_id, data);
+        return data;
       });
+    }
+
+    function applyPaperPdfDownloadResult(paperId, data) {
+      if (data?.paper && paperId) updatePaperState(paperId, data.paper);
+      applyPaperFilesPayloads(data?.paper_files);
+      const selectedPaperId = state.libraryTab === "my-publications"
+        ? String(selectedMyPublicationPaper()?.paper_id || "")
+        : String(libraryItemById(state.librarySelection?.id)?.paper_id || "");
+      if (state.mode === "library" && selectedPaperId === String(paperId || "")
+          && data?.paper_files?.some((snapshot) => snapshot.paper_id === selectedPaperId)) {
+        if (state.libraryTab === "my-publications") renderPublicationDetail();
+        else renderLibraryNavigationContent({preserveRows: true});
+      }
     }
 
     async function requestPaperPdfDownload(payload) {
@@ -49972,12 +49995,11 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "download failed");
+      applyPaperPdfDownloadResult(payload?.paper_id, data);
       if (data.browser_fallback) {
-        if (data?.paper && payload?.paper_id) updatePaperState(payload.paper_id, data.paper);
         let downloaded = await downloadPublishedPdfInBackground(data.browser_fallback, payload);
-        if (downloaded?.paper && payload?.paper_id) updatePaperState(payload.paper_id, downloaded.paper);
         if (data.browser_fallback.followup) {
-          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, payload);
+          downloaded = {...downloaded, ...await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, payload)};
         } else if (data.browser_fallback.kind === "aaas-supplement-discovery") {
           downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback, payload);
         }

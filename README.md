@@ -362,6 +362,13 @@ Do not delete SQLite as a startup repair.
 
 ## Manual setup and build
 
+On Windows, **[Start Gewu Insight.cmd](Start%20Gewu%20Insight.cmd)** opens the
+independent **0.1.20 desktop shell with local Python/web source**, using the
+selected Library and retaining the native Browser and desktop integration.
+Close any existing Gewu window or Source Web service first. See
+[Windows Desktop from Source](docs/WINDOWS_SOURCE_DESKTOP.md) for setup and
+updates. The external-browser interface is optional through `--web`.
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate

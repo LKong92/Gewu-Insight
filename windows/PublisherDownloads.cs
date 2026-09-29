@@ -36,6 +36,7 @@ internal sealed partial class WorkspaceWindow
             // Intersect the existing reviewed source policy with the requested
             // publisher. Unknown CDN hosts stop instead of broadening access.
             return publisher switch {
+                "nature" => Domain("nature.com") || host == "media.springernature.com",
                 "aaas" => Domain("science.org") || Domain("sciencemag.org"),
                 "acs" => host is "pubs.acs.org" or "acs.figshare.com",
                 "aps" => Domain("aps.org"),

@@ -442,6 +442,13 @@ def publisher_browser_candidate(paper: dict[str, Any]) -> dict[str, str] | None:
     journal = str(paper.get("journal") or "").lower()
     if not doi:
         return None
+    if doi.startswith("10.1038/"):
+        article_url = f"https://www.nature.com/articles/{doi.split('/', 1)[1]}"
+        return {
+            "publisher": "nature",
+            "url": f"{article_url}.pdf",
+            "referer": article_url,
+        }
     if doi.startswith("10.1103/"):
         aps_slug = aps_journal_slug(journal)
         if not aps_slug:

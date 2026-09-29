@@ -12,7 +12,7 @@ internal static class ParityProbeMain
     {
         ApplicationConfiguration.Initialize();
         var window = new WorkspaceWindow(args);
-        window.Shown += async (_, _) => await window.RunParityProbeAsync();
+        window.Shown += async (_, _) => await window.RunParityProbeAsync(args.Contains("--publisher-only"));
         Application.Run(window);
     }
 }
@@ -34,7 +34,7 @@ internal sealed partial class WorkspaceWindow
     static JsonDocument Command(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value));
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr handle, uint message, IntPtr wParam, IntPtr lParam);
 
-    internal async Task RunParityProbeAsync()
+    internal async Task RunParityProbeAsync(bool publisherOnly = false)
     {
         string output = Path.Combine(dataRoot, "native-results.json");
         string stage = "startup";
@@ -46,6 +46,15 @@ internal sealed partial class WorkspaceWindow
             await UntilJS("window.gewuBrowserNativeEvent && document.getElementById('browserMode')");
             await UntilJS("state.libraryLoaded && state.mode==='library'");
             Check(!server!.HasExited, "original source shell and authenticated workspace start");
+            if (publisherOnly) {
+                await WorkspaceScriptAsync("document.getElementById('browserMode').click()");
+                await Until(() => browserActive && selected != null);
+                await EnsureBrowserViewAsync(selected!);
+                stage = "publisher downloads and native Library drag"; await CheckPublisherAndDragAsync();
+                stage = "publisher CDN and PDF controls"; await CheckPublisherRoutesAsync();
+                await File.WriteAllTextAsync(output, JsonSerializer.Serialize(new { success = true, scope = "publisher", checks = probeChecks }, new JsonSerializerOptions { WriteIndented = true }));
+                return;
+            }
             stage = "independent Folder Loader"; await CheckLoaderAsync();
             stage = "favicons"; await CheckFaviconsAsync();
             stage = "browser";
