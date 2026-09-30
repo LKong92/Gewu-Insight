@@ -1289,7 +1289,7 @@
     },
     "/api/v1/tools/import_paper": {
       "post": {
-        "summary": "Import an uploaded PDF and AI-supplied metadata into folder_id. Correction/erratum/retraction notices require publication_notice relation metadata and attach to an existing writable original article; their own DOI stays separate and they never become automatic Default. All required metadata must be researched and provided by the caller. Genuine absent DOI/arXiv is null. NEVER use Resolve to satisfy or follow up import. No PDF identifier extraction, online metadata lookup or enrichment queue. Same DOI/arXiv reuses the existing Gewu Key and adds a writable placement, including uncollected provider/Monitor metadata or managed Monitor download PDFs. Unreadable private collections, notes, annotated or external files require user access review (import_access_required). Active downloads return paper_busy; staged uploads remain retryable. General read permissions are unchanged. Different bytes append to Paper Files. Preserve a manual Default; otherwise use automatic publication-version priority and synchronize managed storage. Exact bytes reuse the file without reclassification. Requires papers:import.",
+        "summary": "Import AI-supplied paper metadata into folder_id, optionally with an uploaded PDF. Omit upload_id and file_type when no PDF is available; returns the Gewu Key and membership with file=null and no upload_id. This means no file was imported, not that an existing paper has no files. Later upload and use add_paper_file with that key; reimporting the same DOI/arXiv with a PDF also reuses it. Never create a dummy PDF. Correction/erratum/retraction notices require publication_notice relation metadata and attach to an existing writable original article; their own DOI stays separate and they never become automatic Default. All required metadata must be researched and provided by the caller. Genuine absent DOI/arXiv is null. NEVER use Resolve to satisfy or follow up import. No PDF identifier extraction, online metadata lookup or enrichment queue. Same DOI/arXiv reuses the existing Gewu Key and adds a writable placement, including uncollected provider/Monitor metadata or managed Monitor download PDFs. Unreadable private collections, notes, annotated or external files require user access review (import_access_required). Active downloads return paper_busy; staged uploads remain retryable. General read permissions are unchanged. Different bytes append to Paper Files. Preserve a manual Default; otherwise use automatic publication-version priority and synchronize managed storage. Exact bytes reuse the file without reclassification. Requires papers:import.",
         "operationId": "import_paper",
         "security": [
           {
@@ -1351,7 +1351,8 @@
                   },
                   "upload_id": {
                     "type": "string",
-                    "pattern": "^upload_[0-9a-f]{32}$"
+                    "pattern": "^upload_[0-9a-f]{32}$",
+                    "description": "Optional uploaded PDF. Omit to import paper metadata without a file; do not send null or an empty ID."
                   },
                   "metadata": {
                     "type": "object",
@@ -1471,7 +1472,7 @@
                   },
                   "file_type": {
                     "type": "string",
-                    "description": "Existing Paper Files classification, e.g. published_version, preprint, supplementary_material, source_data, other or unknown. Omit to use Unknown (PDF) / Other."
+                    "description": "Existing Paper Files classification, e.g. published_version, preprint, supplementary_material, source_data, other or unknown. Omit to use Unknown (PDF) / Other. Only supply when upload_id is present."
                   },
                   "request_id": {
                     "type": "string",
@@ -1480,7 +1481,6 @@
                 },
                 "required": [
                   "folder_id",
-                  "upload_id",
                   "metadata",
                   "request_id"
                 ],

@@ -27,7 +27,7 @@ def reusable_paper(storage, grant, candidate):
     fail(403, 'import_access_required',
          'The supplied identity cannot be imported with this connection’s access. '
          'Review the collection permissions in AI Access or add the paper through '
-         'the App, then retry. Existing records and files were preserved; the upload is still available.')
+         'the App, then retry. Existing records and files were preserved; any staged upload is still available.')
 
 
 def is_uncollected_cache(storage, paper):

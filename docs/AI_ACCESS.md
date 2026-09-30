@@ -212,7 +212,7 @@ must also replace the old token in Codex's settings.
 | `move_file` / `rename_file` | Move an item or Paper File / rename its local filename or placement label | `files:move` / `files:rename` |
 | `upload_file` | Stream a client-local file into private temporary staging; return `upload_id` | Any import or Add Paper Files permission |
 | `get_upload_status` / `release_upload` | Inspect staging quota / release an unused upload | Any import or Add Paper Files permission |
-| `import_paper` | Register an uploaded PDF with mandatory AI-supplied metadata | `papers:import` |
+| `import_paper` | Register a paper from mandatory AI-supplied metadata, optionally with a PDF | `papers:import` |
 | `import_file` | Import a standalone non-PDF file in any format | `files:import` |
 | `add_paper_file` | Append a file of any format to an existing writable Gewu Key | `files:add` |
 | `update_paper_metadata` | Fill missing fields from supplied facts, preserving existing values | `metadata:write` |
@@ -290,16 +290,34 @@ with the required fields; no formal paper or file is created by that failure.
 
 1. Use `create_space`, then `create_folder` with the returned `folder_id` as
    `parent_id`. Existing Library/Space destinations must be explicitly writable.
-2. Call `upload_file` with the prepared client-local path and a stable upload
+2. When a file is available, call `upload_file` with its client-local path and a stable upload
    `request_id`. Binary bytes are streamed separately from MCP JSON; the server
    receives no arbitrary filesystem path to read.
-3. Choose ownership explicitly: `import_paper` for a standalone PDF;
+3. Choose ownership explicitly: `import_paper` for a scholarly paper, with or without a PDF;
    `import_file` for an independent overview, spreadsheet, image, archive or
    other non-PDF file; `add_paper_file` with the owning `gewu_key` for an attachment.
    This avoids guessing which neighboring Markdown file belongs to which paper.
 4. Use a **different**, stable `request_id` for the import. Successful imports
    reclaim upload staging automatically. Keep returned keys, membership IDs
    and file IDs, and release uploads you decide not to import.
+
+A PDF is **optional** for `import_paper`. If publisher access or network restrictions
+prevent downloading it, call `import_paper` with `folder_id`, full `metadata` and
+a stable `request_id`; omit both `upload_id` and `file_type`. This creates or
+reuses a normal paper identity and adds the destination placement. It returns
+`gewu_key`, `membership_id`, `item_kind: paper` and `file: null`, with no upload
+ID or placeholder file. `file: null` describes this import, not the existing
+paper's inventory: an identity already holding files keeps them. No PDF
+download, identifier scan or Resolve is started, and no upload quota is used.
+
+When the PDF becomes available, upload it and use `add_paper_file` with the
+returned Gewu Key (requires the separate `files:add` permission). Alternatively,
+repeat `import_paper` with a **new** request ID, the PDF upload and the same
+DOI/arXiv metadata; the existing Key is reused. For papers with neither identifier,
+use `add_paper_file` to target the original Key; a similar title is not an identity
+match. An exact retry of the original metadata-only request creates no duplicate
+and never restores a removed or moved placement. A supplied invalid/expired
+upload still fails; it does not silently fall back to metadata-only import.
 
 Complete these upload-and-register steps for **one file at a time**, then move
 to the next file. There is no batch-size definition and no wait for a whole
@@ -315,8 +333,8 @@ ordinary-file import. It does not turn an overview into an academic paper.
 Publication notices additionally require `publication_notice` with `kind`,
 `related_dois` and `evidence_url`. The notice's own DOI stays in `metadata.doi`;
 the related DOI identifies an existing writable original article. The import
-returns that original Gewu Key and stores the notice in Associated Files without
-making it the automatic Default. Missing or ambiguous relations must be resolved
+returns that original Gewu Key and records the notice event; an optional notice
+PDF goes in Associated Files without becoming the automatic Default. Missing or ambiguous relations must be resolved
 by the AI before retrying; import never runs Resolve. See
 [publication notice handling](PUBLICATION_NOTICES.md) for the contract and
 historical compatibility rules.
@@ -338,14 +356,12 @@ facts are recorded with connection/time/source provenance and are not marked
 as verified by Gewu. The system cannot independently certify an AI's assertions
 without performing the lookup that import deliberately avoids.
 
-Example `import_paper` arguments (replace the illustrative IDs and metadata):
+Example metadata-only `import_paper` arguments (replace the illustrative IDs and metadata):
 
 ```json
 {
   "folder_id": 42,
-  "upload_id": "upload_0123456789abcdef0123456789abcdef",
   "request_id": "paper-import-example-0001",
-  "file_type": "published_version",
   "metadata": {
     "title": "Example prepared article",
     "authors": ["Example Author"],
@@ -358,6 +374,9 @@ Example `import_paper` arguments (replace the illustrative IDs and metadata):
   }
 }
 ```
+
+To include a PDF in this call, add its `upload_id` and optional `file_type`
+(for example `published_version`) after uploading it.
 
 ### Identity reuse and physical storage
 
@@ -393,7 +412,7 @@ external files or files shared with another work is not adopted automatically.
 Import returns `import_access_required` without disclosing its Key, paths or
 contents. The user can review AI Access permissions or add the work through the
 App, then retry. An active download returns `paper_busy`; retry after it finishes.
-Both failures preserve the staged upload, existing records and files.
+Both failures preserve any staged upload, existing records and files.
 
 The main file of a new file-backed object is placed in its Library/Space folder.
 Other files use the existing mirrored **Associated Files** bundle and its

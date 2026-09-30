@@ -158,23 +158,31 @@ def finish_import(storage, grant, result):
     from .download import paper_download_lock
     from .file_layout import reconcile
     paper = paper_for_key(storage, grant, result['gewu_key'])
-    resource = storage.get_paper_resource(result['file']['file_id'])
-    if not resource or resource['paper_id'] != paper['paper_id'] or not Path(storage.resource_local_path(resource)).is_file():
-        fail(410,'import_removed','The previously imported file is unavailable. A retry will not recreate deleted content.')
+    resource = None
+    if result.get('file'):
+        resource = storage.get_paper_resource(result['file']['file_id'])
+        if not resource or resource['paper_id'] != paper['paper_id'] or not Path(storage.resource_local_path(resource)).is_file():
+            fail(410,'import_removed','The previously imported file is unavailable. A retry will not recreate deleted content.')
+    else:
+        member = storage.get_library_item(result['membership_id'])
+        if not member or member['paper_id'] != paper['paper_id'] or member['folder_id'] != result['folder_id'] or member.get('trashed_at'):
+            fail(410,'import_removed','The previously imported placement is unavailable. A retry will not recreate a removed or moved item.')
     if result.get('folder_id'): require_folder(storage,grant,result['folder_id'])
     else: require_paper(storage,grant,paper['storage_key'])
     try:
         with paper_download_lock(storage.db_path, paper['paper_id'], blocking=False):
             reconcile(storage, paper['paper_id'])
         result['layout_pending'] = False
+        result.pop('message', None)
     except (OSError, ValueError):
         storage.conn.rollback()
         result['layout_pending'] = True
-        result['message'] = 'File saved; shortcut synchronization is pending. Retry this exact request to finish.'
-    resource = storage.get_paper_resource(resource['id'])
-    default = storage._select_default_paper_resource(storage.get_paper(paper['paper_id']),storage.list_paper_resources(paper['paper_id'],ensure_primary=False))
-    result['file'] = file_metadata(resource, (default or {}).get('id',0))
-    ai_uploads.consume(storage,result['upload_id'])
+        result['message'] = 'Import saved; shortcut synchronization is pending. Retry this exact request to finish.'
+    if resource:
+        resource = storage.get_paper_resource(resource['id'])
+        default = storage._select_default_paper_resource(storage.get_paper(paper['paper_id']),storage.list_paper_resources(paper['paper_id'],ensure_primary=False))
+        result['file'] = file_metadata(resource, (default or {}).get('id',0))
+        ai_uploads.consume(storage,result['upload_id'])
     return result
 
 
@@ -309,20 +317,26 @@ def import_file(storage,authorization,grant,operation,args,key,digest):
             fail(400,'notice_relation_required','This is a publication notice. Supply metadata.publication_notice with its kind, original article DOI and evidence_url. Import the original article first; import never runs Resolve.')
     if operation=='add_paper_file': paper=require_paper(storage,grant,args.get('gewu_key')); folder_id=None
     else: folder_id=require_folder(storage,grant,args.get('folder_id'));paper=None
-    upload,source=ai_uploads.get_upload(storage,grant,args.get('upload_id'))
-    suffix=Path(upload['filename']).suffix.lower()
-    if operation=='import_paper' and suffix!='.pdf': fail(400,'pdf_required','Use import_file for a standalone non-PDF file.')
-    if operation=='import_file' and suffix=='.pdf': fail(400,'metadata_required','Import an independent PDF with import_paper and AI-supplied metadata.')
-    kind=args.get('file_type') or ('unknown' if suffix=='.pdf' else 'other')
-    if notice: kind=notice['kind']
-    elif suffix=='.pdf': kind=notices.title_kind(Path(upload['filename']).stem) or kind
-    if meta and not notice and kind in notices.KINDS:
-        fail(400,'notice_relation_required','A notice PDF needs explicit original-article relation metadata before import. The upload remains available for retry.')
-    if kind not in ui.PAPER_FILE_TYPES or kind=='invalid_file': fail(400,'invalid_file_type','Choose an available Paper Files classification.')
-    if suffix=='.pdf' and not ui.is_valid_pdf_file(source): fail(400,'invalid_pdf','The uploaded PDF is invalid.')
-    # Exact-byte identity is sufficient for safe deduplication. Do not decompress
-    # every PDF image/content stream merely to compute an advisory fingerprint.
-    if sha256_for_file(source)!=upload['sha256']: fail(409,'file_changed','The staged file changed. Upload it again.')
+    metadata_only = operation == 'import_paper' and 'upload_id' not in args
+    upload = None
+    if metadata_only:
+        if 'file_type' in args:
+            fail(400,'upload_required','Omit file_type when importing metadata without a PDF. Add and classify the file later with add_paper_file.')
+    else:
+        # A supplied but invalid/missing upload never silently becomes metadata-only.
+        upload,source=ai_uploads.get_upload(storage,grant,args.get('upload_id'))
+        suffix=Path(upload['filename']).suffix.lower()
+        if operation=='import_paper' and suffix!='.pdf': fail(400,'pdf_required','Use import_file for a standalone non-PDF file.')
+        if operation=='import_file' and suffix=='.pdf': fail(400,'metadata_required','Import an independent PDF with import_paper and AI-supplied metadata.')
+        kind=args.get('file_type') or ('unknown' if suffix=='.pdf' else 'other')
+        if notice: kind=notice['kind']
+        elif suffix=='.pdf': kind=notices.title_kind(Path(upload['filename']).stem) or kind
+        if meta and not notice and kind in notices.KINDS:
+            fail(400,'notice_relation_required','A notice PDF needs explicit original-article relation metadata before import. The upload remains available for retry.')
+        if kind not in ui.PAPER_FILE_TYPES or kind=='invalid_file': fail(400,'invalid_file_type','Choose an available Paper Files classification.')
+        if suffix=='.pdf' and not ui.is_valid_pdf_file(source): fail(400,'invalid_pdf','The uploaded PDF is invalid.')
+        # Exact-byte identity is sufficient; do not decompress every PDF stream.
+        if sha256_for_file(source)!=upload['sha256']: fail(409,'file_changed','The staged file changed. Upload it again.')
     destination=None;temporary=None;identity=None;journal=None;committed=False
     locks=ExitStack()
     def lock_paper(paper_id):
@@ -331,7 +345,7 @@ def import_file(storage,authorization,grant,operation,args,key,digest):
         try:
             locks.enter_context(paper_download_lock(storage.db_path,paper_id,blocking=False))
         except ValueError:
-            fail(409,'paper_busy','This paper is being updated. Retry this request after it finishes; the upload is still available.')
+            fail(409,'paper_busy','This paper is being updated. Retry this request after it finishes; any staged upload is still available.')
     storage.conn.execute('BEGIN IMMEDIATE')
     try:
         grant=authenticate(storage,authorization);require_scope(grant,WRITE_SCOPES[operation])
@@ -380,6 +394,15 @@ def import_file(storage,authorization,grant,operation,args,key,digest):
         resources=storage.list_paper_resources(paper_id,ensure_primary=False)
         default=storage._select_default_paper_resource(paper,resources)
         member=storage.add_library_item(paper_id=paper_id,folder_id=folder_id,commit=False) if folder_id else None
+        if metadata_only:
+            result={'gewu_key':paper['storage_key'],'item_kind':'paper',
+                    'folder_id':folder_id,'membership_id':member['id'],'reused_paper':reused,
+                    'reused_file':False,'file':None,
+                    'metadata_resolution':'not_requested','layout_pending':True}
+            if notice_id: result['publication_notice_id']=notice_id
+            save_receipt(storage,grant,operation,key,digest,result)
+            storage.conn.commit();committed=True
+            return finish_import(storage,grant,result)
         duplicate=find_content(storage,paper_id,upload['sha256'],upload['size_bytes'])
         role,version,label=ui.legacy_role_projection(kind)
         if duplicate:
