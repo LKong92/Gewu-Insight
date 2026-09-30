@@ -24,6 +24,7 @@
 - Preserve download and analysis status so repeated actions are visible and avoidable.
 - Subject Monitor must reject Zenodo records during candidate ingestion and cached-result display; do not expose a Zenodo show/hide control.
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
+- Develop and commit product changes directly on `main`. Do not create extra product branches or PRs unless the user explicitly requests them; GitHub should retain only `main` and the existing Windows branch. Preserve existing isolated local benchmark worktrees without publishing them.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
 
 ## Commit Messages
