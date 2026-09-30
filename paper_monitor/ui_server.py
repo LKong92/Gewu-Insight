@@ -42,7 +42,7 @@ import requests
 from . import finder_alias
 from . import folder_rename
 from .file_layout import normalize_files, sync_associated_aliases, finish_aliases, bundle_name
-from . import search_matching, author_profile_retry
+from . import search_matching, author_profile_retry, publication_notices
 from .library_destination import active_folders, default_add_destination, save_default_add_folder
 from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
 from .publication_deletion import delete_publications
@@ -14767,6 +14767,8 @@ def save_author_monitor_candidate(
 ) -> bool:
     """Commit one accepted publication, or leave all its prior state intact."""
     with paper_identity.transaction(storage):
+        if publication_notices.record_for_ingestion(storage, normalized) is not None:
+            return False
         existing = existing_paper_for_author_monitor(storage, normalized)
         if existing:
             reasons = paper_identity.review_reasons(storage, existing, normalized)
@@ -15049,6 +15051,9 @@ def refresh_author_monitor_for_db(
                 }
             added = 0
             identity_reviews = []
+            notice_count = 0
+            notice_reviews = []
+            entry_errors = []
             for candidate in candidates:
                 if openalex_author_work_is_excluded(candidate):
                     continue
@@ -15063,11 +15068,23 @@ def refresh_author_monitor_for_db(
                         unread=not baseline,
                     )
                 except paper_identity.IdentityReviewRequired as exc:
-                    storage.record_paper_identity_conflict(exc.existing, exc.incoming, exc.reasons)
-                    identity_reviews.append(str(exc))
+                    try:
+                        storage.record_paper_identity_conflict(exc.existing, exc.incoming, exc.reasons)
+                        identity_reviews.append(str(exc))
+                    except sqlite3.DatabaseError as error:
+                        storage.conn.rollback()
+                        entry_errors.append(f"{normalized.get('title')}: {error}")
+                    continue
+                except publication_notices.NoticeReviewRequired as exc:
+                    notice_reviews.append(f"{normalized.get('doi') or normalized.get('title')}: {exc}")
+                    continue
+                except (ValueError, sqlite3.DatabaseError) as exc:
+                    entry_errors.append(f"{normalized.get('title')}: {exc}")
                     continue
                 if inserted:
                     added += 1
+                elif publication_notices.describe_known(storage, normalized):
+                    notice_count += 1
             success_at = now_iso()
             if full_metadata and is_scholar:
                 new_label = (
@@ -15097,6 +15114,12 @@ def refresh_author_monitor_for_db(
                     message += f" {len(identity_reviews) - 1} additional review(s) recorded."
                 if provider_fallback_note:
                     message += f" {provider_fallback_note}"
+            if notice_count:
+                message += f" Retained {notice_count} publication notice(s) separately from research papers."
+            if notice_reviews or entry_errors:
+                status = "partial"
+                failures = [*notice_reviews, *entry_errors]
+                message += f" {len(failures)} additional entry/entries need review. {failures[0]}"
             storage.update_author_monitor(
                 author_monitor_id,
                 profile=refreshed_profile,
@@ -15113,6 +15136,9 @@ def refresh_author_monitor_for_db(
                 "added": added,
                 "identity_review_count": len(identity_reviews),
                 "identity_reviews": identity_reviews,
+                "publication_notice_count": notice_count,
+                "notice_reviews": notice_reviews,
+                "entry_errors": entry_errors,
                 "seen": len(candidates),
                 "baseline": baseline,
                 "full_metadata": full_metadata,

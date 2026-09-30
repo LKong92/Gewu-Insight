@@ -3018,7 +3018,9 @@ class Storage:
         )
         self.conn.commit()
 
-    def record_aps_rss_entries(self, journal_slug: str, papers: Iterable[dict[str, Any]]) -> None:
+    def record_aps_rss_entries(
+        self, journal_slug: str, papers: Iterable[dict[str, Any]], *, commit: bool = True,
+    ) -> None:
         timestamp = now_iso()
         rows = [
             (
@@ -3044,7 +3046,8 @@ class Storage:
             """,
             rows,
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def list_aps_rss_papers(
         self,

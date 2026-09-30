@@ -258,6 +258,19 @@ def guard(storage, paper, *, commit=True):
         raise NoticeReviewRequired()
 
 
+def record_for_ingestion(storage, paper):
+    """Route one monitor observation inside its caller's transaction.
+
+    A retained notice is an expected outcome, not a rejected paper. Relation
+    conflicts still raise NoticeReviewRequired and must remain reviewable.
+    Ordinary writers and their notice guard keep their existing contract.
+    """
+    notice = describe_known(storage, paper)
+    if notice is None:
+        return None
+    return record(storage, paper, notice, target(storage, notice), commit=False)
+
+
 def from_front_matter(title, text):
     """Use front matter ALREADY read by the ordinary PDF importer, not MCP."""
     from .paper_identity import doi

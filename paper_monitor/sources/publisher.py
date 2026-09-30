@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -10,6 +11,7 @@ from urllib.parse import quote, urljoin
 
 from bs4 import BeautifulSoup
 
+from .. import paper_identity, publication_notices
 from ..aps import APS_CANONICAL_NAMES_BY_SLUG, aps_journal_slug
 from ..http import USER_AGENT, get_with_local_proxy_fallback
 from ..text import clean_text, make_paper_id, normalize_doi, normalize_publication_title
@@ -227,6 +229,7 @@ def sync_aps_rss_feeds(
         "feeds": {},
         "entries": 0,
         "created": 0,
+        "notices": 0,
         "errors": [],
     }
     with _APS_RSS_LOCK:
@@ -234,7 +237,14 @@ def sync_aps_rss_feeds(
             state = storage.get_aps_rss_feed(slug)
             if not force and aps_rss_feed_state_is_fresh(state, success_ttl_seconds=cache_seconds):
                 count = int((state or {}).get("entry_count") or 0)
-                summary["feeds"][slug] = {"status": "cached", "entries": count}
+                if state.get("status") in {"error", "partial"}:
+                    message = clean_text(state.get("message") or "Previous APS feed update was incomplete.")
+                    summary["feeds"][slug] = {
+                        "status": state["status"], "cached": True, "entries": count, "message": message,
+                    }
+                    summary["errors"].append(f"{name}: {message}")
+                else:
+                    summary["feeds"][slug] = {"status": "cached", "entries": count}
                 summary["entries"] += count
                 continue
             now = time.monotonic()
@@ -245,9 +255,11 @@ def sync_aps_rss_feeds(
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
             headers = {"User-Agent": USER_AGENT, "Accept": "application/xml,text/xml"}
-            if state and state.get("etag"):
+            # A failed/partial batch must receive the body again; its old
+            # validators do not establish that every entry was processed.
+            if state and state.get("status") == "success" and state.get("etag"):
                 headers["If-None-Match"] = str(state["etag"])
-            if state and state.get("last_modified"):
+            if state and state.get("status") == "success" and state.get("last_modified"):
                 headers["If-Modified-Since"] = str(state["last_modified"])
             try:
                 response = get_with_local_proxy_fallback(
@@ -261,6 +273,8 @@ def sync_aps_rss_feeds(
                     _APS_RSS_BLOCKED_UNTIL = _APS_RSS_LAST_REQUEST_AT + APS_ABSTRACT_BLOCK_COOLDOWN_SECONDS
                     response.raise_for_status()
                 if response.status_code == 304:
+                    if not state or state.get("status") != "success":
+                        raise ValueError("APS returned no feed body for an incomplete cache; retry the update.")
                     count = int((state or {}).get("entry_count") or 0)
                     storage.record_aps_rss_feed(
                         journal_slug=slug,
@@ -285,32 +299,67 @@ def sync_aps_rss_feeds(
                     entry_count=int((state or {}).get("entry_count") or 0),
                 )
                 created = 0
+                saved = 0
+                notice_count = 0
+                entry_errors = []
                 for paper in papers:
-                    created += int(
-                        storage.merge_paper_missing_metadata(
-                            paper,
-                            source_name="aps_rss",
-                            commit=False,
-                        )
-                    )
-                storage.record_aps_rss_entries(slug, papers)
+                    try:
+                        with paper_identity.transaction(storage):
+                            notice_id = publication_notices.record_for_ingestion(storage, paper)
+                            changed = False
+                            rejection = ""
+                            if notice_id is None:
+                                changed = storage.merge_paper_missing_metadata(
+                                    paper, source_name="aps_rss", commit=False,
+                                )
+                                stored = storage.get_paper(paper["paper_id"])
+                                if not stored or storage.paper_identity_conflict_reasons(stored, paper):
+                                    rejection = "Paper identity needs review; the RSS entry was not linked."
+                                else:
+                                    storage.record_aps_rss_entries(slug, [paper], commit=False)
+                        # Count only committed outcomes, including successful
+                        # unchanged papers. Notices have no paper foreign key.
+                        if rejection:
+                            entry_errors.append(f"{paper.get('doi') or paper.get('title')}: {rejection}")
+                        elif notice_id is not None:
+                            notice_count += 1
+                        else:
+                            saved += 1
+                            created += int(changed)
+                    except (ValueError, sqlite3.DatabaseError) as exc:
+                        entry_errors.append(f"{paper.get('doi') or paper.get('title')}: {clean_text(str(exc))}")
+                status = "partial" if entry_errors and (saved or notice_count) else "error" if entry_errors else "success"
+                messages = []
+                if notice_count:
+                    messages.append(f"Retained {notice_count} publication notice(s) separately from research papers.")
+                if entry_errors:
+                    messages.append(f"{len(entry_errors)} entry/entries need review. " + "; ".join(entry_errors[:3]))
+                message = clean_text(" ".join(messages))[:500]
                 storage.record_aps_rss_feed(
                     journal_slug=slug,
                     journal_name=name,
-                    status="success",
-                    entry_count=len(papers),
-                    etag=clean_text(response.headers.get("ETag") or ""),
-                    last_modified=clean_text(response.headers.get("Last-Modified") or ""),
-                    success=True,
+                    status=status,
+                    entry_count=saved,
+                    message=message,
+                    etag=clean_text(response.headers.get("ETag") or "") if not entry_errors else "",
+                    last_modified=clean_text(response.headers.get("Last-Modified") or "") if not entry_errors else "",
+                    success=not entry_errors,
                 )
                 summary["feeds"][slug] = {
-                    "status": "success",
-                    "entries": len(papers),
+                    "status": status,
+                    "entries": saved,
                     "created": created,
+                    "notices": notice_count,
+                    "entry_errors": entry_errors,
+                    "message": message,
                 }
-                summary["entries"] += len(papers)
+                summary["entries"] += saved
                 summary["created"] += created
-            except (requests.RequestException, ET.ParseError, ValueError) as exc:
+                summary["notices"] += notice_count
+                if entry_errors:
+                    summary["errors"].append(f"{name}: {message}")
+            except (requests.RequestException, ET.ParseError, ValueError, sqlite3.DatabaseError) as exc:
+                storage.conn.rollback()
                 message = clean_text(str(exc))[:500]
                 storage.record_aps_rss_feed(
                     journal_slug=slug,
@@ -322,8 +371,8 @@ def sync_aps_rss_feeds(
                 summary["feeds"][slug] = {"status": "error", "entries": 0, "message": message}
                 summary["errors"].append(f"{name}: {message}")
     statuses = [str(item.get("status") or "") for item in summary["feeds"].values()]
-    successful = [status for status in statuses if status in {"success", "cached", "not_modified"}]
-    failed = [status for status in statuses if status in {"error", "cooldown"}]
+    successful = [status for status in statuses if status in {"success", "cached", "not_modified", "partial"}]
+    failed = [status for status in statuses if status in {"error", "cooldown", "partial"}]
     if successful and failed:
         summary["status"] = "partial"
     elif successful:
@@ -341,7 +390,7 @@ def aps_rss_feed_state_is_fresh(
     if not state:
         return False
     status = clean_text(state.get("status") or "")
-    if status not in {"success", "error"}:
+    if status not in {"success", "error", "partial"}:
         return False
     timestamp = state.get("success_at") if status == "success" else state.get("checked_at")
     if not timestamp:
