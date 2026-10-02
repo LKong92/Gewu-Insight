@@ -9,9 +9,12 @@ filters and refreshing a list do not acknowledge its papers.
 The blue dot uses the existing late-arrival eligibility and per-paper read
 records. Subject reports and searches project that same state. Selecting a paper
 in either view updates its cached copies in both views. A journal or subject
-retains its dot while any of its loaded papers remains unread, including papers
-temporarily hidden by a display filter. Shared papers update all affected subject
-dots. Author Monitor keeps its separate read state and explicit Read All action.
+retains its dot while any paper visible under the current filters remains unread.
+Papers hidden by Field, search or other display filters do not contribute to the
+tab dot, but keep their own unread state. Changing filters can therefore restore
+the tab dot when unread papers become visible again. Shared papers update all
+affected subject dots under the current filters. Author Monitor keeps its
+separate read state and explicit Read All action.
 
 The server saves only the selected paper ID. The UI clears the dot after a
 successful acknowledgement; failed or timed-out requests remain retryable.

@@ -41299,7 +41299,7 @@ INDEX_HTML = """<!doctype html>
 
       const count = button.querySelector(".journal-tab-count");
       if (count) count.textContent = String(group.papers.length);
-      syncMonitorTabUnreadDot(button, state.papers.filter((paper) => paper.journal === group.journal));
+      syncMonitorTabUnreadDot(button, group.papers);
     }
 
     function syncMonitorTabUnreadDot(button, papers) {
@@ -56224,13 +56224,15 @@ INDEX_HTML = """<!doctype html>
           if (article.dataset.paperId === paperId) article.classList.remove("late-unread");
         });
         if (state.mode === "report") {
+          const visiblePapers = reportVisiblePapers();
           document.querySelectorAll("#reportTabs [data-journal]").forEach((button) => {
-            syncMonitorTabUnreadDot(button, state.papers.filter((item) => item.journal === button.dataset.journal));
+            syncMonitorTabUnreadDot(button, visiblePapers.filter((item) => item.journal === button.dataset.journal));
           });
           renderMonitorSidebarSummary();
         } else if (state.mode === "theme") {
+          const visiblePapers = themeVisiblePapers();
           document.querySelectorAll("#reportTabs [data-theme-key]").forEach((button) => {
-            syncMonitorTabUnreadDot(button, state.themePapers.filter((item) => themePaperMatchesGroup(item, button.dataset.themeKey)));
+            syncMonitorTabUnreadDot(button, visiblePapers.filter((item) => themePaperMatchesGroup(item, button.dataset.themeKey)));
           });
         }
         // Detached cards must be rebuilt from the updated data when revisited.
@@ -59281,7 +59283,7 @@ INDEX_HTML = """<!doctype html>
           <span class="journal-tab-label">${escapeHtml(entry.name)}</span>
           <span class="journal-tab-count">${entry.papers.length}</span>
         `;
-        syncMonitorTabUnreadDot(button, state.themePapers.filter((paper) => themePaperMatchesGroup(paper, entry.key)));
+        syncMonitorTabUnreadDot(button, entry.papers);
         button.addEventListener("click", () => {
           if (state.themeSuppressNextClick) return;
           selectThemeSubject(entry.key);

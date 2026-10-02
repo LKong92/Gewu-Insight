@@ -6,6 +6,7 @@ const names = ['renderReport', 'renderReportTabs', 'syncReportJournalTab', 'sync
   'renderPaper', 'selectReportPaper', 'ensureReportPaperSelection', 'updateReportPaperSelectionDom',
   'activeReportPapers', 'activeMonitorKeyboardMode', 'handleReportKeydown', 'reportKeyboardTargetIsEditable',
   'markSelectedLateArrivalSeen', 'updateLateArrivalSeenState', 'groupedReportPapers',
+  'reportVisiblePapers', 'subjectMatches', 'paperMatchesField',
   'renderThemeMonitor', 'renderThemeTabs', 'selectThemeSubject', 'switchThemeSubjectTab',
   'activeThemePapers', 'themePaperMatchesGroup', 'groupedThemePapers', 'themeVisiblePapers',
   'monitorPaperSignature', 'renderMonitorPaperList', 'clearMonitorPaperSurface',
@@ -23,13 +24,13 @@ const functions = names.map(name => {
     await page.setContent('<div id="reportTabs"></div><div id="papers" tabindex="0"></div>' +
       ['libraryControls','reportTitle','summary','monitorSidebarSummary','arxivCountdownHost'].map(id=>`<div id="${id}"></div>`).join(''));
     await page.addScriptTag({content: `
-      const $=id=>document.getElementById(id), FIELD_LABELS={physics:'Physics'}, calls=[];
-      const papers=['a','b','c'].map(paper_id=>({paper_id,title:paper_id,journal:'Fixture',fields:['physics'],late_arrival_unread:true,theme_groups:[{key:'A'},{key:'B'}]}));
+      const $=id=>document.getElementById(id), FIELD_LABELS={physics:'Physics',chemistry:'Chemistry',all:'All Fields'}, calls=[];
+      const papers=['a','b','c'].map(paper_id=>({paper_id,title:paper_id,journal:'Fixture',fields:[paper_id==='a'?'chemistry':'physics'],late_arrival_unread:true,theme_groups:[{key:'A'},{key:'B'}]}));
       const state={mode:'report',papers,themePapers:structuredClone(papers),themePapersByDate:{day:structuredClone(papers)},
         reportCache:{day:{papers:structuredClone(papers),lateArrivals:[{paper_ids:['a','b','c'],count:3,journals:{Fixture:3}}]}},
         lateArrivals:[{paper_ids:['a','b','c'],count:3,journals:{Fixture:3}}], seenLateArrivalIds:new Set(), markingLateArrivalIds:new Set(),
         monitorPaperDomCache:{},figureFailures:new Set(),showFigures:false,reportSelectedPaperId:'',activeReportJournal:'Fixture',journals:['Fixture'],
-        selectedFields:new Set(['physics']),selectedDate:'2026-09-30',logoUnavailableJournals:new Set(),
+        selectedFields:new Set(['all']),selectedJournals:new Set(['Fixture']),selectedDate:'2026-09-30',logoUnavailableJournals:new Set(),
         primaryKeyboardLayer:'content',monitorKeyboardPanes:{report:'papers',theme:'papers'},monitorSelectedPaperIds:{},
         themeGroups:[{key:'A',name:'A'},{key:'B',name:'B'}],activeThemeGroupKey:'A',themeFetchingDates:new Set(),themeSearched:true,
         themeSummary:{},showThemeArxiv:true,themeQuery:'',authorMonitorPapers:[],libraryItems:[],myPublications:[]};
@@ -44,8 +45,7 @@ const functions = names.map(name => {
         selectedThemeGroupLabel=()=> 'All',themeLastFetchLabel=()=>'',refreshSelectedReportPaperQuickLook=noop;
       const reportFetchIsPending=()=>false,journalLogoUrl=()=>'',paperFieldValues=p=>p.fields,
         inlineLatexMarkup=v=>v,publicationTitleMarkup=v=>v,escapeHtml=v=>String(v),escapeAttr=v=>String(v),
-        themePaperIsArxiv=()=>false,librarySearchMatches=(text,q)=>String(text).includes(q);
-      const reportVisiblePapers=()=>state.papers.filter(p=>p.paper_id!==state.hiddenId);
+        themePaperIsArxiv=()=>false,preprintCategoryMatches=()=>true,librarySearchMatches=(text,q)=>String(text).includes(q);
       const setActiveThemeGroupKey=key=>{state.activeThemeGroupKey=key;};
       ${functions}
       document.addEventListener('keydown',handleReportKeydown);
@@ -66,20 +66,31 @@ const functions = names.map(name => {
     assert.equal(await page.locator('.paper.late-unread').count(),2);
     assert.equal(await page.locator('[data-journal="Fixture"] .late-dot').count(),1);
     assert.deepEqual(await page.evaluate(()=>state.lateArrivals[0].journals),{Fixture:2});
+    await page.evaluate(()=>{state.selectedFields=new Set(['physics']);renderReport();});
+    assert.equal(await page.locator('.paper').count(),2);
+    assert.equal(await page.locator('[data-journal="Fixture"] .late-dot').count(),1,'visible unread paper keeps the journal dot');
     await page.locator('#papers').focus(); await page.keyboard.press('ArrowDown'); await settle();
     assert.deepEqual(await ids(),[['b'],['c']], 'ArrowDown acknowledges only the newly selected paper');
-    await page.evaluate(()=>{state.hiddenId='a';renderReport();});
     assert.equal(await page.locator('.paper.late-unread').count(),0);
-    assert.equal(await page.locator('[data-journal="Fixture"] .late-dot').count(),1,'filtered-out unread paper keeps the journal dot');
+    assert.equal(await page.locator('[data-journal="Fixture"] .late-dot').count(),0,'last visible acknowledgement clears the journal dot despite hidden unread papers');
+    assert.equal(await page.evaluate(()=>state.papers.find(p=>p.paper_id==='a').late_arrival_unread),true,'Field filtering preserves hidden unread state');
+    await page.evaluate(()=>renderReport());
+    assert.equal(await page.locator('[data-journal="Fixture"] .late-dot').count(),0,'rerender also respects the current Field filter');
     // Generic metadata and download results must not acknowledge other papers.
-    await page.evaluate(()=>{updatePaperState('a',{paper_id:'a',late_arrival_unread:false,title:'a'});state.hiddenId='';renderReport();});
+    await page.evaluate(()=>{updatePaperState('a',{paper_id:'a',late_arrival_unread:false,title:'a'});state.selectedFields=new Set(['all']);renderReport();});
     assert.equal(await page.locator('[data-paper-id="a"]').evaluate(e=>e.classList.contains('late-unread')),true);
+    assert.equal(await page.locator('[data-journal="Fixture"] .late-dot').count(),1,'revealing the unread Field restores the journal dot');
+    assert.deepEqual(await ids(),[['b'],['c']],'changing Fields never acknowledges hidden or revealed papers');
     // Read records are shared across Journal and Subject and every cached array.
     assert.equal(await page.evaluate(()=>state.themePapersByDate.day.find(p=>p.paper_id==='b').late_arrival_unread),false);
     await page.evaluate(()=>{state.mode='theme';renderThemeMonitor();});
     await page.locator('[data-theme-key="B"]').click();
     await page.waitForTimeout(1600);
     assert.deepEqual(await ids(),[['b'],['c']],'changing subjects cannot acknowledge papers');
+    await page.evaluate(()=>{state.themeQuery='b';renderThemeMonitor();});
+    assert.equal(await page.locator('#reportTabs .late-dot').count(),0,'Subject dots exclude papers hidden by its current search');
+    await page.evaluate(()=>{state.themeQuery='';renderThemeMonitor();});
+    assert.equal(await page.locator('#reportTabs .late-dot').count(),2,'revealing unread papers restores both Subject dots');
     await page.evaluate(()=>{fail=true;});await click('a');
     assert.equal(await page.locator('[data-paper-id="a"]').evaluate(e=>e.classList.contains('late-unread')),true,'HTTP failure keeps the unread flag');
     await page.evaluate(()=>{fail=false;rejected=true;});await click('a');
@@ -107,7 +118,17 @@ const functions = names.map(name => {
     await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown'); await settle();
     assert.deepEqual((await ids()).at(-1),['c']);
     assert.equal(await page.locator('#reportTabs .late-dot').count(),0);
+    // Completing an acknowledgement uses the filters active at completion.
+    await page.evaluate(()=>{state.seenLateArrivalIds.clear();state.themePapers.forEach(p=>p.late_arrival_unread=true);state.themeQuery='b';renderThemeMonitor();held=true;});
+    await page.locator('[data-paper-id="b"] h3').click();
+    await page.evaluate(()=>{state.themeQuery='c';renderThemeMonitor();held=false;pending.splice(0).forEach(r=>r());});await settle();
+    assert.equal(await page.locator('#reportTabs .late-dot').count(),2,'pending acknowledgement cannot clear another visible unread paper');
+    await click('c');
+    assert.equal(await page.locator('#reportTabs .late-dot').count(),0,'last visible Subject acknowledgement ignores hidden unread paper');
+    assert.equal(await page.evaluate(()=>state.themePapers.find(p=>p.paper_id==='a').late_arrival_unread),true);
+    await page.evaluate(()=>{state.themeQuery='';renderThemeMonitor();});
+    assert.equal(await page.locator('#reportTabs .late-dot').count(),2);
     assert.deepEqual(errors,[]);
-    console.log('PASS: real Journal/Subject render, mouse/keyboard selection, filtered unread aggregation, cache and metadata preservation, failed acknowledgement retry, stale replies and view-switch race.');
+    console.log('PASS: real Journal/Subject render, mouse/keyboard selection, visible-only Field/search unread aggregation and restoration, cache and metadata preservation, failed acknowledgement retry, stale replies and filter/view-switch races.');
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});
