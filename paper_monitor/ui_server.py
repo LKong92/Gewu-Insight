@@ -5285,6 +5285,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 summary = theme_existing_summary(existing, selected, group_keys, theme_groups)
             papers = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=group_keys)
             papers = annotate_papers_with_library_status(storage, papers)
+            annotate_late_arrival_read_status(storage, papers)
             all_group_keys = list(theme_groups.keys())
             all_date_papers = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=all_group_keys)
             selected_counts = theme_counts_for_month(storage, prefix=selected, group_keys=group_keys).get(selected, {})
@@ -5335,6 +5336,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 group_keys=group_keys,
             )
             papers = annotate_papers_with_library_status(storage, papers)
+            annotate_late_arrival_read_status(storage, papers)
         finally:
             storage.close()
         self.send_json(
@@ -8463,7 +8465,7 @@ def readable_theme_hit_label(value: str) -> str:
 
 
 def theme_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
-    item = monitor_paper_to_api(paper)
+    item = monitor_paper_to_api(paper, late_arrival_unread=bool(paper.get("late_arrival_unread")))
     item["theme_score"] = int(paper.get("theme_score") or 0)
     item["theme_groups"] = list(paper.get("theme_groups") or [])
     group_label_keys = {
@@ -18850,6 +18852,22 @@ def paper_is_late_arrival(paper: dict[str, Any]) -> bool:
     except ValueError:
         return False
     return timedelta(days=1) <= delta <= timedelta(days=LATE_ARRIVAL_LOOKBACK_DAYS)
+
+
+def annotate_late_arrival_read_status(storage: Storage, papers: list[dict[str, Any]]) -> None:
+    """Use existing per-paper read records for Subject discovery, without writes."""
+    candidates = [paper for paper in papers if paper_is_late_arrival(paper)]
+    read_ids: set[str] = set()
+    ids = list(dict.fromkeys(str(paper["paper_id"]) for paper in candidates))
+    for offset in range(0, len(ids), 500):
+        batch = ids[offset:offset + 500]
+        placeholders = ",".join("?" for _ in batch)
+        read_ids.update(str(row["paper_id"]) for row in storage.conn.execute(
+            f"SELECT paper_id FROM paper_reads WHERE paper_id IN ({placeholders}) "
+            "AND late_arrival_seen_at IS NOT NULL", batch,
+        ))
+    for paper in papers:
+        paper["late_arrival_unread"] = paper_is_late_arrival(paper) and paper["paper_id"] not in read_ids
 
 
 def unread_late_arrival_paper_ids(storage: Storage, selected: str, journals: list[str]) -> set[str]:
@@ -36488,6 +36506,7 @@ INDEX_HTML = """<!doctype html>
       lateArrivals: [],
       reportFetchErrors: [],
       markingLateArrivalIds: new Set(),
+      seenLateArrivalIds: new Set(),
       fetchingDates: new Set(),
       pendingFetchDates: new Set(),
       noMatchDates: new Set(),
@@ -41138,6 +41157,7 @@ INDEX_HTML = """<!doctype html>
 
     function renderReport() {
       state.mode = "report";
+      updateLateArrivalSeenState([...(state.seenLateArrivalIds || [])]);
       closeLibraryQuickLook();
       stopArxivUpdateCountdown();
       updateToolbarLibraryImport();
@@ -41196,7 +41216,6 @@ INDEX_HTML = """<!doctype html>
       requestKatexForPapers(activePapers);
       ensureReportPaperSelection(activePapers);
       renderMonitorPaperList(root, activePapers, "report");
-      markVisibleLateArrivalsSeen(activePapers);
       if (!activePapers.length) {
         appendMonitorStatusMessage("No papers in this source for this date.");
         showRuntimeEmptyBrand(root);
@@ -41280,15 +41299,19 @@ INDEX_HTML = """<!doctype html>
 
       const count = button.querySelector(".journal-tab-count");
       if (count) count.textContent = String(group.papers.length);
-      const hasUnreadLateArrival = group.papers.some((paper) => paper.late_arrival_unread);
-      let lateDot = button.querySelector(".late-dot");
-      if (hasUnreadLateArrival && !lateDot) {
-        lateDot = document.createElement("span");
-        lateDot.className = "late-dot";
-        lateDot.title = "Unread late arrival";
-        button.appendChild(lateDot);
-      } else if (!hasUnreadLateArrival && lateDot) {
-        lateDot.remove();
+      syncMonitorTabUnreadDot(button, state.papers.filter((paper) => paper.journal === group.journal));
+    }
+
+    function syncMonitorTabUnreadDot(button, papers) {
+      const hasUnread = papers.some((paper) => paper.late_arrival_unread);
+      let dot = button.querySelector(".late-dot");
+      if (hasUnread && !dot) {
+        dot = document.createElement("span");
+        dot.className = "late-dot";
+        dot.title = "Unread late arrival";
+        button.appendChild(dot);
+      } else if (!hasUnread && dot) {
+        dot.remove();
       }
     }
 
@@ -41489,6 +41512,8 @@ INDEX_HTML = """<!doctype html>
       if (!iso || isFutureDateIso(iso)) return true;
       state.monitorKeyboardPanes[mode] = "papers";
       renderCalendar();
+      const paper = selectedReportPaper();
+      if (paper) selectReportPaper(paper.paper_id);
       focusMonitorPaperSelection(mode, {scroll: true});
       return true;
     }
@@ -41558,6 +41583,7 @@ INDEX_HTML = """<!doctype html>
         const mode = activeMonitorKeyboardMode();
         state.monitorKeyboardPanes[mode] = "papers";
         state.monitorSelectedPaperIds[mode] = paperId;
+        markSelectedLateArrivalSeen(paperId);
       }
       updateReportPaperSelectionDom(options);
       if (followSelection) refreshSelectedReportPaperQuickLook({open: true});
@@ -53198,7 +53224,8 @@ INDEX_HTML = """<!doctype html>
       monitorLists.forEach((papers) => {
         if (!Array.isArray(papers)) return;
         const index = papers.findIndex((item) => item.paper_id === paperId);
-        if (index >= 0) papers[index] = {...papers[index], ...nextPaper};
+        if (index >= 0) papers[index] = {...papers[index], ...nextPaper,
+          late_arrival_unread: Boolean(papers[index].late_arrival_unread) && !state.seenLateArrivalIds?.has(paperId)};
       });
       state.libraryItems.forEach((item) => {
         if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = {...(item.paper || {}), ...nextPaper};
@@ -56177,54 +56204,74 @@ INDEX_HTML = """<!doctype html>
       return `<div class="theme-meta">${chips.join("")}</div>`;
     }
 
-    function markVisibleLateArrivalsSeen(papers) {
-      const ids = (papers || [])
-        .filter((paper) => paper?.late_arrival_unread && !state.markingLateArrivalIds.has(paper.paper_id))
-        .map((paper) => paper.paper_id);
-      if (!ids.length) return;
-      ids.forEach((paperId) => state.markingLateArrivalIds.add(paperId));
-      window.setTimeout(async () => {
-        try {
-          const res = await fetch("/api/papers/late-arrivals/seen", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({paper_ids: ids})
+    async function markSelectedLateArrivalSeen(paperId) {
+      const paper = activeReportPapers().find((item) => item.paper_id === paperId);
+      if (!paper?.late_arrival_unread || state.markingLateArrivalIds.has(paperId)) return;
+      state.markingLateArrivalIds.add(paperId);
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 15000);
+      try {
+        const res = await fetch("/api/papers/late-arrivals/seen", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_ids: [paperId]}),
+          signal: controller.signal
+        });
+        if (!res.ok) return;
+        state.seenLateArrivalIds.add(paperId);
+        updateLateArrivalSeenState([paperId]);
+        document.querySelectorAll("#papers .paper.late-unread").forEach((article) => {
+          if (article.dataset.paperId === paperId) article.classList.remove("late-unread");
+        });
+        if (state.mode === "report") {
+          document.querySelectorAll("#reportTabs [data-journal]").forEach((button) => {
+            syncMonitorTabUnreadDot(button, state.papers.filter((item) => item.journal === button.dataset.journal));
           });
-          if (!res.ok) return;
-          updateLateArrivalSeenState(ids);
-          renderReportTabs(groupedReportPapers(reportVisiblePapers()));
-          document.querySelectorAll(".paper.late-unread").forEach((article) => {
-            if (ids.includes(article.dataset.paperId)) article.classList.remove("late-unread");
+          renderMonitorSidebarSummary();
+        } else if (state.mode === "theme") {
+          document.querySelectorAll("#reportTabs [data-theme-key]").forEach((button) => {
+            syncMonitorTabUnreadDot(button, state.themePapers.filter((item) => themePaperMatchesGroup(item, button.dataset.themeKey)));
           });
-        } finally {
-          ids.forEach((paperId) => state.markingLateArrivalIds.delete(paperId));
         }
-      }, 1400);
+        // Detached cards must be rebuilt from the updated data when revisited.
+        Object.values(state.monitorPaperDomCache || {}).forEach((cached) => {cached.signature = "";});
+        syncCurrentMonitorPaperSignature();
+      } catch (_) {
+        // Failed acknowledgements retain the dot and can be retried by selection.
+      } finally {
+        window.clearTimeout(timer);
+        state.markingLateArrivalIds.delete(paperId);
+      }
     }
 
     function updateLateArrivalSeenState(paperIds) {
       const seenIds = new Set(paperIds || []);
-      state.papers.forEach((paper) => {
-        if (seenIds.has(paper.paper_id)) paper.late_arrival_unread = false;
-      });
-      state.lateArrivals = (state.lateArrivals || [])
-        .map((item) => {
-          const remainingIds = (item.paper_ids || []).filter((paperId) => !seenIds.has(paperId));
-          return {...item, paper_ids: remainingIds, count: remainingIds.length};
-        })
-        .filter((item) => Number(item.count || 0) > 0);
-      Object.values(state.reportCache || {}).forEach((cached) => {
-        (cached?.papers || []).forEach((paper) => {
-          if (seenIds.has(paper.paper_id)) paper.late_arrival_unread = false;
+      if (!seenIds.size) return;
+      const journals = new Map();
+      const lists = [state.papers, state.themePapers,
+        ...Object.values(state.reportCache || {}).map((cached) => cached?.papers),
+        ...Object.values(state.themePapersByDate || {})];
+      lists.forEach((papers) => (papers || []).forEach((paper) => {
+        if (!seenIds.has(paper.paper_id)) return;
+        journals.set(paper.paper_id, paper.journal);
+        paper.late_arrival_unread = false;
+      }));
+      const remainingSummaries = (items) => (items || []).map((item) => {
+        const counts = {...item.journals};
+        const ids = (item.paper_ids || []).filter((id) => {
+          if (!seenIds.has(id)) return true;
+          const journal = journals.get(id);
+          if (counts[journal]) {
+            counts[journal] -= 1;
+            if (!counts[journal]) delete counts[journal];
+          }
+          return false;
         });
-        if (Array.isArray(cached?.lateArrivals)) {
-          cached.lateArrivals = cached.lateArrivals
-            .map((item) => {
-              const remainingIds = (item.paper_ids || []).filter((paperId) => !seenIds.has(paperId));
-              return {...item, paper_ids: remainingIds, count: remainingIds.length};
-            })
-            .filter((item) => Number(item.count || 0) > 0);
-        }
+        return {...item, journals: counts, paper_ids: ids, count: ids.length};
+      }).filter((item) => item.count > 0);
+      state.lateArrivals = remainingSummaries(state.lateArrivals);
+      Object.values(state.reportCache || {}).forEach((cached) => {
+        if (cached?.lateArrivals) cached.lateArrivals = remainingSummaries(cached.lateArrivals);
       });
     }
 
@@ -59234,6 +59281,7 @@ INDEX_HTML = """<!doctype html>
           <span class="journal-tab-label">${escapeHtml(entry.name)}</span>
           <span class="journal-tab-count">${entry.papers.length}</span>
         `;
+        syncMonitorTabUnreadDot(button, state.themePapers.filter((paper) => themePaperMatchesGroup(paper, entry.key)));
         button.addEventListener("click", () => {
           if (state.themeSuppressNextClick) return;
           selectThemeSubject(entry.key);
@@ -59329,6 +59377,7 @@ INDEX_HTML = """<!doctype html>
       if (windowStart === state.selectedDate && windowEnd === state.selectedDate) {
         restoreCachedThemePapers(state.selectedDate, selectedThemeGroupParam());
       }
+      updateLateArrivalSeenState([...(state.seenLateArrivalIds || [])]);
       const selectedDateFetching = state.themeFetchingDates.has(state.selectedDate);
       const summaryMatchesSelectedDate = windowStart === state.selectedDate && windowEnd === state.selectedDate;
       const currentThemeBusy = selectedDateFetching || (state.themeSearchRunning && summaryMatchesSelectedDate);
