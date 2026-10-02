@@ -56,6 +56,7 @@ def fetch_crossref_journal(
                             "article-number",
                             "type",
                             "abstract",
+                            "update-to",
                         ]
                     ),
                 }
@@ -134,6 +135,7 @@ def fetch_crossref_topic(
                     "article-number",
                     "type",
                     "abstract",
+                    "update-to",
                 ]
             ),
         }

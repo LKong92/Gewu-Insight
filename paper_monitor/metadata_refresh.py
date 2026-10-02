@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from contextlib import contextmanager
 import itertools
-from . import metadata_network, paper_identity, identifier_correction
+from . import metadata_network, paper_identity, identifier_correction, notice_discovery
 
 _ACTIVE = {}
 _LOCK = threading.Lock()
@@ -451,6 +451,7 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
                     raw[field] = pubmed[field]
             if not working.get('abstract') and pubmed.get('abstract'):
                 working.update(abstract=pubmed['abstract'], abstract_source='pubmed')
+    updates = lookup('Crossref publication updates', lambda: notice_discovery.fetch_updates(doi)) if doi else []
     working['doi'] = doi
     if arxiv and not manual_arxiv:
         raw.update(ui.ensure_raw_preprint_metadata(raw, arxiv))
@@ -489,8 +490,14 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
                    else storage.refresh_paper_metadata(paper_id, merged, linked_preprint_id=linked_preprint)) or current
         if semantic:
             updated = storage.update_semantic_scholar_enrichment(paper_id, semantic) or updated
+    added_notices, notice_conflicts = ([], [])
+    if doi and valid_doi(updated.get('doi')) == doi and not (correction and not correction_verified):
+        added_notices, notice_conflicts = notice_discovery.retain_updates(storage, updated, updates or [])
+        conflicts.extend(notice_conflicts)
     after = projection(updated)
     changed = [k for k in before if (before[k] or '') != (after[k] or '')]
+    if added_notices:
+        changed.append('publication notices')
     for name in network.get('errors', {}):
         sources[name] = 'unavailable'
     for name in network['blocked']:
@@ -515,6 +522,7 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
     if conflicts:
         message += ' Conflicting source information was not applied; saved identifiers were kept.'
     report = {'status': status, 'message': message, 'changed_fields': changed, 'sources': sources,
+              'publication_notice_ids': added_notices,
               'conflicts': list(dict.fromkeys(conflicts)), 'checked_at': now.isoformat(timespec='microseconds'),
               'next_check_at': (now + timedelta(days=1 if failures else (30 if quiet >= 3 else 7))).isoformat(timespec='seconds'),
               'unchanged_checks': quiet, 'detailed': detailed, 'mode': mode,

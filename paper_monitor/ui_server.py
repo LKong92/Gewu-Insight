@@ -4,6 +4,7 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 from email.utils import formatdate
 from functools import lru_cache
+from contextlib import ExitStack
 import html
 import hashlib
 from io import BytesIO
@@ -42,7 +43,7 @@ import requests
 from . import finder_alias
 from . import folder_rename
 from .file_layout import normalize_files, sync_associated_aliases, finish_aliases, bundle_name
-from . import search_matching, author_profile_retry, publication_notices
+from . import search_matching, author_profile_retry, publication_notices, notice_discovery
 from .library_destination import active_folders, default_add_destination, save_default_add_folder
 from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
 from .publication_deletion import delete_publications
@@ -74,6 +75,7 @@ from .download import (
     download_paper,
     paper_download_lock,
     is_nature_reference_pdf_url,
+    is_nature_secondary_pdf_reference,
     normalize_doi,
     publisher_browser_candidate,
     science_supplement_pdf_candidates,
@@ -1259,6 +1261,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 journals=self.configured_journals,
             )
             papers = annotate_papers_with_library_status(storage, papers)
+            notices = notice_discovery.for_monitor_date(
+                storage, selected, self.configured_journals, field_classifier=classify_fields,
+            )
             fetch_errors = journal_fetch_errors_for_date(storage, selected, self.configured_journals)
             late_unread_ids = unread_late_arrival_paper_ids(storage, selected, self.configured_journals)
             late_arrivals = late_arrivals_for_seen_date(storage, selected, self.configured_journals)
@@ -1269,6 +1274,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             {
                 "date": selected,
                 "journals": self.configured_journals,
+                "publication_notices": notices,
                 "papers": [
                     monitor_paper_to_api(
                         paper,
@@ -1477,12 +1483,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                         target_dir=target_dir,
                         force=force_download,
                     )
-                    register_downloaded_paper_resource(
+                    downloaded_resource = register_downloaded_paper_resource(
                         storage,
                         paper_id,
                         result=result,
                         snapshot=download_snapshot,
                     )
+                    if downloaded_resource and normalize_doi((storage.get_paper(paper_id) or {}).get("doi") or "").startswith("10.1038/"):
+                        result["publisher_main_resource_id"] = int(downloaded_resource["id"])
                 finally:
                     cleanup_download_resource_snapshot(download_snapshot)
                 if target_dir:
@@ -1888,7 +1896,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 )
             files_snapshot = paper_files_state_payload(storage, paper_id)
             paper = storage.get_paper(paper_id)
-            if publisher_download_kind == "aaas-published-pdf":
+            if publisher_download_kind in {"aaas-published-pdf", "publisher-main-pdf"}:
                 for resource in storage.list_paper_resources(paper_id, ensure_primary=False):
                     path = storage.resource_local_path(resource)
                     if path and Path(path).expanduser().resolve() == target_path:
@@ -3820,11 +3828,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_add_library_item(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
+        notice_id = int(payload.get("notice_id") or 0)
         folder_id = int(payload.get("folder_id") or 1)
-        if not paper_id:
+        if not paper_id and not notice_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        with paper_download_lock(self.configured_db_path, paper_id):
+        with ExitStack() as locks:
+            locks.enter_context(paper_download_lock(self.configured_db_path, paper_id))
             storage = Storage(self.configured_db_path)
             try:
                 target_folder = None
@@ -3842,7 +3852,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     if recycle_id and library_folder_is_within(storage, folder_id, recycle_id):
                         self.send_error_json(HTTPStatus.BAD_REQUEST, "Recycle cannot be used as an Add to Library target")
                         return
-                paper = storage.get_paper(paper_id)
+                paper = storage.get_paper(paper_id) if paper_id else None
+                if notice_id or (paper and publication_notices.describe_known(storage, paper)):
+                    paper, notice_id = notice_discovery.resolve_for_library(storage, event_id=notice_id or None, paper=paper)
+                    paper_id = paper['paper_id']
+                    locks.enter_context(paper_download_lock(self.configured_db_path, paper_id, blocking=False))
                 if not paper:
                     self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                     return
@@ -3867,8 +3881,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
                 updated_paper = updated_papers[0] if updated_papers else updated_paper
                 item_api = library_item_to_api(item, updated_paper) if item else {}
-                refreshed_files = paper_files_state_payloads(storage, [])
+                refreshed_files = paper_files_state_payloads(storage, [paper_id] if notice_id else [])
                 snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
+            except (ValueError, requests.RequestException) as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                return
             finally:
                 storage.close()
             self.send_json({
@@ -4779,6 +4796,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             result = metadata_refresh.refresh(storage, paper_id, detailed=True,
                 identifier=clean_text(str(payload.get("identifier") or payload.get("doi") or "")))
+            files = paper_files_state_payloads(storage, [result["paper"]["paper_id"]])
             snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         except KeyError:
@@ -4789,7 +4807,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"paper": paper_to_api(result["paper"]), "metadata_refresh": result["metadata_refresh"],
+        self.send_json({"paper": paper_to_api(result["paper"]), "metadata_refresh": result["metadata_refresh"], "paper_files": files,
                         "publications": publications, **snapshot})
 
     def handle_update_preprint_identifier(self, payload: dict[str, Any]) -> None:
@@ -7104,6 +7122,28 @@ def run_theme_monitor(
     task_messages: dict[tuple[str, str], str] = {}
     task_counts: dict[tuple[str, str], int] = {}
     source_plan_hashes: dict[str, str] = {}
+    notice_observations: list[tuple[dict[str, Any], str, str]] = []
+    notice_keys: set[str] = set()
+    ingestion_errors: dict[tuple[str, str], str] = {}
+
+    def collect_candidate(paper: dict[str, Any], *, source_name: str, query: str) -> None:
+        # Retain each notice's evidence before provider deduplication can hide
+        # its label. Route it after ordinary papers so same-batch parents exist.
+        key = theme_candidate_merge_key(paper)
+        if publication_notices.describe_known(storage, paper) is not None:
+            notice_observations.append((paper, source_name, query))
+            notice_keys.add(key)
+            candidates.pop(key, None)
+        elif key not in notice_keys:
+            add_theme_candidate(candidates, candidate_sources, candidate_queries,
+                                paper, source_name=source_name, query=query)
+
+    def ingestion_failed(sources: Iterable[str], queries: Iterable[str], exc: Exception) -> None:
+        for source in sources:
+            detail = sanitize_theme_status_message(str(exc))[:1000]
+            message = f"Subject Monitor/{source}: could not save publication. {detail}"
+            for query in queries:
+                ingestion_errors[(source, query)] = message
 
     try:
         local_arxiv, local_arxiv_status, local_arxiv_message = local_arxiv_theme_candidates(
@@ -7115,10 +7155,7 @@ def run_theme_monitor(
         summary["source_statuses"]["local_arxiv"] = local_arxiv_status
         summary["raw_results"] += len(local_arxiv)
         for paper in local_arxiv:
-            add_theme_candidate(
-                candidates,
-                candidate_sources,
-                candidate_queries,
+            collect_candidate(
                 paper,
                 source_name="local_arxiv",
                 query="local arXiv",
@@ -7144,10 +7181,7 @@ def run_theme_monitor(
         summary["source_statuses"]["local_aps_rss"] = local_aps_rss_status
         summary["raw_results"] += len(local_aps_rss)
         for paper in local_aps_rss:
-            add_theme_candidate(
-                candidates,
-                candidate_sources,
-                candidate_queries,
+            collect_candidate(
                 paper,
                 source_name="local_aps_rss",
                 query="local APS RSS",
@@ -7219,10 +7253,7 @@ def run_theme_monitor(
                         continue
                     if not theme_candidate_is_literature_like(paper):
                         continue
-                    add_theme_candidate(
-                        candidates,
-                        candidate_sources,
-                        candidate_queries,
+                    collect_candidate(
                         theme_merge_source_marker(paper, source_name),
                         source_name=source_name,
                         query=query,
@@ -7235,6 +7266,7 @@ def run_theme_monitor(
             query_plan,
         )
         candidate_rows: list[dict[str, str]] = []
+        accepted_candidates: dict[str, dict[str, Any]] = {}
         for merge_key, paper in candidates.items():
             sources = candidate_sources.get(merge_key, set())
             paper_id = str(paper.get("paper_id") or "")
@@ -7243,13 +7275,27 @@ def run_theme_monitor(
                 conflict_reasons = storage.paper_identity_conflict_reasons(existing_candidate, paper)
                 if conflict_reasons:
                     storage.record_paper_identity_conflict(existing_candidate, paper, conflict_reasons)
+                    ingestion_failed(sources, candidate_queries.get(merge_key, set()),
+                                     paper_identity.IdentityReviewRequired(existing_candidate, paper, conflict_reasons))
                     continue
             has_local_source = bool(sources.intersection({"local_arxiv", "local_aps_rss"}))
-            if not has_local_source or storage.get_paper(paper_id) is None:
-                if paper.get("section_allowed") is None:
-                    paper["section_allowed"] = True
-                if not storage.upsert_paper(paper):
-                    continue
+            try:
+                if not has_local_source or storage.get_paper(paper_id) is None:
+                    if paper.get("section_allowed") is None:
+                        paper["section_allowed"] = True
+                    with paper_identity.transaction(storage):
+                        accepted = storage.upsert_paper(paper, commit=False)
+                    if not accepted:
+                        ingestion_failed(sources, candidate_queries.get(merge_key, set()),
+                                         ValueError("Publication identity needs review; candidate was not accepted."))
+                        continue
+            except (publication_notices.NoticeReviewRequired, paper_identity.IdentityReviewRequired, sqlite3.Error) as exc:
+                ingestion_failed(sources, candidate_queries.get(merge_key, set()), exc)
+                continue
+            # upsert_paper may resolve an incoming provider ID to an existing
+            # Gewu identity. Only accepted identities may enter either index.
+            paper_id = str(paper["paper_id"])
+            accepted_candidates[merge_key] = paper
             for source_name in sources:
                 candidate_rows.append(
                     {
@@ -7262,7 +7308,38 @@ def run_theme_monitor(
                         else source_plan_hashes.get(source_name, theme_source_plan_hash(source_name, start_date, end_date, query_plan)),
                     }
                 )
+        summary["notices"] = 0
+        for paper, source, query in notice_observations:
+            try:
+                with paper_identity.transaction(storage):
+                    publication_notices.record_for_ingestion(storage, paper)
+                summary["notices"] += 1
+            except (publication_notices.NoticeReviewRequired, sqlite3.Error) as exc:
+                ingestion_failed([source], [query], exc)
         storage.record_theme_candidates(candidate_rows)
+
+        # A retrieved query is not reusable if its records could not be saved.
+        # Keep successful candidates, report partial results and retry the
+        # failed query instead of silently serving an incomplete cache.
+        for source in {source for source, _query in ingestion_errors}:
+            failed = {query: message for (name, query), message in ingestion_errors.items() if name == source}
+            message = "; ".join(dict.fromkeys(failed.values()))
+            summary["errors"].append(message)
+            status = "partial" if any(row["source"] == source for row in candidate_rows) else "error"
+            summary["source_statuses"][source] = status
+            for query, error in failed.items():
+                task_states[(source, query)] = "error"
+                task_messages[(source, query)] = error
+            if source in summary["online_discovery"]["sources"]:
+                summary["online_discovery"]["sources"][source].update(status=status, message=message)
+                latest = storage.latest_theme_source_run(source=source, window_start=window_start,
+                    window_end=window_end, query_plan_hash=source_plan_hashes[source])
+                if latest:
+                    storage.record_theme_source_tasks(int(latest["id"]), [
+                        {"query": query, "status": "error", "records_found": task_counts.get((source, query), 0), "message": error}
+                        for query, error in failed.items()])
+                    storage.finish_theme_source_run(int(latest["id"]), status=status,
+                        candidates_found=int(latest.get("candidates_found") or 0), message=message)
 
         for group_key in group_keys:
             group = groups[group_key]
@@ -7270,13 +7347,15 @@ def run_theme_monitor(
             group_errors: list[str] = []
             failed_tasks: list[dict[str, str]] = []
             source_statuses = {
-                "local_arxiv": local_arxiv_status,
-                "local_aps_rss": local_aps_rss_status,
+                "local_arxiv": summary["source_statuses"]["local_arxiv"],
+                "local_aps_rss": summary["source_statuses"]["local_aps_rss"],
             }
             if local_arxiv_message:
                 group_errors.append(local_arxiv_message)
             if local_aps_rss_message:
                 group_errors.append(local_aps_rss_message)
+            group_errors.extend(dict.fromkeys(message for (source, _query), message in ingestion_errors.items()
+                                             if source in {"local_arxiv", "local_aps_rss"}))
             group_queries = [query for query in query_plan if group_key in query_groups.get(query, set())]
             for source_name, _fetcher in source_fetchers:
                 if retry_tasks_by_group is not None and source_name not in retry_sources_by_group.get(group_key, set()):
@@ -7293,7 +7372,7 @@ def run_theme_monitor(
 
             matches = []
             matchers = theme_keyword_matchers(list(group.get("queries") or []))
-            for merge_key, paper in candidates.items():
+            for merge_key, paper in accepted_candidates.items():
                 score, hits = score_theme_relevance(
                     str(paper.get("title") or ""),
                     str(paper.get("abstract") or ""),
@@ -22647,6 +22726,8 @@ def attach_downloaded_publisher_pdf_to_paper(
     )
     original_name = Path(clean_text(context.get("publisher_download_filename") or "") or source.name).name
     is_science = publisher_kind == "aaas-published-pdf" or normalize_doi(paper.get("doi") or "").startswith("10.1126/")
+    if normalize_doi(paper.get("doi") or "").startswith("10.1038/") and is_nature_secondary_pdf_reference(f"{source_url} {original_name}"):
+        raise ValueError("Nature returned an attachment instead of the main article PDF. The main article was not saved; check article access with Open Website.")
     if is_science:
         rejection = science_main_pdf_rejection(source, url=source_url, filename=original_name)
         if rejection:
@@ -23350,21 +23431,24 @@ def attach_manual_pdf_to_paper(
     return target_path, updated
 
 
-def attach_science_supplement_to_paper(
+def attach_bound_publisher_supplement_to_paper(
     storage: Storage, *, paper_id: str, context: dict[str, Any], supplement_path: Path,
+    publisher_label: str = "Science",
 ) -> tuple[Path, dict[str, Any]]:
-    """Merge into the downloaded Science version, retaining any manual Default."""
+    """Merge into the downloaded version, retaining any manual Default."""
     paper = storage.get_paper(paper_id)
     requested_id = int(context.get("publisher_main_resource_id") or 0)
     resource = storage.get_paper_resource(requested_id) if requested_id else None
     if requested_id and (not resource or resource.get("paper_id") != paper_id
                          or resource.get("file_type") not in {"published_version", "accepted_manuscript"}):
-        raise ValueError("The downloaded Science main paper file is no longer available")
+        raise ValueError(f"The downloaded {publisher_label} main paper file is no longer available")
+    if publisher_label == "Nature" and not resource:
+        raise ValueError("The downloaded Nature main paper file must be identified before merging supplements. Retry Download.")
     path_text = storage.resource_local_path(resource) if resource else ""
     main_path = Path(path_text).expanduser().resolve() if path_text else canonical_pdf_path_for_paper(paper)
     if not main_path or not is_valid_pdf_file(main_path):
         raise ValueError("The main PDF must be downloaded before its supplementary PDF")
-    rejection = science_main_pdf_rejection(main_path)
+    rejection = science_main_pdf_rejection(main_path) if publisher_label == "Science" else None
     if rejection:
         raise ValueError("The saved PDF contains supplementary material without the Science main article. Refresh the main PDF before merging supplements.")
     is_canonical = main_path == canonical_pdf_path_for_paper(paper)
@@ -23397,7 +23481,7 @@ def attach_science_supplement_to_paper(
             if not resource:
                 resource = storage.ensure_primary_pdf_resource(paper_id, commit=False)
             if not resource:
-                raise ValueError("The Science main paper file could not be registered")
+                raise ValueError(f"The {publisher_label} main paper file could not be registered")
             working.replace(target)
             published = True
             storage.conn.execute(
@@ -23417,7 +23501,7 @@ def attach_science_supplement_to_paper(
                     main_pdf_path = COALESCE(?, main_pdf_path), merged_pdf_path = COALESCE(?, merged_pdf_path),
                     supplement_pdf_paths = CASE WHEN ? THEN '[]' ELSE supplement_pdf_paths END
                     WHERE paper_id = ?""",
-                ("downloaded and merged Science supplementary PDF; temporary PDF removed", now_iso(),
+                (f"downloaded and merged {publisher_label} supplementary PDF; temporary PDF removed", now_iso(),
                  str(target) if is_canonical else None, str(target) if is_canonical else None,
                  is_canonical, paper_id),
             )
@@ -23446,7 +23530,7 @@ def attach_science_supplement_to_paper(
         try:
             sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=main_path if target != main_path else None)
         except (OSError, sqlite3.Error):
-            logging.getLogger(__name__).exception("Science PDF saved; shortcut sync incomplete for %s", paper_id)
+            logging.getLogger(__name__).exception("%s PDF saved; shortcut sync incomplete for %s", publisher_label, paper_id)
     return target, storage.get_paper(paper_id)
 
 
@@ -23463,8 +23547,9 @@ def attach_publisher_supplement_pdf_to_paper(
     if not paper:
         raise KeyError(str(paper_id))
     is_science = clean_text(context.get("publisher_download_kind") or "") == "aaas-supplement-pdf"
+    is_nature = clean_text(context.get("publisher_download_name") or "").lower() == "nature"
     main_path = canonical_pdf_path_for_paper(paper)
-    if not main_path and not is_science:
+    if not main_path and not (is_science or is_nature):
         raise ValueError("The main PDF must be downloaded before its supplementary PDF")
     source_supplement_path = source_path.expanduser().resolve()
     if not source_supplement_path.exists() or not source_supplement_path.is_file():
@@ -23485,10 +23570,11 @@ def attach_publisher_supplement_pdf_to_paper(
     else:
         raise ValueError("Publisher supplement must be a valid PDF, DOC, or DOCX file")
 
-    if is_science:
+    if is_science or is_nature:
         try:
-            return attach_science_supplement_to_paper(
+            return attach_bound_publisher_supplement_to_paper(
                 storage, paper_id=str(paper_id), context=context, supplement_path=supplement_path,
+                publisher_label="Nature" if is_nature else "Science",
             )
         finally:
             if converted_path:
@@ -27615,6 +27701,44 @@ INDEX_HTML = """<!doctype html>
       color: #667085;
       overflow-wrap: anywhere;
     }
+    .monitor-notice-events {
+      width: var(--monitor-calendar-width);
+      flex: 0 0 auto;
+      align-self: flex-start;
+      padding: 10px 2px 2px;
+      border-top: 1px solid rgba(151, 161, 176, 0.22);
+      color: #667085;
+      font-size: 11px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .app:not(.report-mode) .monitor-notice-events { display: none !important; }
+    .monitor-notice-events summary {
+      color: #475467;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .monitor-notice-event {
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(151, 161, 176, 0.18);
+    }
+    .monitor-notice-event:last-child { border-bottom: 0; padding-bottom: 0; }
+    .monitor-notice-event strong { color: #475467; font-weight: 650; }
+    .monitor-notice-event p { margin: 5px 0; }
+    .monitor-notice-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+    .monitor-notice-actions button {
+      border: 0;
+      padding: 3px 0;
+      background: transparent;
+      color: var(--accent);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .monitor-notice-actions button:hover { text-decoration: underline; }
+    .monitor-notice-actions button:disabled { opacity: 0.6; cursor: default; }
+    .monitor-notice-event [role="status"] { display: block; margin-top: 4px; }
+    .monitor-notice-event [role="status"]:empty { display: none; }
     .fetch-progress-host {
       display: none;
       margin: -6px 0 12px;
@@ -35415,6 +35539,7 @@ INDEX_HTML = """<!doctype html>
       </div>
       <div class="calendar" id="calendar"></div>
       <div class="monitor-sidebar-summary" id="monitorSidebarSummary" aria-live="polite"></div>
+      <div class="monitor-notice-events" id="monitorNoticeEvents" style="display:none"></div>
       <div class="filters theme-sidebar-filter" id="themeSidebarFilter">
         <div class="theme-filter-head">
           <div class="filter-title">Subjects</div>
@@ -36931,6 +37056,7 @@ INDEX_HTML = """<!doctype html>
       state.journals = data.journals || state.journals;
       syncSelectedJournals();
       state.papers = data.papers || [];
+      state.reportNotices = data.publication_notices || [];
       state.reportFetchErrors = Array.isArray(data.fetchErrors) ? data.fetchErrors : [];
       state.lateArrivals = Array.isArray(data.lateArrivals) ? data.lateArrivals : [];
       renderSubjectFilters();
@@ -40000,6 +40126,7 @@ INDEX_HTML = """<!doctype html>
         || state.myPublications.find((item) => item.paper_id === paper.paper_id)?.paper;
       if (Date.parse(known?.metadata_refresh?.checked_at || "") > Date.parse(paper.metadata_refresh?.checked_at || "")) return;
       updatePaperState(paper.paper_id, paper);
+      if (paper.metadata_refresh?.publication_notice_ids?.length) loadPaperFiles(paper.paper_id, {force: true}).catch(() => {});
       if (!root?.isConnected || metadataDetailContext(root) !== context) return;
       const active = document.activeElement;
       const editing = root.contains(active) && (active.matches("input, textarea, select") || active.isContentEditable);
@@ -40129,6 +40256,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
         paperMetadataRequests.delete(paper.paper_id);
+        if (data.paper_files) applyPaperFilesPayloads(data.paper_files);
         applyMetadataResult(root, context, data.paper);
       } catch (error) {
         failed = true;
@@ -40356,12 +40484,12 @@ INDEX_HTML = """<!doctype html>
       const root = $("calendar");
       const structureKey = fmtMonth(state.viewYear, state.viewMonth);
       const firstDay = new Date(state.viewYear, state.viewMonth - 1, 1);
-      const startOffset = (firstDay.getDay() + 6) % 7;
+      const startOffset = firstDay.getDay();
       const days = new Date(state.viewYear, state.viewMonth, 0).getDate();
       if (root.dataset.structureKey !== structureKey) {
         root.innerHTML = "";
         root.dataset.structureKey = structureKey;
-        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].forEach((weekday) => {
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach((weekday) => {
           const element = document.createElement("div");
           element.className = "weekday";
           element.textContent = weekday;
@@ -40915,6 +41043,7 @@ INDEX_HTML = """<!doctype html>
       const rows = [];
       let warning = false;
       if (state.mode === "report") {
+        renderMonitorNoticeEvents(state.reportNotices || []);
         const filtered = reportVisiblePapers();
         const selectedFieldText = [...state.selectedFields]
           .map((field) => FIELD_LABELS[field] || field)
@@ -40963,6 +41092,48 @@ INDEX_HTML = """<!doctype html>
       root.className = `monitor-sidebar-summary${warning ? " warning" : ""}`;
       root.innerHTML = `<div class="monitor-sidebar-summary-title">Monitor Summary</div>${rows.join("")}`;
       if (state.mode === "report") renderLateArrivalsBanner(root);
+    }
+
+    function renderMonitorNoticeEvents(notices) {
+      const root = $("monitorNoticeEvents");
+      if (!root) return;
+      const visible = notices.filter(notice => state.selectedJournals.has(notice.journal) && subjectMatches(notice));
+      root.style.display = visible.length ? "block" : "none";
+      const signature = JSON.stringify(visible);
+      if (root.dataset.signature === signature) return;
+      root.dataset.signature = signature;
+      root.innerHTML = visible.length ? `<details><summary>Publication updates (${visible.length})</summary>${visible.map(notice => `
+        <div class="monitor-notice-event" data-notice-id="${Number(notice.id)}">
+          <strong>${escapeHtml(notice.title)}</strong>
+          <p>${escapeHtml(notice.journal)} · ${escapeHtml(paperFileRoleLabel({file_type:notice.kind}))} · ${escapeHtml(notice.publication_date)}</p>
+          <div class="monitor-notice-actions">
+            <button data-notice-open type="button">Open Website</button>
+            <button data-notice-add type="button">Add to Library</button>
+          </div>
+          <span role="status"></span>
+        </div>`).join("")}</details>` : "";
+      root.querySelectorAll('[data-notice-id]').forEach(row => {
+        const notice = visible.find(n => Number(n.id) === Number(row.dataset.noticeId));
+        row.querySelector('[data-notice-open]').addEventListener('click', () => {
+          const url = notice.doi ? `https://doi.org/${notice.doi}` : notice.source_url;
+          if (/^https?:\/\//i.test(url || '')) openWebsite(url);
+        });
+        row.querySelector('[data-notice-add]').addEventListener('click', async event => {
+          const button = event.currentTarget, status = row.querySelector('[role="status"]');
+          button.disabled = true; status.textContent = 'Finding original article…';
+          try {
+            const response = await fetch('/api/library/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({notice_id:notice.id, snapshot:false})});
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Could not associate publication notice');
+            applyPaperFilesPayloads(data.paper_files);
+            if (state.libraryLoaded) { upsertLibraryFolderLocal(data.folder); upsertLibraryItemLocal(data.item); }
+            status.textContent = `Attached to ${data.paper?.storage_key || 'original article'} in Library`;
+            button.textContent = 'Added to Library';
+          } catch (error) {
+            status.textContent = error.message; button.disabled = false;
+          }
+        });
+      });
     }
 
     function renderReport() {
@@ -51588,8 +51759,11 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "download failed");
       if (data.browser_fallback) {
         if (data?.paper && payload?.paper_id) updatePaperState(payload.paper_id, data.paper);
-        if (data.browser_fallback.kind === "aaas-supplement-discovery") {
-          return downloadScienceSupplementaryPdfs(data.browser_fallback, payload);
+        if (["aaas-supplement-discovery", "publisher-supplement-discovery"].includes(data.browser_fallback.kind)) {
+          const context = data.result?.publisher_main_resource_id
+            ? {...payload, publisher_main_resource_id: data.result.publisher_main_resource_id} : payload;
+          const supplements = await downloadScienceSupplementaryPdfs(data.browser_fallback, context);
+          return supplements?.paper ? supplements : {...data, ...supplements};
         }
         let downloaded = await downloadPublishedPdfInBackground(data.browser_fallback, payload);
         if (downloaded?.paper && payload?.paper_id) updatePaperState(payload.paper_id, downloaded.paper);
@@ -51597,7 +51771,8 @@ INDEX_HTML = """<!doctype html>
           const followupContext = downloaded?.publisher_main_resource_id
             ? {...payload, publisher_main_resource_id: downloaded.publisher_main_resource_id}
             : payload;
-          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, followupContext);
+          const supplements = await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, followupContext);
+          downloaded = supplements?.paper ? supplements : {...downloaded, ...supplements};
         }
         return downloaded;
       }
@@ -51624,13 +51799,10 @@ INDEX_HTML = """<!doctype html>
         : [];
       const candidateUrls = [...new Set(discoveredUrls.length ? discoveredUrls : fallbackUrls)];
       if (!candidateUrls.length) {
-        if (discoveryFallback?.kind === "publisher-supplement-discovery" && !discoveryError) {
+        if (!discoveryError) {
           return discovery || {supplement_urls: []};
         }
-        throw new Error(
-          discoveryError?.message
-          || "The main PDF is saved, but Science did not list any PDF supplementary files."
-        );
+        return {download_warning: `Main PDF saved; supplementary PDFs could not be checked. ${discoveryError.message}`};
       }
       let downloaded = null;
       const failures = [];
@@ -51651,10 +51823,9 @@ INDEX_HTML = """<!doctype html>
         }
       }
       if (!downloaded) {
-        throw new Error(
-          `The main PDF is saved, but its Science supplementary PDF could not be downloaded. ${failures.at(-1) || ""}`.trim()
-        );
+        return {download_warning: `Main PDF saved; supplementary PDFs could not be downloaded. ${failures.at(-1) || ""}`.trim()};
       }
+      if (failures.length) downloaded.download_warning = 'Main PDF saved; some supplementary PDFs could not be downloaded.';
       return downloaded;
     }
 
@@ -51679,12 +51850,12 @@ INDEX_HTML = """<!doctype html>
         updatePaperState(paper.paper_id, data.paper);
         await loadPaperFiles(paper.paper_id, {force: true});
         if (status) {
-          status.textContent = options.force ? "PDF refreshed" : "PDF downloaded";
+          status.textContent = data.download_warning || (options.force ? "PDF refreshed" : "PDF downloaded");
           status.className = "library-detail-status ok";
         }
         if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
-        updateLibraryActivityStatus(activityText(options.force ? "PDF refreshed." : "PDF downloaded."), {activityId, delay: 2600});
+        updateLibraryActivityStatus(activityText(data.download_warning || (options.force ? "PDF refreshed." : "PDF downloaded.")), {activityId, delay: data.download_warning ? 8000 : 2600});
       } catch (error) {
         const message = error.message || "download failed";
         updateLibraryActivityStatus(activityText(`PDF download failed: ${message}`), {activityId, failed: true, delay: 4200});
@@ -54609,9 +54780,9 @@ INDEX_HTML = """<!doctype html>
           force: replacing
         });
         updatePaperState(paper.paper_id, data.paper);
-        updateAuthorMonitorActivityStatus(replacing ? "PDF refreshed." : "PDF downloaded.", {live: false, channel: "secondary", kind: "pdf"});
+        updateAuthorMonitorActivityStatus(data.download_warning || (replacing ? "PDF refreshed." : "PDF downloaded."), {live: false, channel: "secondary", kind: "pdf"});
         if (status) {
-          status.textContent = replacing ? "PDF refreshed" : "PDF downloaded";
+          status.textContent = data.download_warning || (replacing ? "PDF refreshed" : "PDF downloaded");
           status.className = "library-detail-status ok";
         }
         renderAuthorMonitorPaperDetail();
@@ -56525,7 +56696,7 @@ INDEX_HTML = """<!doctype html>
       if (deletion) deletion.disabled = Boolean(operations.download?.busy);
       const status = article.querySelector('[data-role="status"]');
       if (status) {
-        status.textContent = [operations.download?.busy ? "Downloading..." : operations.download?.error,
+        status.textContent = [operations.download?.busy ? "Downloading..." : (operations.download?.error || operations.download?.message),
           operations.library?.error].filter(Boolean).join(" · ");
         status.className = operations.download?.error || operations.library?.error ? "status err" : "status";
       }
@@ -56631,7 +56802,7 @@ INDEX_HTML = """<!doctype html>
       try {
         const data = await requestPaperPdfDownload({paper_id: paperId});
         updatePaperState(paperId, data.paper);
-        setMonitorPaperOperation(paperId, "download", null);
+        setMonitorPaperOperation(paperId, "download", data.download_warning ? {message: data.download_warning} : null);
       } catch (error) {
         setMonitorPaperOperation(paperId, "download", {error: error.message});
       } finally {
@@ -59450,6 +59621,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function setPrimaryView(view, options = {}) {
+      if (state.mode !== "report" && $("monitorNoticeEvents")) $("monitorNoticeEvents").style.display = "none";
       window.gewuBrowser?.setActive(view === "browser");
       const isLibrarySurface = view === "library" || view === "my-publications";
       const app = document.querySelector(".app");

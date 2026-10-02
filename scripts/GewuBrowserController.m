@@ -100,7 +100,6 @@
 @property(nonatomic, strong) GewuBrowserSession *session;
 @property(nonatomic, strong) NSMutableArray<GewuBrowserTab *> *tabs;
 @property(nonatomic, strong) GewuBrowserTab *selectedTab;
-@property(nonatomic, strong) WKWebsiteDataStore *browserDataStore;
 @property(nonatomic) BOOL active;
 @property(nonatomic) BOOL visible;
 @property(nonatomic) BOOL canReturnToWorkspace;
@@ -381,20 +380,32 @@
     [self emitTabs];
 }
 
-- (GewuBrowserPage *)makePage {
++ (WKWebsiteDataStore *)externalWebsiteDataStore {
+    // Keep the existing Browser profile, including before the first Browser tab.
+    // Sharing stays inside WebKit; no cookies are exported to Python or Safari.
+    static WKWebsiteDataStore *store;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSUUID *profile = [[NSUUID alloc] initWithUUIDString:@"19E88B78-44C0-4C42-B496-F2C7F625B507"];
+        store = [WKWebsiteDataStore dataStoreForIdentifier:profile];
+    });
+    return store;
+}
+
++ (WKWebViewConfiguration *)externalPageConfiguration {
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-    // Dedicated persistent profile. No Safari cookie import, app script handlers,
-    // process-wide proxy overrides, HTML rewriting, or background publisher driver.
-    NSUUID *profile = [[NSUUID alloc] initWithUUIDString:@"19E88B78-44C0-4C42-B496-F2C7F625B507"];
-    if (!self.browserDataStore) self.browserDataStore = [WKWebsiteDataStore dataStoreForIdentifier:profile];
-    configuration.websiteDataStore = self.browserDataStore;
+    configuration.websiteDataStore = [self externalWebsiteDataStore];
     // Keep WebKit's system-generated OS/engine/version tokens. The compatibility
     // suffix prevents sites from mistaking desktop WKWebView for a text-only
     // client; retain our own product token rather than hiding the embedding app.
     configuration.applicationNameForUserAgent = @"Safari/605.1.15 GewuInsight/0.1";
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = NO;
     configuration.userContentController = [[WKUserContentController alloc] init];
-    return [self makePageWithConfiguration:configuration];
+    return configuration;
+}
+
+- (GewuBrowserPage *)makePage {
+    return [self makePageWithConfiguration:[GewuBrowserController externalPageConfiguration]];
 }
 
 - (GewuBrowserPage *)makePageWithConfiguration:(WKWebViewConfiguration *)configuration {
@@ -1649,6 +1660,6 @@
         [self disposePage:tab.homePage]; [self disposePage:tab.contentPage];
         [tab.session.entries removeAllObjects];
     }
-    [self.tabs removeAllObjects]; self.selectedTab = nil; self.webView = nil; self.browserDataStore = nil;
+    [self.tabs removeAllObjects]; self.selectedTab = nil; self.webView = nil;
 }
 @end

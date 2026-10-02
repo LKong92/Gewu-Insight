@@ -6,6 +6,35 @@ from paper_monitor.ui_server import published_pdf_browser_fallback
 
 
 class PublishedPdfBrowserFallbackTests(unittest.TestCase):
+    def test_nature_family_failure_opens_article_before_canonical_pdf(self):
+        for doi, journal in [
+            ("10.1038/s41586-020-2868-6", "Nature"),
+            ("10.1038/s41563-026-02522-9", "Nature Materials"),
+            ("10.1038/s41467-026-77076-0", "Nature Communications"),
+            ("10.1038/nphys1000", "Nature Physics"),
+        ]:
+            with self.subTest(journal=journal):
+                paper = {"doi": f"https://doi.org/{doi}", "journal": journal}
+                article = f"https://www.nature.com/articles/{doi.split('/', 1)[1]}"
+                fallback = published_pdf_browser_fallback(paper, {"status": "failed"})
+                self.assertEqual(fallback["publisher"], "nature")
+                self.assertEqual(fallback["url"], article)
+                self.assertEqual(fallback["referer"], article)
+                self.assertEqual(fallback["target_url"], article + ".pdf")
+                self.assertEqual(fallback["followup"]["url"], article)
+                self.assertEqual(fallback["followup"]["kind"], "publisher-supplement-discovery")
+                self.assertIsNone(published_pdf_browser_fallback(paper, {"status": "success"}))
+
+    def test_nature_main_already_saved_only_discovers_supplements(self):
+        fallback = published_pdf_browser_fallback(
+            {"doi": "10.1038/s41563-026-02522-9"},
+            {"status": "partial", "message": "main PDF saved as merged PDF; no PDF supplement found"},
+        )
+        self.assertEqual(fallback["kind"], "publisher-supplement-discovery")
+        self.assertEqual(fallback["publisher"], "nature")
+        self.assertEqual(fallback["fallback_urls"], [])
+        self.assertIsNone(published_pdf_browser_fallback({"journal": "Nature"}, {"status": "failed"}))
+
     def test_aaas_failure_offers_only_official_published_pdf(self):
         fallback = published_pdf_browser_fallback(
             {"doi": "https://doi.org/10.1126/sciadv.adw9449"},
@@ -90,7 +119,8 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
             {
                 "kind": "publisher-main-pdf",
                 "publisher": "acs",
-                "url": "https://pubs.acs.org/doi/pdf/10.1021/acs.nanolett.6c02635",
+                "url": "https://pubs.acs.org/doi/10.1021/acs.nanolett.6c02635",
+                "target_url": "https://pubs.acs.org/doi/pdf/10.1021/acs.nanolett.6c02635",
                 "referer": "https://pubs.acs.org/doi/10.1021/acs.nanolett.6c02635",
                 "followup": {
                     "kind": "publisher-supplement-discovery",

@@ -397,6 +397,21 @@ class DownloadCandidateTests(unittest.TestCase):
             ],
         )
 
+    def test_non_pdf_supplements_are_ignored_even_with_a_pdf_label(self):
+        response = SimpleNamespace(url="https://www.nature.com/articles/fixture", text="""
+            <meta name="citation_pdf_url" content="/articles/fixture.pdf">
+            <a href="/esm/MOESM1_ESM.pdf">Supplementary information PDF</a>
+            <a href="/esm/MOESM2_ESM.mp4">Supplementary movie PDF</a>
+            <a href="/esm/MOESM3_ESM.zip">Supplementary data PDF</a>
+            <a href="/esm/MOESM4_ESM.docx">Supplementary Word</a>
+        """)
+        with patch.object(download, "crossref_pdf_candidates", return_value=[]), patch.object(
+            download, "request_with_retries", return_value=response):
+            result = download.collect_pdf_candidates({"doi": "10.1038/fixture", "url": response.url})
+        self.assertEqual(result["supplements"], ["https://www.nature.com/esm/MOESM1_ESM.pdf"])
+        self.assertEqual(result["supplement_documents"], [])
+        self.assertEqual(result["main"][0], "https://www.nature.com/articles/fixture.pdf")
+
     def test_science_supplement_is_collected_without_landing_page_access(self):
         paper = {
             "paper_id": "science-example",

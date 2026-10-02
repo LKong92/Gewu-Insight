@@ -8,26 +8,37 @@ const source = execFileSync(process.env.GEWU_TEST_PYTHON || 'python3', ['-c',
 const script = source;
 assert.ok(script.includes('performPaperPdfDownload'));
 
-async function exercise(fallback, mainFailure = false) {
+async function exercise(fallback, mainFailure = false, options = {}) {
   const calls = [];
   const context = vm.createContext({console, updatePaperState() {},
-    fetch: async () => ({ok: true, json: async () => ({browser_fallback: fallback, result: {status: 'failed'}})})});
+    fetch: async () => ({ok: true, json: async () => ({browser_fallback: fallback,
+      paper: {paper_id: 'fixture', marker: 'direct'},
+      result: {status: 'failed', publisher_main_resource_id: options.existingMainId}})})});
   context.window = {crypto: {randomUUID}, setTimeout, clearTimeout, webkit: {messageHandlers: {publisherPdfDownload: {
     postMessage(payload) {
       calls.push(payload);
       const kind = payload.context.publisher_download_kind;
       const main = kind === 'aaas-published-pdf' || kind === 'publisher-main-pdf';
       const discovery = kind.endsWith('discovery');
-      const data = main ? {publisher_main_resource_id: kind === 'aaas-published-pdf' ? 42 : 0, paper: {paper_id: 'fixture'}}
-        : discovery ? {supplement_urls: ['https://www.science.org/doi/suppl/fixture/sm.pdf', 'https://www.science.org/doi/suppl/fixture/sm-copy.pdf']}
+      const data = main ? {publisher_main_resource_id: kind === 'aaas-published-pdf' || payload.context.publisher_download_name === 'nature' ? 42 : 0, paper: {paper_id: 'fixture', marker: 'native'}}
+        : discovery ? {supplement_urls: options.empty ? [] : ['https://www.science.org/doi/suppl/fixture/sm.pdf', 'https://www.science.org/doi/suppl/fixture/sm-copy.pdf']}
         : {paper: {paper_id: 'fixture'}, result: {status: 'success'}};
       queueMicrotask(() => context.window.handleNativePublisherDownloadResult({token: payload.token,
-        success: !(main && mainFailure), data, error: 'Main article unavailable'}));
+        success: !(main && mainFailure) && !(discovery && options.discoveryFailure) && !(!main && !discovery && options.supplementFailure),
+        data, error: main ? 'Main article unavailable' : 'Supplementary request timed out'}));
     }
   }}}};
   vm.runInContext(script, context);
   if (mainFailure) await assert.rejects(context.requestPaperPdfDownload({paper_id: 'fixture'}), /Main article unavailable/);
-  else await context.requestPaperPdfDownload({paper_id: 'fixture'});
+  else {
+    const result = await context.requestPaperPdfDownload({paper_id: 'fixture'});
+    assert.equal(result.paper.paper_id, 'fixture', 'Every completed flow retains the paper response');
+    if (options.empty) assert.equal(result.paper.marker, fallback.kind.endsWith('discovery') ? 'direct' : 'native');
+    if (options.discoveryFailure || options.supplementFailure) {
+      assert.equal(result.paper.marker, fallback.kind.endsWith('discovery') ? 'direct' : 'native');
+      assert.match(result.download_warning, /^Main PDF saved;/);
+    }
+  }
   return calls;
 }
 
@@ -49,5 +60,26 @@ async function exercise(fallback, mainFailure = false) {
   assert.equal(calls[2].context.publisher_download_kind, 'publisher-supplement-file');
   assert.equal(calls[2].context.publisher_download_name, 'acs');
   assert.equal(calls[2].context.publisher_main_resource_id, undefined);
+  const natureDiscovery = {kind: 'publisher-supplement-discovery', publisher: 'nature', url: 'https://www.nature.com/articles/fixture'};
+  const natureMain = {kind: 'publisher-main-pdf', publisher: 'nature', url: natureDiscovery.url,
+    target_url: `${natureDiscovery.url}.pdf`, followup: natureDiscovery};
+  calls = await exercise(natureMain);
+  assert.deepEqual(calls.map(v => v.context.publisher_download_kind), ['publisher-main-pdf', 'publisher-supplement-discovery', 'publisher-supplement-file', 'publisher-supplement-file']);
+  assert.ok(calls.slice(1).every(v => v.context.publisher_main_resource_id === 42));
+  calls = await exercise(natureDiscovery, false, {existingMainId: 71});
+  assert.equal(calls.length, 3, 'Partial Nature result consumes discovered attachments');
+  assert.ok(calls.every(v => v.context.publisher_main_resource_id === 71));
+  calls = await exercise(natureMain, false, {empty: true});
+  assert.equal(calls.length, 2, 'Nature without supplements keeps successful main response');
+  calls = await exercise(natureDiscovery, false, {empty: true, existingMainId: 71});
+  assert.equal(calls.length, 1);
+  calls = await exercise(natureMain, true);
+  assert.equal(calls.length, 1, 'Failed Nature main does not fetch supplements');
+  for (const candidate of [main, natureMain, natureDiscovery]) {
+    calls = await exercise(candidate, false, {discoveryFailure: true, existingMainId: 71});
+    assert.equal(calls.length, candidate.followup ? 2 : 1, 'Discovery timeout retains the saved main');
+    await exercise(candidate, false, {supplementFailure: true, existingMainId: 71});
+  }
+  await exercise(main, false, {empty: true});
   console.log('Science frontend probe: main → supplements, explicit resource targeting, failure stop, single discovery and generic publisher regression passed.');
 })().catch(error => {console.error(error); process.exitCode = 1;});

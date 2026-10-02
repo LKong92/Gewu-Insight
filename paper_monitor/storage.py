@@ -3794,6 +3794,8 @@ class Storage:
             item = dict(row)
             if paper_is_from_zenodo(item):
                 continue
+            if publication_notices.describe_known(self, item) is not None:
+                continue
             paper_id = str(item.get("paper_id") or "")
             if not paper_id:
                 continue

@@ -100,6 +100,7 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
 
     candidates = collect_pdf_candidates(paper)
     is_science = normalize_doi(paper.get("doi") or "").startswith("10.1126/")
+    is_nature = normalize_doi(paper.get("doi") or "").startswith("10.1038/")
     preserved_main_pdf_path = existing_science_main_only_pdf_path(paper) if force else None
     main_pdf_path: Path | None = preserved_main_pdf_path
     main_pdf_url = ""
@@ -111,6 +112,8 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
             path = work_dir / "main.pdf"
             response_metadata: dict[str, str] = {}
             options = {"science_main": True, "response_metadata": response_metadata} if is_science else {}
+            if is_nature:
+                options = {"nature_main": True, "response_metadata": response_metadata}
             if try_download_pdf(url, path, messages, **options):
                 main_pdf_path = path
                 main_pdf_url = response_metadata.get("url") or url
@@ -121,23 +124,6 @@ def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
         path = work_dir / f"supplement_{index}.pdf"
         if try_download_pdf(url, path, messages):
             supplement_paths.append(path)
-
-    for index, url in enumerate(candidates.get("supplement_documents") or [], start=1):
-        source_path = try_download_word_supplement(
-            url,
-            work_dir / f"supplement_document_{index}",
-            messages,
-        )
-        if not source_path:
-            continue
-        converted_path = work_dir / f"supplement_document_{index}.pdf"
-        try:
-            convert_word_document_to_pdf(source_path, converted_path)
-            supplement_paths.append(converted_path)
-        except Exception as exc:
-            messages.append(f"{url}: Word supplement conversion failed: {exc}")
-        finally:
-            source_path.unlink(missing_ok=True)
 
     if not main_pdf_path:
         status = "failed"
@@ -379,9 +365,10 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
                 href = _absolute(page_url, link["href"])
                 label = (link.get_text(" ", strip=True) or "").lower()
                 marker = f"{href} {label}".lower()
-                if is_probable_word_supplement(marker):
-                    supplement_documents.append(href)
-                elif is_probable_supplement(marker) or (doi.startswith("10.1126/") and is_science_supplement_reference(marker)):
+                extension = Path(urlparse(href).path).suffix.lower()
+                if extension and extension not in {".pdf", ".html", ".htm"}:
+                    continue
+                if is_probable_supplement(marker) or (doi.startswith("10.1126/") and is_science_supplement_reference(marker)):
                     supplements.append(href)
                 elif is_probable_non_article_pdf(marker):
                     continue
@@ -395,6 +382,7 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
         supplements.extend(url for url in main if is_science_supplement_reference(url))
         main = [url for url in main if not is_science_supplement_reference(url)]
     if doi.startswith("10.1038/"):
+        main = [url for url in main if not is_nature_secondary_pdf_reference(url)]
         main = [url for url in main if not is_nature_reference_pdf_url(url)] + [
             url for url in main if is_nature_reference_pdf_url(url)
         ]
@@ -520,19 +508,29 @@ def publisher_browser_candidate(paper: dict[str, Any]) -> dict[str, str] | None:
     journal = str(paper.get("journal") or "").lower()
     if not doi:
         return None
+    if doi.startswith("10.1038/"):
+        article_url = f"https://www.nature.com/articles/{doi.split('/', 1)[1]}"
+        return {
+            "publisher": "nature",
+            "url": article_url,
+            "referer": article_url,
+            "target_url": f"{article_url}.pdf",
+        }
     if doi.startswith("10.1103/"):
         aps_slug = aps_journal_slug(journal)
         if not aps_slug:
             return None
         return {
             "publisher": "aps",
-            "url": f"https://journals.aps.org/{aps_slug}/pdf/{doi}",
+            "url": f"https://journals.aps.org/{aps_slug}/abstract/{doi}",
+            "target_url": f"https://journals.aps.org/{aps_slug}/pdf/{doi}",
             "referer": f"https://journals.aps.org/{aps_slug}/abstract/{doi}",
         }
     if doi.startswith("10.1021/"):
         return {
             "publisher": "acs",
-            "url": f"https://pubs.acs.org/doi/pdf/{doi}",
+            "url": f"https://pubs.acs.org/doi/{doi}",
+            "target_url": f"https://pubs.acs.org/doi/pdf/{doi}",
             "referer": f"https://pubs.acs.org/doi/{doi}",
         }
     if doi.startswith("10.1002/"):
@@ -593,6 +591,16 @@ def publisher_browser_candidate(paper: dict[str, Any]) -> dict[str, str] | None:
             "referer": "https://academic.oup.com/nsr/advance-articles",
         }
     return None
+
+
+def is_nature_secondary_pdf_reference(value: str) -> bool:
+    from urllib.parse import unquote
+
+    return bool(re.search(
+        r"/esm/|moesm\d|_esm\.|supplement|supporting[ _-]+information|"
+        r"peer[ _-]*review|reporting[ _-]+summary|source[ _-]+data|appendix",
+        unquote(str(value or "")), re.I,
+    ))
 
 
 def aps_journal_slug(journal: str) -> str:
@@ -746,6 +754,7 @@ def try_download_pdf(
     *,
     request_max_retries: int | None = None,
     science_main: bool = False,
+    nature_main: bool = False,
     response_metadata: dict[str, str] | None = None,
 ) -> bool:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.part")
@@ -757,6 +766,12 @@ def try_download_pdf(
         if request_max_retries is not None:
             request_options["max_retries"] = max(1, int(request_max_retries))
         response = request_with_retries("GET", url, **request_options)
+        if nature_main and is_nature_secondary_pdf_reference(
+            response.url + " " + response.headers.get("content-disposition", "")
+        ):
+            messages.append(f"main PDF redirected to secondary material: {url} -> {response.url}")
+            response.close()
+            return False
         if science_main and is_science_supplement_reference(response.url):
             messages.append(f"main PDF redirected to supplementary material: {url} -> {response.url}")
             response.close()

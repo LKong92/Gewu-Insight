@@ -34,6 +34,8 @@ def published(doi=DOI):
 
 class MetadataRefreshTests(unittest.TestCase):
     def setUp(self):
+        updates = patch.object(work.notice_discovery, 'fetch_updates', return_value=[])
+        updates.start(); self.addCleanup(updates.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'test.sqlite'
