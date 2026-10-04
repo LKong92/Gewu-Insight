@@ -3,7 +3,52 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd -P)"
 SOURCE="$PROJECT_DIR/scripts/PaperMonitorApp.m"
-APP="$PROJECT_DIR/Gewu Insight.app"
+INSTALLED_APP="$PROJECT_DIR/Gewu Insight.app"
+OUTPUT_APP="$INSTALLED_APP"
+DEVELOPMENT_ADHOC=0
+while (( $# )); do
+  case "$1" in
+    --output) OUTPUT_APP="${2:?--output requires an absolute path}"; shift 2 ;;
+    --development-adhoc) DEVELOPMENT_ADHOC=1; shift ;;
+    *) echo "Usage: $0 [--output /absolute/path/Gewu\ Insight.app] [--development-adhoc]" >&2; exit 2 ;;
+  esac
+done
+[[ "$OUTPUT_APP" = /* ]] || { echo "--output must be an absolute path." >&2; exit 2; }
+BUILD_PYTHON="${GEWU_BUILD_PYTHON:-$PROJECT_DIR/.venv/bin/python}"
+[[ -x "$BUILD_PYTHON" ]] || BUILD_PYTHON="$(command -v python3)"
+SIGNING_HELPER="$PROJECT_DIR/scripts/macos_signing.py"
+SIGNING_OPTIONS=()
+if (( DEVELOPMENT_ADHOC )); then
+  SIGNING_OPTIONS+=(--development-adhoc)
+fi
+# Local builds explicitly use ad-hoc signing; no certificate or keychain login.
+SIGN_IDENTITY="$("$BUILD_PYTHON" "$SIGNING_HELPER" preflight --app "$INSTALLED_APP" \
+  --output "$OUTPUT_APP" "${SIGNING_OPTIONS[@]}")"
+INSTALLED_FINGERPRINT="$("$BUILD_PYTHON" "$SIGNING_HELPER" fingerprint --app "$INSTALLED_APP")"
+mkdir -p "$(dirname "$OUTPUT_APP")"
+# Keep the stage and destination on the same filesystem for rename installation.
+SIGN_WORKDIR="$(mktemp -d "$(dirname "$OUTPUT_APP")/.gewu-app-build.XXXXXX")"
+APP="$SIGN_WORKDIR/Gewu Insight.app"
+BACKUP_APP="$SIGN_WORKDIR/Gewu Insight.previous.app"
+SWAPPED_APP=0
+cleanup() {
+  local result=$?
+  if (( result != 0 )) && { (( SWAPPED_APP )) || [[ -d "$BACKUP_APP" ]]; }; then
+    if [[ -d "$OUTPUT_APP" ]]; then
+      mv "$OUTPUT_APP" "$SIGN_WORKDIR/Gewu Insight.rejected.app" || return "$result"
+    fi
+    if [[ -d "$BACKUP_APP" ]]; then
+      mv "$BACKUP_APP" "$OUTPUT_APP" || {
+        echo "Restore failed. Original App retained at $BACKUP_APP" >&2
+        return "$result"
+      }
+    fi
+  fi
+  rm -rf "$SIGN_WORKDIR"
+  return "$result"
+}
+trap cleanup EXIT
+ditto --rsrc --extattr "$INSTALLED_APP" "$APP"
 OUTPUT="$APP/Contents/MacOS/Gewu Insight"
 INFO_PLIST="$APP/Contents/Info.plist"
 BRAND_ART_SOURCE="$PROJECT_DIR/assets/branding/GewuSealGlyphs.png"
@@ -14,19 +59,14 @@ USER_GUIDE_PDF_SOURCE="$PROJECT_DIR/paper_monitor/Gewu_Insight_User_Guide.pdf"
 USER_GUIDE_PDF_DEST="$APP/Contents/Resources/Gewu Insight User Guide.pdf"
 APP_ICON_SOURCE="$PROJECT_DIR/assets/gewu-insight-app-icon.png"
 # Product versions are independent of the icon cache key.
-PRODUCT_VERSION="$(cd "$PROJECT_DIR" && python3 -c 'from paper_monitor import __version__; print(__version__)')"
-PRODUCT_BUILD="$(cd "$PROJECT_DIR" && python3 -c 'from paper_monitor import __build__; print(__build__)')"
+PRODUCT_VERSION="$(cd "$PROJECT_DIR" && "$BUILD_PYTHON" -c 'from paper_monitor import __version__; print(__version__)')"
+PRODUCT_BUILD="$(cd "$PROJECT_DIR" && "$BUILD_PYTHON" -c 'from paper_monitor import __build__; print(__build__)')"
 APP_ICON_CACHE_KEY="$(cksum "$APP_ICON_SOURCE" | awk '{print $1}')"
 APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_CACHE_KEY"
 APP_ICON_PNG_DEST="$APP/Contents/Resources/$APP_ICON_BASENAME.png"
 STARTUP_ICON_PNG_DEST="$APP/Contents/Resources/GewuInsightAppIcon.png"
 APP_ICONSET="$APP/Contents/Resources/PaperMonitor.iconset"
 APP_ICON_ICNS_DEST="$APP/Contents/Resources/$APP_ICON_BASENAME.icns"
-SIGN_WORKDIR="${TMPDIR:-/private/tmp}/paper-monitor-sign-$$"
-SIGN_APP="$SIGN_WORKDIR/Gewu Insight.app"
-BACKUP_APP="$SIGN_WORKDIR/Gewu Insight.previous.app"
-trap 'rm -rf "$SIGN_WORKDIR"' EXIT
-
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/paper-monitor-clang-cache}" \
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
   xcrun clang \
@@ -94,21 +134,32 @@ cp "$APP_ICON_ICNS_DEST" "$APP/Contents/Resources/PaperMonitor.icns"
 /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion ${MACOSX_DEPLOYMENT_TARGET:-14.0}" "$INFO_PLIST"
 /usr/libexec/PlistBuddy -c "Set :NSHumanReadableCopyright Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved." "$INFO_PLIST" 2>/dev/null || \
   /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved." "$INFO_PLIST"
-mkdir -p "$SIGN_WORKDIR"
-ditto "$APP" "$SIGN_APP"
-xattr -cr "$SIGN_APP" 2>/dev/null || true
-codesign --force --deep --sign - "$SIGN_APP"
-codesign --verify --deep --strict "$SIGN_APP"
-mv "$APP" "$BACKUP_APP"
-ditto "$SIGN_APP" "$APP"
-xattr -d com.apple.FinderInfo "$APP" 2>/dev/null || true
-xattr -d 'com.apple.fileprovider.fpfs#P' "$APP" 2>/dev/null || true
-if ! codesign --verify --deep --strict "$APP"; then
-  rm -rf "$APP"
-  mv "$BACKUP_APP" "$APP"
-  exit 1
+xattr -cr "$APP"
+TIMESTAMP_OPTION=--timestamp=none
+# Sign nested executable code before the bundle. Do not erase signature xattrs
+# after signing: the launcher script stores its signature in those attributes.
+codesign --force --sign "$SIGN_IDENTITY" "$TIMESTAMP_OPTION" "$APP/Contents/MacOS/Gewu Insight Server"
+codesign --force --sign "$SIGN_IDENTITY" "$TIMESTAMP_OPTION" "$APP"
+"$BUILD_PYTHON" "$SIGNING_HELPER" verify --app "$APP" --previous "$INSTALLED_APP" "${SIGNING_OPTIONS[@]}"
+# A concurrent update must not be silently overwritten by this build.
+[[ "$INSTALLED_FINGERPRINT" = "$("$BUILD_PYTHON" "$SIGNING_HELPER" fingerprint --app "$INSTALLED_APP")" ]] || {
+  echo "Installed App changed during the build; no installation performed." >&2; exit 1
+}
+if [[ "$OUTPUT_APP" = "$INSTALLED_APP" && "$INSTALLED_FINGERPRINT" = "$("$BUILD_PYTHON" "$SIGNING_HELPER" fingerprint --app "$APP")" ]] \
+  && "$BUILD_PYTHON" "$SIGNING_HELPER" verify --app "$INSTALLED_APP" >/dev/null 2>&1; then
+  echo "App content unchanged; keeping the installed signature and keychain identity."
+  exit 0
 fi
-# ditto preserves the old bundle directory timestamp. Touch the bundle so
-# Finder, Launch Services, and pinned Dock tiles can detect icon changes.
+if [[ "$OUTPUT_APP" = "$INSTALLED_APP" ]]; then
+  "$BUILD_PYTHON" "$SIGNING_HELPER" stopped --app "$INSTALLED_APP"
+  mv "$INSTALLED_APP" "$BACKUP_APP"
+elif [[ -e "$OUTPUT_APP" ]]; then
+  echo "Output path appeared during the build; no installation performed." >&2; exit 1
+fi
+SWAPPED_APP=1
+# Refresh the directory timestamp so Finder and Dock notice the new bundle.
 touch "$APP"
-file "$OUTPUT"
+mv "$APP" "$OUTPUT_APP"
+"$BUILD_PYTHON" "$SIGNING_HELPER" verify --app "$OUTPUT_APP" "${SIGNING_OPTIONS[@]}"
+SWAPPED_APP=0
+file "$OUTPUT_APP/Contents/MacOS/Gewu Insight"

@@ -170,6 +170,33 @@ identity:
 ./scripts/build_macos_app.sh
 ```
 
+Local builds explicitly use ad-hoc signing (`codesign --sign -`) without an
+Apple certificate, Team ID, signing configuration or keychain password.
+Quit the installed App before rebuilding it. The builder stages compilation,
+resource updates and signing, verifies the signatures and Gewu bundle identifier,
+then installs with rollback if final verification fails. A concurrent bundle
+change or a newly running App cancels installation. If the complete staged App
+is identical to the installed App, the builder retains the existing bundle and
+signature. No database, research file, WebKit profile or existing keychain item
+is changed by the builder.
+
+Python/backend-only changes do not require rebuilding the native bundle; restart
+the App to load that source update. A changed native bundle can have a new
+`cdhash`, so macOS may request WebCrypto authorization again. This workflow
+preserves data and validates updates; it does not promise that ad-hoc signing
+eliminates all future keychain prompts. See
+[macOS signing and updates](../DISTRIBUTION.md#macos-signing-and-updates).
+
+For an isolated native QA build:
+
+```bash
+./scripts/build_macos_app.sh --output /private/tmp/Gewu-QA.app
+```
+
+Choose a fresh output path. The legacy `--development-adhoc` option remains
+supported and additionally rejects replacing the installed App. Do not launch
+a QA copy against real accounts or authorize it to the production WebCrypto key.
+
 When the HTML User Guide changes, regenerate the PDF before building the App:
 
 ```bash

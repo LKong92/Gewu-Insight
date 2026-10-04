@@ -9,6 +9,8 @@ output/
 tmp/
 reports/
 backups/
+dist/
+.gewu-app-build.*/
 deep_survey/plugins/
 
 # Local-only development history and generated evaluation/design artifacts.

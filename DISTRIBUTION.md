@@ -41,6 +41,47 @@ scripts/build_macos_app.sh
 The HTML edition label and About screenshot must also match the intended
 release. Verify the generated PDF and App signature before sharing.
 
+## macOS signing and updates
+
+This local workflow uses explicit ad-hoc signing. Building and packaging do not
+require an Apple certificate, developer account, Team ID or keychain password.
+Strict signature verification and the fixed Gewu bundle identifier remain
+required; removing the certificate dependency does not skip these checks. See
+the [development guide](docs/DEVELOPMENT.md#builds-and-verification).
+
+Keep the same bundle identifier and Browser data-store identity across updates.
+If a changed native bundle triggers a WebCrypto authorization request, authorize
+only the current original Gewu App for the existing
+`Gewu Insight WebCrypto Master Key`. Preserve that item and the existing Browser
+profile. Never reset the login keychain, delete the master key, export its value,
+or allow all applications as an update repair. The build/package scripts do not
+automatically change keychain permissions.
+
+A changed ad-hoc bundle can have a new code hash and is bound to a code-hash
+partition in securityd. A fixed bundle identifier alone does not override that
+protection layer. See Apple's
+[securityd partition selection](https://github.com/apple-oss-distributions/Security/blob/main/securityd/src/clientid.cpp)
+and [application update authorization](https://support.apple.com/guide/keychain-access/kyca1331/mac).
+
+Build while the installed App is stopped. The builder stages all compilation,
+resource updates and signing before replacement, rejects concurrent bundle
+changes, and restores the original bundle if installation verification fails.
+An identical staged bundle leaves the existing App and signature in place.
+Python/backend-only source updates do not require a native rebuild; restart to
+load them. Changed native builds can still require user reauthorization; ad-hoc
+signing does not guarantee prompt-free updates.
+The build and package scripts do not change the database, research files,
+Browser profile, saved website sessions or keychain ACLs.
+
+Distribute the verified ZIP from `make_release.sh`. It preserves nested code
+signature attributes and verifies the App before copying, after copying and
+after extracting the actual ZIP. A failed check does not publish the staged ZIP.
+Git does not preserve the signature xattrs of the shell launcher; a Git checkout
+is a source update; changed native/bundled files must pass this local build and
+verification workflow before being used as an installed App. Do not replace a
+running App with a Git-pulled bundle. This local workflow does not claim Apple
+notarization or Gatekeeper approval on a recipient's Mac.
+
 ## What to Share
 
 Use the release script:
