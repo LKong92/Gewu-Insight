@@ -580,6 +580,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @property(nonatomic, strong) WKWebView *userGuideWebView;
 @property(nonatomic, strong) NSWindow *aboutWindow;
 @property(nonatomic, strong) WKWebView *hiddenPublisherWebView;
+@property(nonatomic, strong) id<WKNavigationDelegate> hiddenPublisherNavigationDelegate;
 @property(nonatomic, strong) WKDownload *hiddenPublisherDownload;
 @property(nonatomic, copy) NSDictionary *hiddenPublisherContext;
 @property(nonatomic, copy) NSString *hiddenPublisherToken;
@@ -1272,7 +1273,8 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     // Publisher pages often hide their desktop PDF controls in a 1x1 responsive
     // viewport. The web view remains off-screen, but uses a normal desktop layout.
     self.hiddenPublisherWebView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 900) configuration:configuration];
-    self.hiddenPublisherWebView.navigationDelegate = self;
+    self.hiddenPublisherNavigationDelegate = [GewuBrowserController externalNavigationDelegate:self];
+    self.hiddenPublisherWebView.navigationDelegate = self.hiddenPublisherNavigationDelegate;
 
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:publisherURL];
     // Let WebKit negotiate HTML/PDF exactly as the visible Browser does.
@@ -1950,6 +1952,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [self.hiddenPublisherWebView stopLoading];
     self.hiddenPublisherWebView.navigationDelegate = nil;
     self.hiddenPublisherWebView = nil;
+    self.hiddenPublisherNavigationDelegate = nil;
     self.hiddenPublisherDownload.delegate = nil;
     self.hiddenPublisherDownload = nil;
     if (self.hiddenPublisherTemporaryPath.length > 0) {

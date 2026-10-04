@@ -15,6 +15,8 @@
 void GewuReadLoadedBrowserPDF(WKWebView *view, NSString *filename,
     void (^completion)(GewuBrowserPDFFile *file, NSString *error));
 
+BOOL GewuBrowserScienceEPDFURL(NSURL *url);
+
 // Discover original PDF documents in child frames, including cross-origin
 // publisher readers. References bind to an isolated-world document token.
 void GewuLoadedBrowserPDFFrames(WKWebView *view, void (^completion)(NSArray<NSDictionary *> *frames));

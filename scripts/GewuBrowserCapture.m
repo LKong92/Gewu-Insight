@@ -101,7 +101,67 @@ static WKContentWorld *GewuFrameWorld(void) {
 static NSString *GewuFrameProbe(void) {
     return @"(() => ({mime:document.contentType,url:location.href,token:(globalThis.__gewuPDFDocumentToken ||= Array.from(crypto.getRandomValues(new Uint32Array(4)),x=>x.toString(16)).join('-'))}))()";
 }
+BOOL GewuBrowserScienceEPDFURL(NSURL *url) {
+    return [@[@"science.org", @"www.science.org"] containsObject:url.host.lowercaseString]
+        && [url.scheme.lowercaseString isEqual:@"https"] && [url.path hasPrefix:@"/doi/epdf/10.1126/"];
+}
+// Science's ePDF is an HTML/PDF.js reader, not a PDF main resource or frame.
+// Bind its loaded document to the current DOI and fingerprint. Do not expose
+// its signed pdfdirect URL or reconstruct a publisher download request.
+static NSString *GewuSciencePDFProbe(void) {
+    return @"(() => { const app=window.PDFViewerApplication, doc=app?.pdfDocument;"
+        "const doi=decodeURIComponent(location.pathname).slice('/doi/epdf/'.length);"
+        "if(!doc?.numPages || typeof doc.getData!=='function') return null;"
+        "const source=new URL(app.url,location.href);"
+        "if(source.origin!==location.origin || !['/doi/pdf/'+doi,'/doi/pdfdirect/'+doi].includes(decodeURIComponent(source.pathname))) return null;"
+        "const token=doc.fingerprints?.[0] || doc.fingerprint; if(typeof token!=='string' || !token.length || token.length>256) return null;"
+        "const link=[...document.querySelectorAll('a[href]')].slice(0,600).find(a=>{try{const u=new URL(a.href);return u.origin===location.origin && decodeURIComponent(u.pathname)==='/doi/pdf/'+doi;}catch(_){return false;}});"
+        "return link ? {science:true,url:link.href,token} : null; })()";
+}
+static void GewuSciencePDFReference(WKWebView *view, void (^completion)(NSDictionary *)) {
+    if (!GewuBrowserScienceEPDFURL(view.URL)) { completion(nil); return; }
+    __block BOOL finished=NO;
+    void (^finish)(NSDictionary *)=^(NSDictionary *value){if(!finished){finished=YES;completion(value);}};
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,8*NSEC_PER_SEC),dispatch_get_main_queue(),^{finish(nil);});
+    [view evaluateJavaScript:GewuSciencePDFProbe() inFrame:nil inContentWorld:WKContentWorld.pageWorld completionHandler:^(id value,NSError *error){
+        finish(!error && [value isKindOfClass:NSDictionary.class] ? value : nil);
+    }];
+}
+static void GewuReadSciencePDF(WKWebView *view, NSDictionary *reference, void (^completion)(GewuBrowserPDFFile *, NSString *)) {
+    __block BOOL finished=NO;
+    void (^finish)(GewuBrowserPDFFile *,NSString *)=^(GewuBrowserPDFFile *file,NSString *error){if(!finished){finished=YES;completion(file,error);}};
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,30*NSEC_PER_SEC),dispatch_get_main_queue(),^{finish(nil,@"Reading the Science PDF timed out. Retry after it finishes loading.");});
+    GewuSciencePDFReference(view,^(NSDictionary *current){
+        if(finished)return;
+        if(![current[@"url"] isEqual:reference[@"url"]] || ![current[@"token"] isEqual:reference[@"token"]]){finish(nil,@"The Science PDF changed. Reopen Save to Gewu.");return;}
+        NSString *script=@"const app=window.PDFViewerApplication, doc=app?.pdfDocument;"
+            "if((doc?.fingerprints?.[0] || doc?.fingerprint)!==token) throw Error('PDF changed');"
+            "const bytes=await doc.getData();"
+            "if(app.pdfDocument!==doc || !bytes?.length || bytes.length>134217728) throw Error('PDF unavailable or too large');"
+            "const chunks=[];for(let i=0;i<bytes.length;i+=32768)chunks.push(String.fromCharCode(...bytes.subarray(i,i+32768)));"
+            "return btoa(chunks.join(''));";
+        [view callAsyncJavaScript:script arguments:@{@"token":reference[@"token"]} inFrame:nil inContentWorld:WKContentWorld.pageWorld completionHandler:^(id value,NSError *error){
+            if(finished)return;
+            if(error || ![value isKindOfClass:NSString.class] || [value length]>(GewuCapturePDFLimit+2)/3*4){finish(nil,@"The loaded Science PDF could not be read. Retry or choose a local PDF.");return;}
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+                NSData *bytes=[[NSData alloc] initWithBase64EncodedString:value options:0];
+                NSString *name=[[NSURL URLWithString:reference[@"url"]].lastPathComponent stringByAppendingString:@".pdf"];
+                GewuBrowserPDFFile *file=[GewuBrowserPDFFile fileWithData:bytes filename:name];
+                dispatch_async(dispatch_get_main_queue(),^{
+                    if(finished)return;
+                    GewuSciencePDFReference(view,^(NSDictionary *last){
+                        BOOL same=[last[@"url"] isEqual:reference[@"url"]] && [last[@"token"] isEqual:reference[@"token"]];
+                        finish(same?file:nil, !same?@"The Science PDF changed. Reopen Save to Gewu.":file?nil:@"The Science reader did not provide a complete original PDF.");
+                    });
+                });
+            });
+        }];
+    });
+}
 void GewuLoadedBrowserPDFFrames(WKWebView *view, void (^completion)(NSArray<NSDictionary *> *)) {
+    if (GewuBrowserScienceEPDFURL(view.URL)) {
+        GewuSciencePDFReference(view,^(NSDictionary *reference){completion(reference?@[reference]:@[]);}); return;
+    }
     if (!GewuFrameAPI(view)) { completion(@[]); return; }
     __block BOOL finished = NO;
     void (^finish)(NSArray *) = ^(NSArray *frames) { if (!finished) { finished=YES; completion(frames); } };
@@ -129,6 +189,9 @@ void GewuLoadedBrowserPDFFrames(WKWebView *view, void (^completion)(NSArray<NSDi
     }];
 }
 void GewuBrowserPDFFrameIsCurrent(WKWebView *view, NSDictionary *reference, void (^completion)(BOOL)) {
+    if ([reference[@"science"] boolValue]) {
+        GewuSciencePDFReference(view,^(NSDictionary *current){completion([current[@"url"] isEqual:reference[@"url"]] && [current[@"token"] isEqual:reference[@"token"]]);});return;
+    }
     WKFrameInfo *info=reference[@"frame"];
     if (!info) { completion(NO); return; }
     __block BOOL finished=NO;
@@ -146,6 +209,7 @@ static void GewuFrameDataReceived(const void *data, const void *error, void *con
     done(bytes, bytes ? nil : @"The embedded PDF is not completely available. No new download was started.");
 }
 void GewuReadLoadedBrowserPDFFrame(WKWebView *view, NSDictionary *reference, void (^completion)(GewuBrowserPDFFile *, NSString *)) {
+    if ([reference[@"science"] boolValue]) { GewuReadSciencePDF(view,reference,completion); return; }
     if (!GewuFrameAPI(view)) { completion(nil,@"This WebKit version cannot read the loaded embedded PDF. Open the PDF itself or choose a local PDF."); return; }
     __block BOOL finished=NO;
     void (^finish)(GewuBrowserPDFFile *, NSString *)=^(GewuBrowserPDFFile *file,NSString *error){if(!finished){finished=YES;completion(file,error);}};

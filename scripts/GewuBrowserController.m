@@ -7,6 +7,29 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
 
+@interface WKWebsiteDataStore (GewuKeyPersistencePolicy)
+@property(nonatomic, weak) id _delegate;
+@end
+
+// WebKit owns WebCrypto serialization. Refuse its master-key callbacks before
+// it accesses Keychain; ordinary SubtleCrypto and website storage stay enabled.
+// Empty data rejects wrapping/unwrapping. Do not supply a replacement key or
+// return nil, which newer WebKit versions interpret as the default keychain path.
+@interface GewuBrowserKeyPersistencePolicy : NSObject <WKNavigationDelegate>
+@property(nonatomic, weak) id<WKNavigationDelegate> target;
+@end
+@implementation GewuBrowserKeyPersistencePolicy
+- (NSData *)_webCryptoMasterKeyForWebView:(WKWebView *)view { return NSData.data; }
+- (void)_webCryptoMasterKeyForWebView:(WKWebView *)view completionHandler:(void (^)(NSData *))completion {
+    completion(NSData.data);
+}
+- (void)webCryptoMasterKey:(void (^)(NSData *))completion { completion(NSData.data); }
+- (BOOL)respondsToSelector:(SEL)selector {
+    return [super respondsToSelector:selector] || [self.target respondsToSelector:selector];
+}
+- (id)forwardingTargetForSelector:(SEL)selector { return self.target; }
+@end
+
 // Right-clicking an editable document must keep AppKit's insertion target in
 // this WebView, not the separate workspace/address-bar WebView. Leave all text
 // handling to WebKit; never intercept credential values or the system picker.
@@ -36,6 +59,7 @@
 
 @interface GewuBrowserPage : NSObject
 @property(nonatomic, strong) WKWebView *view;
+@property(nonatomic, strong) id<WKNavigationDelegate> navigationDelegate;
 @property(nonatomic) BOOL reloadNavigation;
 @property(nonatomic) BOOL navigationRequestedDownload;
 @property(nonatomic) BOOL pendingRequestedDownload;
@@ -388,6 +412,11 @@
     dispatch_once(&once, ^{
         NSUUID *profile = [[NSUUID alloc] initWithUUIDString:@"19E88B78-44C0-4C42-B496-F2C7F625B507"];
         store = [WKWebsiteDataStore dataStoreForIdentifier:profile];
+        // Newer WebKit also routes worker key serialization through the store.
+        // Its delegate is weak, so retain this Browser-only policy for its life.
+        static GewuBrowserKeyPersistencePolicy *policy;
+        policy = [[GewuBrowserKeyPersistencePolicy alloc] init];
+        if ([store respondsToSelector:@selector(set_delegate:)]) store._delegate = policy;
     });
     return store;
 }
@@ -404,6 +433,12 @@
     return configuration;
 }
 
++ (id<WKNavigationDelegate>)externalNavigationDelegate:(id<WKNavigationDelegate>)delegate {
+    GewuBrowserKeyPersistencePolicy *policy = [[GewuBrowserKeyPersistencePolicy alloc] init];
+    policy.target = delegate;
+    return policy;
+}
+
 - (GewuBrowserPage *)makePage {
     return [self makePageWithConfiguration:[GewuBrowserController externalPageConfiguration]];
 }
@@ -414,7 +449,8 @@
     GewuBrowserPage *page = [[GewuBrowserPage alloc] init];
     page.view = [[GewuBrowserWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     ((GewuBrowserWebView *)page.view).loginTrigger = self.loginTrigger;
-    page.view.navigationDelegate = self;
+    page.navigationDelegate = [GewuBrowserController externalNavigationDelegate:self];
+    page.view.navigationDelegate = page.navigationDelegate;
     page.view.UIDelegate = self;
     page.view.allowsBackForwardNavigationGestures = YES;
     page.view.hidden = YES;
@@ -550,9 +586,16 @@
         if (rect.size.width < 1 || rect.size.height < 1) shown = NO;
         WKWebView *presented = [self presentedPageForTab:self.selectedTab].view;
         BOOL resized = !NSEqualSizes(presented.frame.size, rect.size) || (shown && !self.visible);
+        BOOL restoreSciencePDF = shown && !self.visible && GewuBrowserScienceEPDFURL(presented.URL);
         presented.frame = rect;
         self.visible = shown;
         [self updatePageVisibility];
+        // Science's PDF.js queue can stop when Save to Gewu hides its view and
+        // the success banner resizes it. Resume visible-page rendering on the
+        // next frame, without reloading the document or changing other sites.
+        if (restoreSciencePDF) [presented evaluateJavaScript:
+            @"requestAnimationFrame(() => { const app=window.PDFViewerApplication; if(app?.pdfDocument){app.pdfViewer?.update();app.forceRendering?.();} });void 0"
+            inFrame:nil inContentWorld:WKContentWorld.pageWorld completionHandler:nil];
         if (!shown || resized) [self.loginTrigger cancelPending];
         if (!shown) self.suggestionsView.hidden = YES;
         if (!shown && [self.workspace.window.firstResponder isKindOfClass:NSView.class]

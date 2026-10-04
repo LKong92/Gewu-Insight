@@ -29,6 +29,13 @@
     metadata.doi = clean(ids.map(x => typeof x === "string" ? x : x.value || "").find(x => /10\.\d{4,9}\//.test(x)), 512);
   }
   const pdfs = values(["citation_pdf_url"]);
+  // Science's ePDF toolbar uses an icon and a DOI route without a .pdf suffix.
+  if (["science.org", "www.science.org"].includes(location.hostname) && location.pathname.startsWith("/doi/epdf/10.1126/")) {
+    const path = location.pathname.replace("/doi/epdf/", "/doi/pdf/");
+    for (const a of Array.from(document.querySelectorAll('a[href]')).slice(0, 600)) {
+      try { const u = new URL(a.href); if (u.origin === location.origin && u.pathname === path) pdfs.push(u.href); } catch (_) {}
+    }
+  }
   for (const a of Array.from(document.querySelectorAll('a[href],link[type="application/pdf"]')).slice(0, 600)) {
     if (pdfs.length >= 8) break;
     if (a.type === "application/pdf" || /\.pdf(?:$|[?#])/i.test(a.href) || /^\s*(?:download\s+)?pdf\s*$/i.test(a.textContent || "")) pdfs.push(a.href);
