@@ -3888,6 +3888,12 @@ AI Access. This existing connection shows its permission summary and all eleven 
 
 \textbf{Setting \textgreater{} AI Access} is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.
 
+\subsection{One MCP interface, multiple AI clients}\label{one-mcp-interface-multiple-ai-clients}
+
+Gewu Insight uses the standard MCP interface to work with compatible AI clients. \textbf{Codex and DeepSeek Harness are two configuration examples.} Claude Code and other clients that support local \textbf{stdio MCP servers} can use the same adapter, connection settings and permission model. The client provides the AI; Gewu provides access to the authorized papers and operations.
+
+Choose a client that can start a local process on the same computer as Gewu. Copy the generated \texttt{command}, \texttt{args} and \texttt{env} into that client\textquotesingle s configuration format. The local API address belongs in \texttt{GEWU\_API\_URL}; it is not a remote MCP server URL. Create a separate named connection for each client so that permissions, expiry, activity and revocation can be managed independently.
+
 \subsection{API, MCP and your token}\label{api-mcp-and-your-token}
 
 {\def\LTcaptype{none} % do not increment counter
@@ -3974,7 +3980,7 @@ AI Access controls requests through Gewu\textquotesingle s interfaces. It does n
 \item
   Choose an expiry, then \textbf{Create Connection}. The default is 30 days.
 \item
-  Use \textbf{Copy MCP Configuration} to obtain the local adapter path, Python executable, port and token. Enter these in your AI client\textquotesingle s MCP settings using its required format. See the Codex example below.
+  Use \textbf{Copy MCP Configuration} to obtain the local adapter path, Python executable, port and token. Enter these in your AI client\textquotesingle s MCP settings using its required format. The Codex and DeepSeek Harness examples below show two ways to use these same values.
 \end{enumerate}
 
 \begin{quote}
@@ -4265,9 +4271,45 @@ GEWU_API_URL = "http://127.0.0.1:8765"
 GEWU_API_TOKEN = "<GEWU_TOKEN>"
 \end{verbatim}
 
-\subsubsection{Verify a real paper, then request an analysis}\label{verify-a-real-paper-then-request-an-analysis}
+Type \texttt{/mcp} in Codex to inspect the connected server, then use the shared verification steps below.
 
-Type \texttt{/mcp} in Codex to inspect the connected server. Replace \texttt{YOUR\_GEWU\_KEY} below with the exact key of an authorized paper that has a local PDF, then send:
+\subsection{Example: connect DeepSeek Harness on macOS}\label{example-connect-deepseek-harness-on-macos}
+
+Create a Gewu connection named \textbf{DeepSeek Harness}, choose its paper collection and permissions, and copy its MCP configuration. Keep Gewu running. DeepSeek Harness can help configure its own MCP client: ask it to translate the generated settings into its local profile, preserving your other settings. Supply the token through private local configuration; the setup instructions and verification prompts do not need to contain the secret.
+
+\begin{quote}
+Configure gewu-insight as a local stdio MCP server using the Gewu MCP configuration I provide locally. Preserve existing client settings and use the supplied command, arguments and environment values. Keep the token in local configuration and do not repeat it in messages or logs. Then list the available Gewu tools and run a read-only search. Use MCP for Gewu records and files.
+\end{quote}
+
+The default Desktop profile uses \texttt{\textasciitilde{}/.dsh/profiles/desktop/cordis.patch.yml}. If your Harness home is customized, use that home\textquotesingle s \texttt{profiles/desktop/cordis.patch.yml}. The generated Gewu configuration is JSON; the profile patch uses YAML. You or the client can merge the following entry into that file. For a new entry, retain the outer \texttt{-\ insert:}; if Gewu is already configured, update its existing entry instead of creating a duplicate.
+
+\begin{verbatim}
+- insert:
+    - id: mcp-gewu-insight
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: gewu-insight
+        transport: stdio
+        command: "<GEWU_ROOT>/.venv/bin/python"
+        args:
+          - "<GEWU_ROOT>/scripts/gewu_mcp.py"
+        env:
+          GEWU_API_URL: "http://127.0.0.1:8765"
+          GEWU_API_TOKEN: "<GEWU_TOKEN>"
+        failOnStartupError: false
+\end{verbatim}
+
+Replace both path placeholders with the generated command and script path, and use this connection\textquotesingle s token and port. Keep each full path as one quoted value. After saving, let the client reload the connection; restart Harness if the tools do not appear. Look for tools such as \texttt{mcp\_\_gewu-insight\_\_search\_papers}, then verify an authorized paper as described below. A running client alone does not confirm that its Gewu connection is ready.
+
+With the relevant permissions, DeepSeek Harness can search and read papers, create a Space, add papers and append files through this same MCP interface. The example follows the \href{https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md}{official MCP client reference}, \href{https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md}{Desktop profile documentation} and \href{https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/config/examples/mcp-memory/mcp-reference-memory.cordis.yml}{profile-patch example}.
+
+\subsection{Use the same settings in another client}\label{use-the-same-settings-in-another-client}
+
+For Claude Code or another compatible client, add a local stdio server named \texttt{gewu-insight} using the same generated command, argument list and environment variables. Follow the client\textquotesingle s own configuration syntax; \href{https://code.claude.com/docs/en/mcp}{Claude Code\textquotesingle s MCP documentation} includes local stdio setup. A model subscription or API key belongs to the AI client; the Gewu access token separately controls access to your papers.
+
+\subsection{Verify a real paper, then request an analysis}\label{verify-a-real-paper-then-request-an-analysis}
+
+These steps work in Codex, DeepSeek Harness and other connected clients. First ask for a read-only \texttt{search\_papers} call; an empty result can simply mean the authorized collection has no matching papers. Replace \texttt{YOUR\_GEWU\_KEY} below with the exact key of an authorized paper that has a local PDF, then send:
 
 \begin{quote}
 Use the gewu-insight MCP tools to get the paper with Gewu Key YOUR\_GEWU\_KEY. Show its title and Default filename. Use get\_paper\_file to obtain the original PDF, then read the first three pages of its delivered copy with your PDF tools and summarize them in Chinese. Preserve the file ID and SHA-256; do not access the source Library directly.
@@ -4279,7 +4321,15 @@ This checks both metadata access and PDF reading. When analysis-writing permissi
 Read the relevant remaining PDF pages, then save a Chinese Markdown analysis to this same paper through save\_analysis. Include the source file ID, SHA-256 and page references, and use a unique request ID.
 \end{quote}
 
-The saved analysis appears as an associated Markdown file under that paper\textquotesingle s Paper Files; the Default PDF stays unchanged. If a tool is missing, check that connection\textquotesingle s permissions and reload MCP. If the service is unavailable, start Gewu; if access is rejected, check the AI switch, expiry, revocation and selected paper collection. A connection that you create later supplies a new token, which must also be updated in Codex.
+The saved analysis appears as an associated Markdown file under that paper\textquotesingle s Paper Files; the Default PDF stays unchanged. Check the returned Gewu Key and file ID, then inspect the result in the App. When requesting a new Space or a prepared collection, enable the corresponding write operations first and specify the destination. For example:
+
+\begin{quote}
+Create a Space named Reading Project. Add the authorized paper YOUR\_GEWU\_KEY to it using its existing DOI or arXiv identity and complete metadata. Preserve its Gewu Key and existing files. Report the destination folder ID and saved paper key, and stop if a required permission or metadata field is missing.
+\end{quote}
+
+This example writes to your collection; run it only when you want that new Space and placement. A PDF is optional for the import, so no upload is needed just to add an existing paper to the destination. A retry of the same write uses the same request ID and identical arguments; a different operation needs a new request ID. See the prepared-collection instructions above for file uploads and classification.
+
+If a tool is missing, check that connection\textquotesingle s permissions and reload MCP. If the service is unavailable, start Gewu; if access is rejected, check the AI switch, expiry, revocation and selected paper collection. A replacement connection supplies a new token, which must also be updated in the AI client\textquotesingle s settings. Client changes do not transfer permissions from another connection.
 
 \subsection{Pause, revoke and review}\label{pause-revoke-and-review}
 

@@ -2,7 +2,55 @@
 
 Rechecked all 49 topics against product commit `befa09909e701dcb00acf8fd93b1587f406e934d`, the preserved October 2 guide revision and current runtime source/feature contracts. Checked the original macOS App and the October 4 Science ePDF, WebCrypto and safe-build changes. The manual edition changes; product version remains 1.0.0 / Build 1. This October 5 pass changes documentation and its illustrations/generated resources only. It retains the previous guide navigation and PDF mapping fixes; it does not alter publisher downloads, metadata schedules, MCP permissions or research data.
 
-## Main corrections
+## AI Access client examples follow-up
+
+After Browser fix commit `50ed1a3`, update only the AI Access topic and its
+technical companion, `AI_ACCESS.md`. Present one MCP interface for compatible
+local stdio clients, with Codex and DeepSeek Harness as worked examples and
+positive configuration guidance for Claude Code and other compatible clients.
+Add client-assisted setup, the Desktop Cordis patch, separate connections,
+shared read/analysis checks, and an explicitly requested Space/import example.
+Keep existing permissions, file-content boundaries and optional-PDF import rules.
+
+Evidence: the user supplied `gewu-mcp-playbook.md`, recording an October 5
+DeepSeek Harness connection and read/write workflow. Cross-check the setup
+against DeepSeek's official MCP client, Desktop profile and patch-example
+references linked in the guide, and Claude Code's official local stdio reference.
+Do not publish the playbook's private keys, record IDs, local installation paths
+or test data. The guide describes usable workflows rather than test-status labels.
+No client configuration, token, permission grant or literature data was changed
+for this documentation update.
+
+Validation completed for this follow-up:
+
+- All 48 other HTML topics and all screenshot assets remain unchanged. The
+  original App's Help search finds DeepSeek and opens the updated AI Access topic.
+- The HTML and Markdown YAML examples are identical; Ruby's YAML parser verifies
+  the insertion wrapper, stdio configuration, argument list and token placeholder.
+  No new dependency was installed for these checks.
+- HTML-derived TeX/PDF builds successfully: 128 pages, 982 destinations, 391
+  internal links and 13 external links. Every internal destination resolves.
+  Reviewed contents pages 2-6 and affected/repaginated pages 95-128 visually;
+  inspected pages 96 and 104-107 at reading resolution. No clipping, overlap or
+  malformed configuration indentation found. Identity chapters 4-3 and 4-4
+  remain together on page 113.
+- All 31 existing Guide/audit/navigation tests and seven PDF structure checks
+  pass. The original App's bundled PDF equals the generated source PDF.
+- Built and verified a staged universal App; after the user approved restarting,
+  installed through the stopped-App build workflow with a recoverable backup.
+  An initial quit shortcut did not exit; the installer correctly refused to
+  replace the running App. Normal menu Quit then allowed installation. Original
+  App relaunched with one backend/listener (4018), health HTTP 200 and a valid
+  strict signature. Unsigned executable bytes match the previous App; only the
+  PDF and signing-related file contents changed in the bundle.
+- Native Print Guide opens the original App's resource PDF in Preview, showing
+  Page 1 of 128; native page navigation confirms the DeepSeek example on page 105.
+- PDF SHA-256: `72c5c10c4351a9ee1dab7d2758ac9d5c1b0c8cc494bced57c70ead71f71394ca`.
+  Backups, build/test logs and rendered checks: `/private/tmp/gewu-guide-mcp-oct05/`.
+  The user requested committing and pushing this documentation after validation,
+  together with the preceding Browser fix. Unrelated `metadata/` is untouched.
+
+## Earlier October 5 corrections
 
 - Explain Science ePDF original-file capture, Use Loaded PDF, exact-content reuse, the 128 MB limit, stale/incomplete source recovery and fresh-download versus already-loaded access. Distinguish Save Download, Save to Gewu and the research-card Download action.
 - Replace obsolete advice to renew permission for the WebCrypto Master Key. Current Browser/background views decline persistent webpage keys; ordinary cryptography, cookies and local storage remain, while older persisted keys are unreadable. Separate this from Passwords/AutoFill and avoid key deletion or profile reset. Align development/distribution documentation with this behavior.
@@ -71,7 +119,7 @@ Each existing topic and anchor appears exactly once below. Accurate material is 
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Verify three modes and local PDF/Markdown behavior versus all-native Quick Look. |
 | [Default Add to Library Folder](../paper_monitor/user_guide.html#add-to-library-settings) | Verify default folder, one-time override, stable folder ID and unsorted fallback. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Verify native/system website routing and default Save Details preference. |
-| [AI Access](../paper_monitor/user_guide.html#ai-access) | Verify 24 tools, 11 optional writes, PDF-optional metadata import, same Key, notice ownership, manual/automatic Default and per-file staging. Recheck official MCP setup. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Verify tools, optional writes, PDF-optional metadata import, same Key, notice ownership, Default and staging. Add generic local MCP connection guidance, Codex and DeepSeek Harness examples, Claude Code compatibility, and shared read/write verification. |
 | [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Add extension preservation when long basenames are shortened; retain templates and separate logical identity. |
 | [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Verify canonical main file, Associated Files, Finder aliases, stable identity and collision protection. |
 | [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Clarify persistent webpage keys versus ordinary storage and Passwords; retain external source/client responsibilities, opt-in AI scopes and no credential exposure. |
@@ -86,7 +134,8 @@ Each existing topic and anchor appears exactly once below. Accurate material is 
 
 The HTML is the editable source. Build the TeX and fixed-layout PDF with `scripts/build_user_guide_pdf.py`; package that same PDF into the original App. Do not hand-edit generated TeX or create a separate manual text source. Preserve existing topic order, numbering, approved Product Identity wording and its continuous chapter flow. Keep the AI Access opening heading, lead, overview image and caption together.
 
-Validation completed October 5, 2026. The previous October 2 work remains included; the checks below apply to this final edition.
+Earlier October 5 validation, before the AI Access follow-up above. The previous
+October 2 work remains included; the checks below describe that 127-page edition.
 
 - Built HTML-derived TeX/PDF successfully: 127 pages, 975 valid destinations, 391 internal links and nine external link annotations. Every internal target resolves; HTML has 49 topics, no duplicate IDs and no broken nonempty fragment links.
 - Visually reviewed all 127 pages in contact sheets and 15 pages at reading resolution: 14, 61, 62, 74, 81, 82, 85, 86, 95, 104, 108, 112, 118, 124 and 125. No clipping, overlap or missing text found in this review. Product Identity 4-3 and 4-4 still share page 112; the AI Access heading, lead, overview and caption remain together on page 95.
