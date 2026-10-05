@@ -320,6 +320,20 @@ function workspaceFunction(name) {
     await monitorMenu.locator('button[data-folder-id="5"]').click();
     await monitorMenu.locator('[data-action="confirm-library-add"]').click();
     assert.deepEqual(await page.evaluate(()=>monitorSaves),[{id:'monitor-paper',folderId:5}],'Monitor Add to Library still saves directly');
+    await page.evaluate(()=>{deferBegin=false;});
+    id=await start(); await deliver(id);
+    await page.waitForFunction(()=>!document.querySelector('[data-capture="save"]').disabled);
+    for (const value of ['expression_of_concern','withdrawal_notice','addendum','retraction_notice']) {
+      await page.selectOption('[name="file_type"]', value);
+      assert.equal(await page.inputValue('[name="file_type"]'), value, 'notice types are selectable in Browser');
+    }
+    await details(); await page.click('[data-capture="download"]');
+    await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:''}));
+    await page.waitForFunction(()=>document.querySelector('[name="include_pdf"]').checked);
+    await page.click('[data-capture="save"]');
+    await page.waitForFunction(()=>!document.querySelector('.browser-capture-panel'));
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').at(-1).file_type),'retraction_notice');
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').at(-1).file_type_manual),true);
     assert.deepEqual(errors,[]);
     console.log('Capture metadata, privacy, review/save/cancel, retry, stale events, cache refresh, exact Library/Space navigation and three viewport sizes passed.');
   } finally { await browser.close(); }
