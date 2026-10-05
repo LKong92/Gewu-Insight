@@ -50,12 +50,16 @@ required; removing the certificate dependency does not skip these checks. See
 the [development guide](docs/DEVELOPMENT.md#builds-and-verification).
 
 Keep the same bundle identifier and Browser data-store identity across updates.
-If a changed native bundle triggers a WebCrypto authorization request, authorize
-only the current original Gewu App for the existing
-`Gewu Insight WebCrypto Master Key`. Preserve that item and the existing Browser
-profile. Never reset the login keychain, delete the master key, export its value,
-or allow all applications as an update repair. The build/package scripts do not
-automatically change keychain permissions.
+The current Browser and hidden publisher views explicitly decline persistent
+WebCrypto-key wrapping and unwrapping before WebKit accesses Keychain. Ordinary
+cryptography, cookies and website storage remain available. Sites that depend on
+persisted CryptoKeys can be incompatible, and earlier persisted keys cannot be
+read through the current Browser. This policy is separate from Apple Passwords
+and AutoFill; it does not delete the existing master-key item or Browser profile.
+If the old `Gewu Insight WebCrypto Master Key` prompt persists, first verify that
+the updated original App is running rather than an older copy. Never reset the
+login keychain, delete or export the key, or allow all applications as an update
+repair. Build/package scripts do not change keychain permissions.
 
 A changed ad-hoc bundle can have a new code hash and is bound to a code-hash
 partition in securityd. A fixed bundle identifier alone does not override that
@@ -68,8 +72,8 @@ resource updates and signing before replacement, rejects concurrent bundle
 changes, and restores the original bundle if installation verification fails.
 An identical staged bundle leaves the existing App and signature in place.
 Python/backend-only source updates do not require a native rebuild; restart to
-load them. Changed native builds can still require user reauthorization; ad-hoc
-signing does not guarantee prompt-free updates.
+load them. Ad-hoc signing does not guarantee that all macOS authorization prompts
+disappear; the webpage-key policy above addresses that specific WebCrypto path.
 The build and package scripts do not change the database, research files,
 Browser profile, saved website sessions or keychain ACLs.
 

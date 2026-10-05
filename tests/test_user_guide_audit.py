@@ -1,4 +1,4 @@
-"""Guard the concrete documentation drift found in the September 2026 audit."""
+"""Guard the concrete documentation drift found in the October 2026 audit."""
 import re
 import unittest
 from pathlib import Path
@@ -24,7 +24,7 @@ class GuideAuditTests(unittest.TestCase):
         documented = re.findall(r'user_guide\.html#([a-z-]+)\)', audit)
         topics = [article["id"] for article in self.soup.select("article.guide-topic")]
         self.assertCountEqual(documented, topics)
-        self.assertIn("September 24, 2026", self.topic("welcome"))
+        self.assertIn("October 5, 2026", self.topic("welcome"))
         self.assertNotIn("five top-level areas", self.topic("personal-research-workspace"))
         self.assertIn("sixth main tab", self.topic("personal-research-workspace"))
 

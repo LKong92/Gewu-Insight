@@ -182,9 +182,12 @@ is changed by the builder.
 
 Python/backend-only changes do not require rebuilding the native bundle; restart
 the App to load that source update. A changed native bundle can have a new
-`cdhash`, so macOS may request WebCrypto authorization again. This workflow
-preserves data and validates updates; it does not promise that ad-hoc signing
-eliminates all future keychain prompts. See
+`cdhash`; ad-hoc signing alone does not eliminate macOS authorization prompts.
+Current Browser and hidden publisher views separately refuse persistent
+WebCrypto-key operations before Keychain access. Ordinary cryptography and site
+storage remain enabled; old persisted CryptoKeys are unreadable through these
+views. Keep this compatibility boundary distinct from saved passwords, signing
+and the trusted workspace. See
 [macOS signing and updates](../DISTRIBUTION.md#macos-signing-and-updates).
 
 For an isolated native QA build:

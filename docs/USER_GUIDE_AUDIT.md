@@ -1,243 +1,98 @@
-# User Guide audit — September 24, 2026
+# User Guide audit — October 5, 2026
 
-Reviewed the complete 49-topic manual against product commit `e3e0a81` and the
-original running macOS App. The guide edition changes; product version remains
-1.0.0 / Build 1. This update changes documentation and illustrations only.
+Rechecked all 49 topics against product commit `befa09909e701dcb00acf8fd93b1587f406e934d`, the preserved October 2 guide revision and current runtime source/feature contracts. Checked the original macOS App and the October 4 Science ePDF, WebCrypto and safe-build changes. The manual edition changes; product version remains 1.0.0 / Build 1. This October 5 pass changes documentation and its illustrations/generated resources only. It retains the previous guide navigation and PDF mapping fixes; it does not alter publisher downloads, metadata schedules, MCP permissions or research data.
 
-September 25 naming follow-up: **Literature Data Source** is the current menu
-and dialog name. Update all guide references and the one settings screenshot;
-retain the `citation-settings` anchor, credential behavior, and all other images.
-This follow-up includes the corresponding native menu/UI text change, alongside
-the README reorganization and separate development guide.
+## Main corrections
 
-## Scope and method
+- Explain Science ePDF original-file capture, Use Loaded PDF, exact-content reuse, the 128 MB limit, stale/incomplete source recovery and fresh-download versus already-loaded access. Distinguish Save Download, Save to Gewu and the research-card Download action.
+- Replace obsolete advice to renew permission for the WebCrypto Master Key. Current Browser/background views decline persistent webpage keys; ordinary cryptography, cookies and local storage remain, while older persisted keys are unreadable. Separate this from Passwords/AutoFill and avoid key deletion or profile reset. Align development/distribution documentation with this behavior.
+- Expand first-launch requirements, complete-folder installation, coherent backup, source-update versus built-App delivery, stopped-App safe ad-hoc build, verification and rollback. No Apple developer certificate or keychain password is needed for this build.
+- Correct the obsolete periodic-refresh claim in `PUBLICATION_UPDATES.md`: saved papers have no active periodic metadata schedule. Manual paper/folder/Library refresh and Journal discovery can find explicit updates; absence of an event does not prove no notice exists.
 
-### AI Access overview follow-up — September 25, 2026
+The following October 2 corrections remain valid after the source audit:
 
-Replace the retained September 16 opening AI Access screenshot with a fresh
-capture of the original App's current dialog. It now shows the connection's
-permission summary, all eleven optional write operations, Saved state and the
-start of writable collections. The caption explains scrolling for the remaining
-collections and Save Write Access, and distinguishes these saved choices from
-new-connection defaults. The September 24 new-connection and saved-permissions
-figures are still current; all other 35 screenshots remain byte-identical.
+- Document the native background download fallback for APS, ACS, Science and Nature, including the APS Harvest first route, shared Gewu Browser session and unchanged system/VPN routing.
+- Separate main-PDF availability from optional supplements. Skip non-PDF material; report access/verification errors without suggesting that videos must become PDFs.
+- Explain how Refresh Info finds explicit Crossref notices, how Journal Monitor associates a discovered notice with its original, and why notice metadata need not have a local file. Do not claim continuous retraction monitoring or complete provider coverage.
+- Explain per-paper read acknowledgement, visible-only journal/subject dots, hidden unread state, Sunday-first calendars, and filtered Publication updates in the left sidebar.
+- Add locally rendered Markdown math, preserved filename extensions and updated troubleshooting. Retain verified metadata-only MCP imports, notice ownership, Default selection and app refresh after external writes.
+- Correct the distinction between left Journal Filter totals and filtered top-tab counts, verified in the original App (Nature: 25 total / 6 shown).
 
-The first rebuild left the title and lead on page 89 while the tall screenshot
-started on page 90. After the user's layout feedback, the PDF builder now keeps
-this opening heading, lead, screenshot and caption together as one measured
-block. The rule applies only to the AI Access opening; other topics and the
-interactive HTML layout are unchanged.
+- Repair in-guide subsection links: activate their owning topic, keep the correct navigation highlight, clear a hiding search filter and scroll to the requested heading below the sticky toolbar. Cold links and Back/Forward use the same behavior.
 
-The HTML and rebuilt PDF agree. The PDF remains 119 pages with 914 named
-destinations and 372 links; changed extracted text is limited to pages 5 and
-89–92. These pages were rendered and visually checked. The AI Access heading
-and screenshot now share page 90, and its table-of-contents link follows them.
-All 30 guide/audit tests plus seven PDF structure checks pass, including the
-new opening-layout regression check and continuous Product Identity chapter rule.
-The App-bundled PDF matches the source PDF, its renewed signature verifies, and
-removing the old/new executable signatures confirms unchanged native code.
-No connection, permission, literature record or runtime source was changed.
+## Evidence and boundaries
 
-### September 24 full review
+Read `paper_monitor/user_guide.html`, current `ui_server.py`, `notice_discovery.py`, `metadata_refresh.py`, `markdown_preview_worker.js`, publisher download modules and native App code as needed. Cross-check `MONITOR_DOWNLOADS.md`, `MONITOR_READ_STATE.md`, `METADATA_REFRESH.md`, `AI_ACCESS.md`, identity/storage and browser contracts. The October 2 audit visually reviewed all 36 earlier images. This pass retains 36 accurate illustrations and replaces only the Guide opening with the real October 5 edition. The user explicitly requested retaining the original clean Add Monitored Author form, without the currently active red Scholar cooldown message; no replacement or image retouching is used. Screenshots are real original-App captures with all six main tabs, no generated UI or painted-out controls. See [the screenshot inventory](USER_GUIDE_SCREENSHOTS.md).
 
-Read every registered topic and reviewed all 35 existing screenshots. Cross-check
-changed instructions against current UI labels, runtime code and feature contracts;
-retain accurate text and pictures rather than rewriting them for appearance.
-The 49 topic anchors, navigation order and approved Product Identity text remain.
-
-Primary evidence: `paper_monitor/ui_server.py`, `markdown_preview_worker.js`,
-`science_pdf.py`, `mcp_server.py`, `ai_contract.py`, file organization modules,
-`scripts/PaperMonitorApp.m`, and the current `AI_ACCESS.md`, `PAPER_IDENTITY.md`,
-`MONITOR_DOWNLOADS.md`, `METADATA_REFRESH.md` and `RECYCLE_DELETION.md` contracts.
-The Codex configuration example was checked against linked official OpenAI MCP
-documentation on September 24. No external client settings were changed.
-
-## Screenshots and operational boundaries
-
-Replace only three outdated images: the four-column Table View, the old Markdown
-preview, and the New Connection form predating optional writes. Add one image of
-the saved write-permission editor; retain the other 32 images byte-for-byte.
-All four new images come from the original App. Main-window captures retain all
-six tabs; settings captures use the full visible dialog bounds, with normal
-scrolling rather than stitched content. No control overlays or painted pixels.
-See [the screenshot inventory](USER_GUIDE_SCREENSHOTS.md) for all 36 figures.
-
-The retained Library illustration already has Published version and Preprint with
-the real Default; Author Monitor uses Hong Ding; Journal Monitor shows Nature
-figures; Add Monitored Author is empty without a stale red pause message. These
-remain suitable and were not recaptured merely to change their date. Earlier
-orientation/Space pictures illustrate the named controls, not current edition
-dates or every table column; the dedicated updated table figure shows all five.
-
-Capture used existing files and existing saved grants. No literature imports,
-deletion, classification, provider refresh, task start/stop, token creation,
-permission changes or App restart were performed. Preview and settings were
-closed; Library List View, its selected folder and normal window mode were
-restored. This is a documentation audit, not a new full product regression run.
+The Codex STDIO command/args/env example was checked against [OpenAI's official MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=app) on October 5. No client configuration, access grant or token was changed. No explicit provider refresh, import, download, file classification or literature repair was triggered for this documentation work; existing results and ordinary navigation supply illustrations. Browser website content is illustrative, not evidence that every subscription article is accessible off campus.
 
 ## Topic-by-topic coverage
 
-Each registered topic appears once. Retained instructions were checked against
-current behavior; a source or UI check does not imply a destructive live test.
+Each existing topic and anchor appears exactly once below. Accurate material is retained; review does not mean every paragraph needs rewriting.
 
 | Topic | Review result |
 |---|---|
-| [Welcome](../paper_monitor/user_guide.html#welcome) | Update edition to September 24; retain approved name/mission, support contact and version 1.0.0 / Build 1. |
-| [Guided Tour](../paper_monitor/user_guide.html#guided-tour) | Add native blank-top dragging and macOS desktop-edge behavior; retain double-click and control boundaries. |
-| [Your First Session](../paper_monitor/user_guide.html#first-session) | Distinguish cataloged/PDF papers with public Keys from ordinary non-PDF files with internal storage keys. |
-| [System Architecture at a Glance](../paper_monitor/user_guide.html#system-overview) | Verify six workspaces, shared record, independent files and provider boundary. |
-| [The Persistent Paper Object](../paper_monitor/user_guide.html#persistent-paper-object) | Clarify independent ordinary files versus unidentified PDF papers; retain shared identity and guarded reconciliation. |
+| [Welcome](../paper_monitor/user_guide.html#welcome) | Update edition to October 5; retain Version 1.0.0 / Build 1, product mission, support and current research-sharing license. |
+| [Guided Tour](../paper_monitor/user_guide.html#guided-tour) | Review Help navigation, separate searchable window, Print Guide and six main tabs; replace the obsolete opening-Guide illustration. |
+| [Your First Session](../paper_monitor/user_guide.html#first-session) | Verify initial setup, paper versus ordinary file identity, source preferences and opt-in AI access. |
+| [System Architecture at a Glance](../paper_monitor/user_guide.html#system-overview) | Verify six workspaces, canonical paper identity, independent resources, SQLite and external provider boundaries. |
+| [The Persistent Paper Object](../paper_monitor/user_guide.html#persistent-paper-object) | Add explicit distinction between a research-paper identity, a linked publication notice and a corrected full article. |
 | [Why SQLite Is the Core](../paper_monitor/user_guide.html#sqlite-core) | Retain SQLite authority, provenance, durable settings and coordinated file operations. |
-| [Visible Research Files](../paper_monitor/user_guide.html#visible-research-files) | Qualify normal App fingerprinting and document the separate metadata-first MCP import boundary. |
-| [The Personal Research Workspace](../paper_monitor/user_guide.html#personal-research-workspace) | Retain six-tab model; organization and discovery do not imply extra physical copies. |
-| [From Discovery to Durable Memory](../paper_monitor/user_guide.html#research-loop) | Separate discovery of a published DOI from explicit acquisition of the PDF. |
-| [State, Scope, and Safe Change](../paper_monitor/user_guide.html#state-and-scope) | Verify non-PDF Default placement; retain active-reference Recycle and shared-resource boundaries. |
-| [Library Layout](../paper_monitor/user_guide.html#library-layout) | Verify separate footer task indicators, truncation/hover/overflow and Details routing; retain full Shortcut ancestry. |
-| [Navigate with Mouse and Keyboard](../paper_monitor/user_guide.html#navigation) | Verify independent saved selection, keyboard traversal and primary tab focus. |
-| [Folders, Shortcuts, and Spaces](../paper_monitor/user_guide.html#organize) | Clarify real folder/Space renames, mirrored file paths, busy-file retry and Shortcut label-only rename. |
-| [Search, List View, and Table View](../paper_monitor/user_guide.html#search-views) | Document all five sort headers including Time added, placement-time semantics, local time, both directions and horizontal overflow. Replace obsolete four-column figure. |
-| [Verify Papers and Files](../paper_monitor/user_guide.html#import-files) | Verify the shared inline single-submit Add Paper workflow and post-add review. |
-| [Use Paper Details](../paper_monitor/user_guide.html#paper-details) | Verify compact two-row actions, Get DOI / Refresh Info, citation evidence and files separation. |
-| [Edit DOI and arXiv Identifiers](../paper_monitor/user_guide.html#identifiers) | Verify Return, green saved/updated feedback, explicit correction and guarded refresh. |
-| [Refresh Info: One Paper, a Folder, or the Library](../paper_monitor/user_guide.html#loader-maintenance) | Verify linked-log Show in Library, close/return through Details, task history, terminal Stop and the distinct import/search controls; replace the changed screenshot. |
-| [Understand Paper Files](../paper_monitor/user_guide.html#paper-files) | Retain whole-column drops, shared deletion, ownership transfers and protected Default; clarify that detached non-PDFs have no public Key. |
-| [Preview Files with Quick Look](../paper_monitor/user_guide.html#quick-look) | Add collapsible Source record/Properties, note-versus-catalog values, responsive width, cached reopen and retry. Replace the obsolete Markdown layout. |
-| [Choose File Types and the Default File](../paper_monitor/user_guide.html#versions-current) | Verify automatic Unknown/Other fallback and non-PDF main placement while preserving manual choices and all classification labels. |
-| [Verify and Classify Attachments](../paper_monitor/user_guide.html#attachments) | Add exact-content reimport reuse and preservation of changed/annotated bytes; retain whole-column drops and classification controls. |
-| [Download and Sync Versions](../paper_monitor/user_guide.html#download-sync) | Add Science main-first validation, appended supplementary PDFs, First Release classification and publisher-derived filenames; retain duplicates and manual Default protections. |
-| [Move a Standalone File into Paper Files](../paper_monitor/user_guide.html#drag-attach) | Verify internal moves, external copies, ownership and rollback; distinguish PDF new public Key from standalone ordinary-file storage key. |
-| [Delete and Recover Items](../paper_monitor/user_guide.html#recycle) | Distinguish placement, resource and Empty Recycle actions; preserve active references and whole-folder Trash shape. |
-| [Use Folder Loader](../paper_monitor/user_guide.html#folder-loader) | Verify background folder drops, live Details return, clickable log entries, safe Stop Import and saved results; clarify identity-based layout and exact-content reuse. |
-| [Make a Portable Desktop Copy](../paper_monitor/user_guide.html#desktop-copy) | Retain independent exported files, pointer resolution and no bidirectional desktop sync. |
-| [Back Up or Move to Another Mac](../paper_monitor/user_guide.html#backup-migrate) | Verify consistent SQLite plus managed-file backup, WAL and separate Browser/credential lifecycle. |
-| [My Publications](../paper_monitor/user_guide.html#my-publications) | Add translucent drag preview and blue insertion marker; verify profile import, roles, citations and export. |
-| [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Retain discovery/filter/add workflows; clarify readable APS text labels. |
-| [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Verify subject matching, numeric counts, stored windows, exclusions and add destination. |
-| [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Add reorder feedback, partial identity review and persisted status meaning; clarify global metadata counts and Scholar restriction/transport distinction without changing source routes. |
-| [Browse, Bookmark, and Revisit Websites](../paper_monitor/user_guide.html#browser) | Retain current live Browser/Save captures and loaded-PDF workflow; qualify Science First Release file-type suggestions. |
-| [Literature Data Source](../paper_monitor/user_guide.html#citation-settings) | Verify source controls, masked credential visibility and separate service tests. |
-| [arXiv Scope Settings](../paper_monitor/user_guide.html#arxiv-scope-settings) | Verify future discovery scope and grouped archive settings. |
-| [Field Settings](../paper_monitor/user_guide.html#field-settings) | Verify default fields, Other Fields grouping and unchanged records. |
-| [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Use the current hybrid PDF-and-Markdown label; distinguish explicit all-native mode. |
-| [Default Verify to Library Folder](../paper_monitor/user_guide.html#add-to-library-settings) | Verify choose/save, initial unsorted, overrides, stable folder ID and fallback. |
-| [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Verify internal/system browser routing and Save Details preference. |
-| [AI Access](../paper_monitor/user_guide.html#ai-access) | Check all 24 MCP tools, permissions, stable IDs, ownership and local paths, metadata-first import, independent Resolve, per-file staging/release and My Publications write exclusion. Replace blank new-connection figure and add saved write editor. Recheck official Codex setup documentation. |
-| [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Verify rename templates, naming scope and explicit preferences. |
-| [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Verify canonical Default including non-PDFs, secondary native Finder aliases and associated-directory aliases, stable canonical selection and protected collisions. |
-| [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Retain local/private data boundary and external provider/AI client responsibility. |
-| [Visual Identity and Cultural Elements](../paper_monitor/user_guide.html#visual-identity) | Retain approved mission and exact bilingual ending, glyph provenance and artwork. Preserve continuous Product Identity chapters 4-1 through 4-4. |
-| [Keyboard Shortcuts](../paper_monitor/user_guide.html#keyboard) | Verify contextual shortcuts for workspace, Browser, Quick Look and editing. |
-| [Publisher and Network Access](../paper_monitor/user_guide.html#network-access) | Distinguish transport/VPN/secure-connection failures from publisher restrictions; retain access protections. |
-| [Startup, Monitor Cache, and Text Size](../paper_monitor/user_guide.html#startup) | Verify direct startup without whole-library reorganization/backups, narrowly scoped interrupted-move recovery and bounded Author Monitor retries. |
-| [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Add Markdown loading/header recovery and Scholar cooldown versus completed identity-review messages; retain existing recovery and safety boundaries. |
-| [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Align main-root description with canonical files and Finder aliases; retain SQLite, managed roots and disposable caches. |
+| [Visible Research Files](../paper_monitor/user_guide.html#visible-research-files) | Verify normal file import, canonical/associated storage, and metadata-first MCP import boundaries. |
+| [The Personal Research Workspace](../paper_monitor/user_guide.html#personal-research-workspace) | Verify shared records across six tabs, multiple placements, Spaces and scope-specific removal. |
+| [From Discovery to Durable Memory](../paper_monitor/user_guide.html#research-loop) | Retain separate steps for discovery, organization, PDF acquisition, reading and saved analysis. |
+| [State, Scope, and Safe Change](../paper_monitor/user_guide.html#state-and-scope) | Review shared-resource state, explicit actions and retained references; no bulk data reset is implied. |
+| [Library Layout](../paper_monitor/user_guide.html#library-layout) | Verify independent Paper Files/Details columns, footer activity indicators, search and navigation. |
+| [Navigate with Mouse and Keyboard](../paper_monitor/user_guide.html#navigation) | Verify keyboard focus, traversal, saved selection and tab transitions; read acknowledgement is documented separately. |
+| [Folders, Shortcuts, and Spaces](../paper_monitor/user_guide.html#organize) | Verify real folder/Space versus shortcut renames, mirrored paths, busy-file retry and complete ancestry. |
+| [Search, List View, and Table View](../paper_monitor/user_guide.html#search-views) | Retain five sortable columns including Time added, placement-time semantics and horizontal overflow. |
+| [Add Papers and Files](../paper_monitor/user_guide.html#import-files) | Verify Add Paper, identifier/title entry, metadata-only catalog records and ordinary standalone files. |
+| [Use Paper Details](../paper_monitor/user_guide.html#paper-details) | Add Refresh Info publication-update lookup, Paper Files notice summaries, explicit relations and coverage/timing limits. |
+| [Edit DOI and arXiv Identifiers](../paper_monitor/user_guide.html#identifiers) | Verify Return/save before refresh, manual identifier protection and no automatic periodic refresh of saved papers. |
+| [Refresh Info: One Paper, a Folder, or the Library](../paper_monitor/user_guide.html#loader-maintenance) | Add Quick/Full DOI-based update discovery; retain folder/all-Library scope, cooldowns, logs, Pause/Stop and restart boundaries. |
+| [Understand Paper Files](../paper_monitor/user_guide.html#paper-files) | Add notice metadata versus local notice file distinction and the same display in My Publications; retain file controls and protected Default. |
+| [Preview Files with Quick Look](../paper_monitor/user_guide.html#quick-look) | Add local inline/display Markdown math, literal code and bounded fallback; retain properties, source record and preview limits. |
+| [Choose File Types and the Default File](../paper_monitor/user_guide.html#versions-current) | Verify all 21 file types, notice exclusion from automatic Default, corrected-article priority, manual Default and Unknown/Other fallback. |
+| [Add and Classify Attachments](../paper_monitor/user_guide.html#attachments) | Verify exact-content reuse, file type/source/annotation and preservation of distinct annotated copies. |
+| [Download and Sync Versions](../paper_monitor/user_guide.html#download-sync) | Replace obsolete manual-only fallback wording with native APS Harvest/ACS/Science/Nature routes, PDF-only supplements and main-PDF failure diagnosis. |
+| [Move a Standalone File into Paper Files](../paper_monitor/user_guide.html#drag-attach) | Verify internal ownership moves, external copies, detaching into independent items and alias/busy-state safeguards. |
+| [Delete and Recover Items](../paper_monitor/user_guide.html#recycle) | Verify recoverable placement removal, permanent emptying scope, shared-reference preservation and native Trash boundaries. |
+| [Use Folder Loader](../paper_monitor/user_guide.html#folder-loader) | Verify recursive imports, metadata modes, background progress, source identity handling and completed-operation boundaries. |
+| [Make a Portable Desktop Copy](../paper_monitor/user_guide.html#desktop-copy) | Verify portable paper/folder copies, associated file bundle and no implied whole-library backup. |
+| [Back Up or Move to Another Mac](../paper_monitor/user_guide.html#backup-migrate) | Expand coherent SQLite/files backup, complete installation, stopped-App upgrade/build, ad-hoc signing and rollback; retain external browser profile/credentials and unsaved memory-only tabs. |
+| [My Publications](../paper_monitor/user_guide.html#my-publications) | Verify profile import/resume, identifier completion, manual roles, metrics, shared Files and filtered export scope; linked notice workflow cross-referenced. |
+| [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Update Sunday calendar, visible tab counts versus stored sidebar counts, per-paper unread state and filtered left-sidebar Publication updates. |
+| [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Update Sunday calendar and shared filtered unread semantics; document notice ingestion separately from the Journal-only notice panel. |
+| [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Verify Hong Ding illustration, New/Read All, Scholar pause, source retries, shared identities and distinct Author read state. |
+| [Browse, Bookmark, and Revisit Websites](../paper_monitor/user_guide.html#browser) | Add Science ePDF loaded-original workflow, three save actions and persistent webpage-key refusal; verify existing file reuse, shared native fallback session, history/bookmarks, separate Passwords and website isolation. |
+| [Literature Data Source](../paper_monitor/user_guide.html#citation-settings) | Verify current Literature Data Source name, optional provider keys, masked credentials and service-specific limits. |
+| [arXiv Scope Settings](../paper_monitor/user_guide.html#arxiv-scope-settings) | Verify saved discovery archive scopes are distinct from current report filters. |
+| [Field Settings](../paper_monitor/user_guide.html#field-settings) | Add effect of visible fields on tab unread dots and Publication updates, distinct from standalone-field grouping and full journal totals. |
+| [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Verify three modes and local PDF/Markdown behavior versus all-native Quick Look. |
+| [Default Add to Library Folder](../paper_monitor/user_guide.html#add-to-library-settings) | Verify default folder, one-time override, stable folder ID and unsorted fallback. |
+| [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Verify native/system website routing and default Save Details preference. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Verify 24 tools, 11 optional writes, PDF-optional metadata import, same Key, notice ownership, manual/automatic Default and per-file staging. Recheck official MCP setup. |
+| [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Add extension preservation when long basenames are shortened; retain templates and separate logical identity. |
+| [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Verify canonical main file, Associated Files, Finder aliases, stable identity and collision protection. |
+| [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Clarify persistent webpage keys versus ordinary storage and Passwords; retain external source/client responsibilities, opt-in AI scopes and no credential exposure. |
+| [Visual Identity and Cultural Elements](../paper_monitor/user_guide.html#visual-identity) | Retain approved branding, mission, glyph provenance and wording. Preserve continuous Product Identity chapters 4-1 through 4-4. |
+| [Keyboard Shortcuts](../paper_monitor/user_guide.html#keyboard) | Add per-paper acknowledgement and visible-only tab indicators; retain contextual Browser, Quick Look and edit shortcuts. |
+| [Publisher and Network Access](../paper_monitor/user_guide.html#network-access) | Add off-campus direct-route limits, abstract versus actual PDF entitlement, PDF/CDN routing and native fallback limits. |
+| [Startup, Monitor Cache, and Text Size](../paper_monitor/user_guide.html#startup) | Add macOS/Python/complete-folder and first-launch requirements; verify schedules, no saved-paper periodic refresh, local service lifecycle, narrow recovery and presentation-cache scope. |
+| [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Add stale WebCrypto prompt, Science loaded-PDF and mismatched guide-edition recovery; retain main/supplement distinction, filtered unread dots, notice lookup limits and Markdown formula fallback. |
+| [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Verify SQLite authority, current managed roots, associated resources, exports and disposable caches. |
 
 ## Reproducibility and validation
 
-HTML is the editable source; the existing builder generates TeX and PDF and
-registers the new image. The builder continues to enforce linked numbering and
-continuous Product Identity chapters 4-1 through 4-4. Temporary captures, baseline
-copies and QA are kept outside the repository in `/private/tmp/gewu-guide-sep24/`.
+The HTML is the editable source. Build the TeX and fixed-layout PDF with `scripts/build_user_guide_pdf.py`; package that same PDF into the original App. Do not hand-edit generated TeX or create a separate manual text source. Preserve existing topic order, numbering, approved Product Identity wording and its continuous chapter flow. Keep the AI Access opening heading, lead, overview image and caption together.
 
-- Thirty guide/audit tests and six PDF structure checks pass. Exact-wording
-  assertions were updated for the clarified cataloged-paper sentence; no runtime
-  test or product behavior was changed. Builder Python compilation and diff
-  whitespace checks pass.
-- The rebuilt PDF has 118 pages. All pages were visually reviewed as contact
-  sheets, with 27 changed or related pages inspected at reading resolution.
-  All 913 named destinations resolve; 364 internal links have no missing target.
-  All 49 topic anchors and all 24 current MCP tool names remain documented.
-- Product Identity 4-1 through 4-4 flows on pages 105–107; 4-3 and 4-4 share
-  page 107. No per-chapter forced breaks were introduced. Figure proportions,
-  captions and the original image constraints remain in the builder.
-- SHA-256 comparison confirms exactly three replacements and 32 byte-identical
-  retained screenshots, plus the one new write-permission figure.
-- Sixteen documentation/package files were synchronized to the original project
-  with clean-HEAD/preimage checks, backups and post-copy hashes. Source and bundled
-  PDFs match. Both App signatures verify; removing signatures from temporary
-  before/after executable copies yields identical hashes, confirming unchanged
-  native code. Only the embedded PDF and required signing data changed in the App.
-- Final live verification in the original App passes: Help opens the September
-  24, 2026 edition, the Time added instructions and updated Table View image
-  render correctly, and searching “write permissions” finds AI Access. Print
-  Guide opens the bundled PDF in macOS Preview, which reports Page 1 of 118 and
-  the original App resource path. The guide was left on Welcome with its search
-  cleared. No authentication setting, permission or literature data was changed;
-  no App restart, commit or push was performed.
+Validation completed October 5, 2026. The previous October 2 work remains included; the checks below apply to this final edition.
 
-## Initial licensing follow-up — September 24, 2026 (v1.0, superseded)
-
-The subsequent licensing-only revision adds the custom academic/non-commercial
-grant to Welcome and a dedicated final copyright page, clarifies the role of scholarly-source
-settings, and limits the artwork statement to rights the
-project actually owns. Private research modifications are permitted; public
-sharing is limited to unmodified official versions unless separately authorized.
-Commercial uses require prior written authorization. See
-[the licensing/dependency audit](DEPENDENCY_LICENSE_AUDIT.md) for the complete
-change inventory and unresolved third-party permissions.
-
-The manual now has 119 pages. All 49 topic anchors and 36 screenshot files remain;
-no screenshot was replaced. All 913 earlier named PDF destinations resolve, with
-only `page.119` added. Eleven changed pages (3, 6, 8–11, 82–83, 106, 118–119) were
-rendered and reviewed. Product Identity's continuous chapter rules remain intact.
-The 30 guide/audit tests, 16 macOS window/package checks and six PDF structure
-checks pass. The final source and App-bundled PDFs and legal texts match; the
-universal App signature verifies. At initial delivery, no live App restart was
-performed. After the user authorized commit/push, the original App was normally
-restarted once: one App/backend and healthy local service were confirmed, and
-the actual About window displayed the new licensing summary before returning
-to Library. No literature mutation or source refresh was requested.
-
-## Research-sharing follow-up — September 24, 2026 (v1.1)
-
-The user subsequently permitted non-commercial research sharing of modified
-versions, derivative works and patches, including public research forks and PRs.
-The former original-only restriction above is historical, not the current rule.
-Welcome, the final copyright page, licensing guides and packaged LICENSE now
-agree. CONTRIBUTING.md separately explains that research sharing needs no CLA,
-whereas upstream commercial licensing of an external contribution requires a
-separately agreed grant. No finalized CLA or signed contributor authorization is
-claimed. The authors' institutional ownership questions are deferred at the
-user's request.
-
-The PDF remains 119 pages with all 914 named destinations. Only pages 8 and 119
-have changed extracted text; both were rendered and visually checked. Screenshots,
-product-operation descriptions and Product Identity chapter flow are unchanged.
-The final 30 Guide/audit tests, six new licensing-consistency tests, 16 macOS
-window/package tests and six PDF structure checks pass. An initial Guide test
-ran before App packaging completed and detected the old bundled PDF; the final
-post-build rerun passes with byte-identical source/bundled PDF and legal files.
-Python syntax, shell syntax, diff checks and the App signature pass. At initial
-delivery, no App restart, commit or push was performed. The user subsequently
-authorized commit/push and explicitly approved a normal App restart. The original
-App was restarted as one App/backend with a healthy local service; Help > User
-Guide displayed the new modified-version research-sharing permissions. The guide
-was then closed, leaving the Library interface available. No literature mutation,
-contribution acceptance or repository-visibility change was requested or performed.
-Consult Git history for delivery status. The earlier release-ZIP signing issue
-and unresolved third-party asset rights remain outside this follow-up.
-
-## Contact and website follow-up — September 25, 2026
-
-The project contact is now `info@gewu-insight.com` in Help > Contact Us,
-its fallback message, README, licensing/contribution documents, the HTML guide,
-and the generated and App-bundled PDF. The official website link,
-`http://gewu-insight.com`, appears in README's opening navigation and Welcome's
-Contact Us section. This adds the supplied pre-launch address without claiming
-that the website is already available. Licensing terms are unchanged.
-
-The PDF remains 119 pages with all 914 named destinations and 373 links. Only
-pages 11, 117 and 119 have changed extracted text; all three were rendered and
-reviewed. All 36 screenshot files are byte-identical to their previous versions.
-The AI Access opening and continuous Product Identity chapter layout remain intact.
-The 52 guide, audit, licensing and macOS window/package tests and seven PDF
-structure checks pass, along with Python syntax and diff checks. The universal
-App's signature verifies, and source and bundled documents match.
-
-The rebuilt original App was normally restarted. One App and its child backend,
-a healthy local service, and byte-identical served HTML/PDF were confirmed.
-Help > User Guide visibly displays the new contact and website. Contact Us was
-invoked through the native menu, and its recipient was checked in the rebuilt
-executable; no message was sent by this validation. No literature, permission,
-provider configuration or screenshot was changed. Consult Git history for
-commit and push status.
+- Built HTML-derived TeX/PDF successfully: 127 pages, 975 valid destinations, 391 internal links and nine external link annotations. Every internal target resolves; HTML has 49 topics, no duplicate IDs and no broken nonempty fragment links.
+- Visually reviewed all 127 pages in contact sheets and 15 pages at reading resolution: 14, 61, 62, 74, 81, 82, 85, 86, 95, 104, 108, 112, 118, 124 and 125. No clipping, overlap or missing text found in this review. Product Identity 4-3 and 4-4 still share page 112; the AI Access heading, lead, overview and caption remain together on page 95.
+- All 31 existing Guide/audit/navigation unittest checks passed (30 before installation and the bundle/source equality check afterward); seven PDF builder structure checks passed. Navigation checks execute the shipped JavaScript against all real topics and links. Python compilation and whitespace checks passed. No runtime benchmark was changed or run.
+- Original clean Add Monitored Author PNG is byte-identical to the pre-edit backup, as explicitly requested. PDF page 74 confirms the ordinary empty form without a red Scholar message. Only the Guide opening was recaptured in this pass, from the original App in native fullscreen without an overlay.
+- Built and strictly verified a staged universal App, then installed through the stopped-App build workflow after the user explicitly approved restarting. Initial installed-build preflight could not read process state in the sandbox; the authorized rerun completed. The regenerated iconset was rejected in the isolated stage, so the builder retained the existing icon; the installed build completed with its normal deprecated WebKit enum warning. No source workaround or certificate change was made.
+- Original App reopened as PID 31583 with one local listener (31585). Help > User Guide displays October 5; native search for Science ePDF finds Browser and Troubleshooting, and the new repeated-keychain subsection link opens the expected section. Print Guide opens the exact bundled PDF in macOS Preview, visibly showing Page 1 of 127 and its original-App resource path. The PDF source and bundle match. Strict signature verification passes after launch; unsigned executable payloads match the pre-edit App.
+- PDF SHA-256: `9a8fc570261d380d7f9f0771187307fee055c3031968d68c17389fa1eb179f75`. Reversible pre-edit App/guide backups, build/test logs, rendered pages and package checks: `/private/tmp/gewu-guide-oct05-zb6szif9/`.
+- No direct literature edits, imports, provider refreshes, classification changes or data migration were performed for the manual; normal App startup/background operation is separate from this documentation check. No commit, push, branch or PR; unrelated `metadata/` remains untouched.

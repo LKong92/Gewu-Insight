@@ -35,6 +35,7 @@ IMAGE_ROUTES = {
     "/user-guide-assets/shortcut-path.png": ROOT / "assets" / "user-guide" / "screenshots" / "shortcut-path.png",
     "/user-guide-assets/my-publications.png": ROOT / "assets" / "user-guide" / "screenshots" / "my-publications.png",
     "/user-guide-assets/journal-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "journal-monitor.png",
+    "/user-guide-assets/publication-updates.png": ROOT / "assets" / "user-guide" / "screenshots" / "publication-updates.png",
     "/user-guide-assets/subject-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-monitor.png",
     "/user-guide-assets/author-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-monitor.png",
     "/user-guide-assets/browser.png": ROOT / "assets" / "user-guide" / "screenshots" / "browser.png",

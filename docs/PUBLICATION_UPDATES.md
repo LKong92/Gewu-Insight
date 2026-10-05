@@ -1,6 +1,6 @@
 # Publication updates
 
-**Refresh Info** checks the saved original DOI for subsequent corrections, errata, retractions, expressions of concern, withdrawals and addenda. The same check participates in the existing periodic metadata refresh schedule. It is a scheduled check, not an instant publisher notification service.
+**Refresh Info** checks the saved original DOI for subsequent corrections, errata, retractions, expressions of concern, withdrawals and addenda. This lookup runs when metadata is refreshed, including a manual single-paper refresh or a folder/all-Library metadata job. Saved Library, Space and My Publications papers do not have an automatic periodic metadata-refresh schedule. Journal Monitor can also discover notices in its own fetched results. Neither route is a continuous retraction watch or an instant publisher notification service.
 
 The lookup uses Crossref's documented [`updates` DOI filter](https://www.crossref.org/documentation/retrieve-metadata/rest-api/rest-api-filters/). An explicit outgoing relation in the returned notice must match the original DOI. A title match, citation, related-paper link or retracted-original flag alone does not authorize a merge. Availability depends on publishers and other Crossref data sources depositing the relationship; an empty successful check is not a guarantee that no notice exists anywhere.
 

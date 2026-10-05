@@ -181,6 +181,7 @@
 
     .article-wrap { width: min(calc(100% - 48px), var(--content-width)); margin: 0 auto; padding: 38px 0 56px; }
     .help-topic { display: none; scroll-margin-top: 64px; }
+    .help-topic [id] { scroll-margin-top: 64px; }
     .help-topic.active { display: block; }
     .topic-kicker { margin: 0 0 8px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .065em; text-transform: uppercase; }
     h1 { margin: 0; font-size: 30px; line-height: 1.16; letter-spacing: -.025em; }
@@ -661,7 +662,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Version 1.0.0 · Build 1 · September 24, 2026 · Current workflow edition</p>
+          <p class="guide-revision">Version 1.0.0 · Build 1 · October 5, 2026 · Current workflow edition</p>
 
           <p><strong>Source-available research software.</strong> The Gewu Insight Academic and Non-Commercial Research License permits downloading, installing, building, running and modifying the software for academic/non-commercial research. Original and modified versions, derivative works and patches may be shared free of charge for those purposes under the same research-use terms, with retained notices and clearly identified modifications. Public research forks and pull requests within those terms need no separate permission. Commercial use, commercial redistribution, sublicensing and integration into commercial products or services require separate prior written authorization. Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved except for those express permissions. Read the complete <a href="https://github.com/LKong92/Gewu-Insight/blob/main/LICENSE">LICENSE</a>, also included with the local distribution and inside the App resources, before use. This is not an open-source license.</p>
 
@@ -1046,6 +1047,8 @@
 
           <div class="important"><span class="callout-title">Important</span>Similar titles are not proof of identity, and matching filenames are not proof that two resources are the same. Use identifiers, metadata, file fingerprints, and provenance together.</div>
 
+          <h2>Publication updates stay with the original work</h2>
+          <p>A correction, erratum, retraction, expression of concern, withdrawal or addendum is a notice about an article, not a second research-paper identity. Its own DOI, title and date are retained as linked notice metadata under the original Gewu Key. A notice PDF is an associated file and does not become the automatic Default. A corrected full article is a different file type and may become Default through the normal version rules. See <a href="#paper-publication-updates">Check an article for publication updates</a>.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#identifiers">Edit DOI and arXiv Identifiers</a><a href="#paper-files">Understand Paper Files</a><a href="#personal-research-workspace">The Personal Research Workspace</a></div></div>
         </article>
 
@@ -1522,7 +1525,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#attachments">Add and Classify Attachments</a><a href="#folder-loader">Use Folder Loader</a><a href="#drag-attach">Move a Standalone File into Paper Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="paper-details" data-group="Papers and Files" data-title="Use Paper Details" data-keywords="open preview website google scholar identifier files citation metadata folders Gewu key">
+        <article class="help-topic guide-topic" id="paper-details" data-group="Papers and Files" data-title="Use Paper Details" data-keywords="open preview website google scholar identifier files citation metadata folders Gewu key retraction correction notice publication updates">
           <p class="topic-kicker">Library</p>
           <h1>Use Paper Details</h1>
           <p class="lead">Paper Details combines actions, identifiers, metadata, and citation counts. Library, My Publications, and Author Monitor start with the paper title, without a separate heading bar. The available actions occupy two rows: Preview, Download and Website first; Google Scholar, Get DOI and Refresh Info second. Each button label stays on one line.</p>
@@ -1538,6 +1541,14 @@
             <tr><td><span class="ui">Refresh Info</span></td><td>Refreshes paper information using its saved DOI or arXiv ID. Hover over the button to see the latest result below it.</td></tr>
           </table>
 
+          <h2 id="paper-publication-updates">Check an article for publication updates</h2>
+          <ol class="steps">
+            <li>Check that the article's saved DOI is correct, then choose <span class="ui">Refresh Info</span>.</li>
+            <li>The refresh checks Crossref for explicit publication-update relations to that DOI, including notices published after you saved the article. Review the refresh result for source failures or conflicts.</li>
+            <li>Inspect the notice summaries in <span class="ui">Paper Files</span>. Expand one to read its kind, date, title and DOI, then follow the DOI to the publisher's notice.</li>
+          </ol>
+          <p>Refresh saves the notice relationship; it does not automatically download a notice PDF, replace the original article, change its Gewu Key or change your Default. A notice can therefore appear without a local file. When you obtain its PDF, retain it under the original article and choose the appropriate notice file type.</p>
+          <div class="important"><span class="callout-title">Coverage and timing</span>Saved Library, Space and My Publications papers are not periodically checked merely because they are saved. Request Refresh Info for a paper or a folder when you need a fresh check. Detection depends on the publisher supplying an explicit relation and Crossref making it available. A successful check with no notice is not proof that the article has never been corrected or retracted; consult the publisher when that status matters. Missing or ambiguous original-article evidence requires review.</div>
           <h2>File management</h2>
           <p>Library uses the adjacent <span class="ui">Paper Files</span> column; Paper Details does not repeat a Files box. My Publications keeps its collapsible <span class="ui">Files · n</span> management panel. Author Monitor shows a compact local filename with the full path on hover; <span class="ui">Get DOI</span> appears when a local PDF is available.</p>
 
@@ -1660,10 +1671,12 @@
 
           <p>Verified “not found” checks and transient failures use cooldowns so a repeated run does not immediately send the same requests. Bulk missing-identifier work does not use Google Scholar.</p>
 
+          <h2>Include later corrections and retractions</h2>
+          <p>Quick and Full refresh both check explicit Crossref publication updates when the paper has a DOI. A folder or all-Library refresh can therefore discover a later notice for an older saved article. Existing refresh cooldowns, scope and partial-result reporting still apply. Linked notices appear in Paper Files; refreshing does not fetch their PDFs or replace existing files. See <a href="#paper-publication-updates">the single-paper workflow and its coverage limits</a>.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Literature Data Source</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="default flat resources file type annotation source attachments files panel inspector compact rows">
+        <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="default flat resources file type annotation source attachments files panel inspector compact rows publication notices correction retraction">
           <p class="topic-kicker">Library</p>
           <h1>Understand Paper Files</h1>
           <p class="lead">A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.</p>
@@ -1699,10 +1712,13 @@
 
           <p>A missing attachment is not another copy of the default PDF merely because both rows have a similar name. Check <span class="ui">Show in Finder</span>, the paper's Associated Files bundle, and Recycle before deleting or importing anything. The default resource and explicitly typed attachments remain visible even when their paths need repair.</p>
 
+          <h2>Read linked publication notices</h2>
+          <p>Expandable notice summaries appear alongside the file bundle when a correction, retraction or another supported update has been linked to the article. Expand a summary to read the notice title, date and DOI. This is notice metadata, so a summary can exist even when no notice PDF has been saved. A saved notice PDF remains an ordinary associated file with its own file type.</p>
+          <p>The original article, its bibliography, files and Gewu Key remain. Notices never become the automatic Default; a corrected full article follows its separate version rule. The same summaries are available in My Publications' expanded Files panel. Use <a href="#paper-publication-updates">Refresh Info</a> to check for later notices, or add a discovered notice from <a href="#monitor-publication-updates">Journal Monitor</a>.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview Files with Quick Look</a><a href="#versions-current">Choose File Types and the Default File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="quick-look" data-group="Papers and Files" data-title="Preview Files with Quick Look" data-keywords="pdf preview quick look space macOS native built-in hybrid presentation media image thumbnails page count range streaming cache large file performance">
+        <article class="help-topic guide-topic" id="quick-look" data-group="Papers and Files" data-title="Preview Files with Quick Look" data-keywords="pdf preview quick look space macOS native built-in hybrid presentation media image thumbnails page count range streaming cache large file performance LaTeX math equations offline">
           <p class="topic-kicker">Library</p>
           <h1>Preview Files with Quick Look</h1>
           <p class="lead">Press Space to inspect the selected resource without changing its paper record. Quick Look can stay inside Gewu Insight, use the macOS system panel, or combine both approaches.</p>
@@ -1751,6 +1767,9 @@
           <p>Leading YAML metadata is displayed as collapsible <span class="ui">Properties</span>. An AI note’s separate provenance header appears under <span class="ui">Source record</span>. Expand either to inspect its values; collapse it to reach the body. These are values saved in the note, not an instruction to overwrite Paper Details. Invalid metadata falls back to readable source text.</p>
           <p>The Markdown preview opens at a reading width that fits the window. Text and long property values wrap; wide tables and code blocks scroll within their own area. Markdown does not need the PDF thumbnail rail. Rendering is local, and an unchanged note can reuse a validated in-memory preview. If Loading Markdown does not finish, follow the <a href="#troubleshooting">retry guidance</a>. Obsidian-specific plugins, diagrams and other extensions are not a guarantee of the built-in reader.</p>
 
+          <h2>Read mathematical Markdown</h2>
+          <p>The built-in Markdown reader supports inline formulas delimited by <code>$...$</code> or <code>\(...\)</code>, and displayed formulas delimited by <code>$$...$$</code> or <code>\[...\]</code>. Put displayed formulas on their own lines. The math renderer is bundled locally, so it does not require a separate internet connection.</p>
+          <p>Formulas inside inline code or fenced code blocks stay literal. Unsupported, malformed or exceptionally large formulas remain visible as escaped source instead of blocking the note. Wide equations scroll within their own area. This formats the preview only; the saved Markdown and any original PDF remain unchanged.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look-settings">Quick Look Settings</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
@@ -1823,7 +1842,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#drag-attach">Move a Standalone File into Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="download-sync" data-group="Papers and Files" data-title="Download and Sync Versions" data-keywords="download publisher DOI arXiv sync versions deduplicate SHA fingerprint annotation overwrite validation truncated HTML temporary atomic skipped role">
+        <article class="help-topic guide-topic" id="download-sync" data-group="Papers and Files" data-title="Download and Sync Versions" data-keywords="download publisher DOI arXiv sync versions deduplicate SHA fingerprint annotation overwrite validation truncated HTML temporary atomic skipped role APS Harvest ACS Nature Science supplementary MP4 background browser">
           <p class="topic-kicker">Library</p>
           <h1>Download and Sync Versions</h1>
           <p class="lead">Downloads add a version to the paper bundle. They do not silently overwrite a different preserved PDF.</p>
@@ -1838,13 +1857,23 @@
 
           <h2>Keep downloading while you work</h2>
           <p>You can select other papers, switch workspaces or add another Monitor result to Library while a download runs. The running state belongs to each paper, and completion updates that paper without selecting it or returning to an earlier tab. Repeating Download for the same running paper shares its request; another paper has its own request. Ordinary Download reuses an existing valid local PDF. Downloads do not resume automatically after quitting the App.</p>
-          <h2>If the ordinary download cannot retrieve a PDF</h2>
+          <h2>Direct download and background webpage fallback</h2>
+          <p>In the original macOS App, supported publisher downloads first try their direct routes. If those do not provide the main PDF, APS, ACS, Science and Nature-family downloads can load the article in an offscreen webpage and follow its PDF link. This background fallback shares the Gewu Browser website session and keeps your current workspace and selection in place. The App must remain running; a command-line or ordinary web-browser session does not provide this native fallback.</p>
+          <table class="plain-table">
+            <tr><th>Publisher</th><th>Current download route</th></tr>
+            <tr><td>APS / Physical Review</td><td>The direct APS Harvest endpoint is tried before the background article/PDF route. Harvest remains the fast first route when the publisher provides access.</td></tr>
+            <tr><td>ACS / Nano Letters</td><td>Direct PDF retrieval, then the background article page when needed.</td></tr>
+            <tr><td>Science family</td><td>Direct retrieval, then the shared Browser session. The main article must be obtained before supplementary PDFs are appended.</td></tr>
+            <tr><td>Nature family</td><td>Direct retrieval, then the background article/PDF page. A publisher reference or accepted manuscript is retained as that version, not labeled as the published PDF.</td></tr>
+          </table>
+          <p>Other publishers use their supported direct routes; this does not imply a webpage fallback for every website. Background browsing does not force Science or another publisher through a proxy. Your current network, system proxy/VPN rules, browser verification and article entitlement still determine access.</p>
+          <h2>If the background attempt still cannot retrieve a PDF</h2>
           <ol class="steps">
-            <li>Choose <span class="ui">Open Website</span> and open the article in Gewu's <span class="ui">Browser</span>.</li>
-            <li>Complete the website's normal access or sign-in steps yourself. Open its PDF; in an embedded article viewer, use its PDF download control to open the received PDF in Browser.</li>
-            <li>Choose <span class="ui">Save to Gewu</span>, verify the Gewu Key and PDF in Details, then save. An existing active Library/Space placement is reused unless you explicitly choose another folder.</li>
+            <li>Choose <span class="ui">Open Website</span> and open the article in Gewu's <span class="ui">Browser</span>. If Website Links is set to the system browser, open the address in Gewu Browser to use its shared session.</li>
+            <li>Complete the publisher's normal verification or institutional sign-in yourself, and check whether the main PDF actually opens. An abstract page alone does not establish full-text access.</li>
+            <li>Return to the paper and retry <span class="ui">Download</span>. Alternatively, with the PDF open in Browser, use <span class="ui">Save to Gewu</span>, verify the Key and loaded PDF in Details, then save.</li>
           </ol>
-          <p>This is a manual Browser workflow, not a promise that every publisher or Download button has an invisible Browser fallback. A legitimate local PDF can also be attached with <span class="ui">Add File</span>. See <a href="#browser-save-gewu">Save an article and PDF to Library</a>.</p>
+          <p>A legitimate local PDF can also be attached with <span class="ui">Add File</span>. A timeout or authorization error leaves existing files intact; repeated retries do not create access rights. See <a href="#browser-save-gewu">Save an article and PDF to Library</a> and <a href="#network-access">Publisher and Network Access</a>.</p>
 
           <h2>Download arXiv files</h2>
           <ul>
@@ -1868,10 +1897,13 @@
 
           <div class="note"><span class="callout-title">Note</span>A Monitor result is not forced into a Library placement. Where download is available, a local resource can belong to the cataloged paper even before you add that paper to Library or My Publications.</div>
 
-          <h2>Science main article and supplementary PDFs</h2>
-          <p>The Science download workflow obtains and validates the main article first, then appends available supplementary PDFs to the combined reading file. A supplement, reporting checklist or supplementary-only response cannot stand in for the main article. If the main PDF cannot be obtained, the download reports failure instead of registering a supplement as a successful article download.</p>
+          <h2>Science and Nature main articles and supplementary PDFs</h2>
+          <p>The Science and Nature-family workflows distinguish the main article from supplementary PDFs and can append retrieved PDF supplements to the combined reading file. A supplement, reporting checklist or supplementary-only response cannot stand in for the main article. If the main PDF cannot be obtained, the download reports failure instead of registering a supplement as a successful article download.</p>
           <p>Inspect the combined PDF and any download message to check what was actually retrieved; access to the article webpage does not guarantee access to every PDF. Non-PDF material is not converted into PDF pages. The file type follows the main article’s version, while the displayed filename uses the returned publisher name or a meaningful paper-based fallback. Re-downloading preserves other files and an explicitly chosen Default.</p>
 
+          <h2>Non-PDF supplements do not make the article fail</h2>
+          <p>Automatic supplement handling is PDF-only. MP4 videos, audio, archives, spreadsheets and other non-PDF attachments are skipped; they are not required for a successful main-PDF download. Nature review files, reporting summaries and source-data files are also excluded from the supplementary reading merge. You can obtain other useful files separately and attach them to Paper Files.</p>
+          <p>If the main PDF succeeds but an optional supplement is unavailable, the main file is kept and the message describes the missing supplement. A message such as <code>main PDF unavailable; downloaded 1 PDF supplement(s)</code> means the main article could not be retrieved, not that a video caused the failure. A <code>not a PDF</code> response may be an HTML access or verification page. Supplements alone are never presented as a successful main article.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose File Types and the Default File</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
         </article>
 
@@ -2019,7 +2051,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#folder-loader">Use Folder Loader</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="backup-migrate" data-group="Import and Transfer" data-title="Back Up or Move to Another Mac" data-keywords="backup migration collaborator database sqlite data app update restore">
+        <article class="help-topic guide-topic" id="backup-migrate" data-group="Import and Transfer" data-title="Back Up or Move to Another Mac" data-keywords="backup migration collaborator database sqlite data app update restore GitHub source build signing certificate upgrade">
           <p class="topic-kicker">Import and Transfer</p>
           <h1>Back Up or Move to Another Mac</h1>
           <p class="lead">A reliable transfer preserves both the SQLite database and the managed file roots. The app bundle alone is not your library.</p>
@@ -2032,13 +2064,15 @@
             <li><strong>Store the backup separately.</strong> Use a second disk or a versioned backup location.</li>
           </ol>
 
-          <h2>Back Up and Upgrade</h2>
+          <h2 id="upgrade-installation">Back Up and Upgrade</h2>
           <ol class="steps">
-            <li><strong>Quit the current version and make a full backup.</strong> Preserve SQLite and every managed file root together.</li>
-            <li><strong>Install or build the newer application.</strong> A normal software upgrade does not overwrite the existing <code>data</code> directory.</li>
+            <li><strong>Finish or stop active work, then quit and back up.</strong> Preserve SQLite and every managed file root together, including configured roots outside the project. Finish unsaved webpage forms; open Browser tabs are not restored after quitting.</li>
+            <li><strong>Keep the whole installation together.</strong> Gewu uses a project folder containing the App, Python source, configuration and assets. The <code>.app</code> alone is not a standalone installation. Preserve local source edits before merging a GitHub update; never replace your research folders with another installation's empty <code>data</code> or <code>reports</code> folders.</li>
+            <li><strong>Install or build the newer application while the current App is stopped.</strong> A downloaded source checkout is not a verified App package. Native-code or bundled-resource changes need the provided local build workflow before launch. A Python/backend-only update needs a restart to load the changed source.</li>
             <li><strong>Start the new version once.</strong> Required database schema changes run automatically against the existing SQLite database.</li>
-            <li><strong>Verify before deleting the backup.</strong> Open the default PDF, another Paper Files version, an attachment, and a My Publications entry.</li>
+            <li><strong>Verify before deleting the backup.</strong> Check the Library, a Space, a default PDF, another Paper Files version, an attachment, My Publications and a monitor. Open <span class="ui">Help &gt; User Guide</span> and <span class="ui">Print Guide</span> to confirm that both manual editions came with the update.</li>
           </ol>
+          <p>The local build uses ad-hoc signing and does not require an Apple developer certificate, Team ID or keychain password. It verifies the staged App before replacing the stopped installation and restores the previous bundle if final installation verification fails. This does not mean the package is notarized by Apple. Build and packaging instructions are supplied in <code>docs/DEVELOPMENT.md</code> and <code>DISTRIBUTION.md</code>; ordinary use does not require running those tools.</p>
 
           <div class="note"><span class="callout-title">Note</span>Schema migration updates database structure; it is not a reason to rebuild the database or re-import the Library. Keep the pre-upgrade backup until the new version has been checked.</div>
 
@@ -2123,14 +2157,14 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Literature Data Source</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="journal-monitor" data-group="Journal Monitor" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image provenance source fetch run canonical paper idempotent">
+        <article class="help-topic guide-topic" id="journal-monitor" data-group="Journal Monitor" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image provenance source fetch run canonical paper idempotent publication updates retraction correction unread blue dots Sunday">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Journal Monitor</h1>
           <p class="lead">Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.</p>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/journal-monitor.png" alt="Journal Monitor showing Nature papers for August 12, 2026, with scientific figures, calendar counts, and filters">
-            <figcaption><strong>Journal Monitor.</strong> Nature is selected for August 12, 2026, with scientific figures visible beside the paper cards. The independent sidebar retains calendar counts, the monitor summary, and journal and field filters.</figcaption>
+            <img src="/user-guide-assets/journal-monitor.png" alt="Journal Monitor showing Nature papers for September 30, 2026, with scientific figures, calendar counts, and filters">
+            <figcaption><strong>Journal Monitor.</strong> Nature is selected for September 30, 2026, with scientific figures visible beside the paper cards. Sunday starts the calendar and Saturday ends it. The independent sidebar retains stored counts, Monitor Summary, late arrivals and filters. The top Nature tab shows six visible papers; Journal Filter retains the full count of 25.</figcaption>
           </figure>
 
           <h2>Refresh a date</h2>
@@ -2149,10 +2183,14 @@
           <p>Your enabled list, disabled history, ISSNs, source identifier, section policy, logo source, and display order are saved in SQLite. Product updates can add better built-in source definitions, but those defaults do not replace this personal state. Adding a previously removed journal restores it at the end of the active order.</p>
 
           <h2>Understand counts and filters</h2>
-          <p>The number beside each journal is the total stored count for that journal on the selected day. It is deliberately independent of <span class="ui">Field Filter</span>. The field checkboxes narrow the paper cards you can see; they do not rewrite the journal totals. A journal can therefore show a nonzero count while the current field selection hides every one of its papers.</p>
+          <p>The count beside a journal in the left <span class="ui">Journal Filter</span> is its stored total for the selected day, independent of <span class="ui">Field Filter</span>. The journal tabs above the cards count the currently visible papers after filtering. <span class="ui">Monitor Summary</span> distinguishes total from shown. A left-side journal count can therefore be nonzero while the current fields hide all its cards. Counts describe results; blue dots describe unread state.</p>
 
           <p>Calendar counts summarize stored day results. A zero count is meaningful only after the relevant source completed successfully. Read the source status before interpreting zero as “the journal published nothing.”</p>
 
+          <h2 id="monitor-unread">Blue dots follow the papers you select</h2>
+          <p>Late-arriving discoveries can have an unread blue dot. Click an individual paper or use Up/Down to select it with the keyboard to mark that paper read. Opening a date, journal or subject, changing fields, refreshing, or automatically highlighting the first card does not mark the whole list read.</p>
+          <p>A journal or subject tab's blue dot counts only unread papers currently visible under its filters. It disappears after all those visible papers are read. Hidden papers keep their own unread state; if you change fields or another filter to reveal them, the tab's dot can return. Read state is shared for the same paper between Journal and Subject Monitor. Author Monitor retains its separate New and Read All workflow.</p>
+          <p>The calendar runs <strong>Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday</strong>. Small numbers show stored results, not unread totals. The late-arrivals section links to earlier publication dates whose results arrived later; it is separate from publication notices.</p>
           <h2>Daily scheduled updates</h2>
           <p>Journal Monitor is designed to keep a daily cached record through its scheduled update workflow. A scheduled run and a manual refresh use the same stored day results, so opening a date does not require downloading it again. Use a manual refresh when a scheduled source was missed, partial, or needs verification.</p>
           <p>The scheduler belongs to the running local UI service; it does not wake a sleeping Mac or run while that service is stopped. See <a href="#startup">When automatic updates run</a> for the current timing and restart boundaries.</p>
@@ -2168,7 +2206,7 @@
           <p>The same canonical paper can also acquire Subject Monitor and Author Monitor relationships. These discovery paths explain why the work is visible; they do not automatically add a Library placement or create a local Paper Files resource.</p>
 
           <h2>Filter and inspect</h2>
-          <p>Use <span class="ui">Journal Filter</span>, <span class="ui">Preprint Filter</span>, and <span class="ui">Field Filter</span>. Journal and field choices combine to determine the visible cards, while the journal counts continue to describe the full selected day. Enable <span class="ui">Figures</span> to show a representative image when available. Selecting a result opens its report and actions.</p>
+          <p>Use <span class="ui">Journal Filter</span>, <span class="ui">Preprint Filter</span>, and <span class="ui">Field Filter</span>. Journal and field choices combine to determine the visible cards, while the left Journal Filter counts continue to describe the full selected day. Enable <span class="ui">Figures</span> to show a representative image when available. Selecting a result opens its report and actions.</p>
 
           <h2>Act on a result</h2>
           <ul>
@@ -2197,17 +2235,29 @@
 
           <p>Journal tabs identify the journal by a supported wordmark or by text. APS titles, including Physical Review Letters, Physical Review X and Reviews of Modern Physics, use readable journal names rather than a publisher icon or a page image.</p>
 
+          <h2 id="monitor-publication-updates">Review corrections and retractions</h2>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/publication-updates.png" alt="Original Journal Monitor showing two filtered Publication updates below Monitor Summary and late arrivals, with all six main tabs visible" loading="lazy">
+            <figcaption><strong>Publication updates.</strong> On October 1, two notices match the current Physics, Quantum Information and Materials Science selection. The expanded section sits below Monitor Summary and late arrivals in the left sidebar; its Open Website and Add to Library actions belong to each notice. Selecting the Nature Communications tab changes the main report, while notice visibility follows the left Journal and Field filters.</figcaption>
+          </figure>
+          <p><span class="ui">Publication updates</span> is a collapsed section in the left sidebar below <span class="ui">Monitor Summary</span> and any late-arrivals section. Expand it to see notices for the selected publication date. Both its count and list follow <span class="ui">Journal Filter</span> and <span class="ui">Field Filter</span>. A linked notice uses the original article's fields; an unresolved notice uses its retained classification. With no matching notices, the section is hidden.</p>
+          <ol class="steps">
+            <li>Choose <span class="ui">Open Website</span> to inspect the notice and its original-article relation.</li>
+            <li>Choose <span class="ui">Add to Library</span> on the notice to associate it with the original work. An existing original retains its Gewu Key. If absent, Gewu can retrieve the explicitly identified original's metadata and create its paper record without a PDF.</li>
+            <li>Read the result below the action, then inspect the original's Paper Files. The notice keeps its DOI, title, date and kind; it does not receive an independent research-paper Key. This action does not automatically download its PDF.</li>
+          </ol>
+          <p>Missing or conflicting relations stop the association for review; a similar title alone is insufficient. The notice does not replace the original bibliography or Default. Encountering a notice during discovery does not stop processing the journal's later research articles. To check an older saved paper directly, use <a href="#paper-publication-updates">Refresh Info</a>.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#subject-monitor">Subject Monitor</a><a href="#network-access">Publisher and Network Access</a><a href="#import-files">Add Papers and Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="subject-monitor" data-group="Subject Monitor" data-title="Subject Monitor" data-keywords="topic keywords prompt sources feeds RSS arXiv APS retry failed Zenodo rejected calendar selected subject counts empty date">
+        <article class="help-topic guide-topic" id="subject-monitor" data-group="Subject Monitor" data-title="Subject Monitor" data-keywords="topic keywords prompt sources feeds RSS arXiv APS retry failed Zenodo rejected calendar selected subject counts empty date unread blue dots Sunday">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Subject Monitor</h1>
           <p class="lead">Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.</p>
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with Superconductivity selected and numeric calendar counts for that subject">
-            <figcaption><strong>Subject Monitor.</strong> Superconductivity is selected, with matching papers and numeric calendar counts for that subject. Recorded counts include zero; dates without stored results remain blank.</figcaption>
+            <figcaption><strong>Subject Monitor.</strong> Superconductivity is selected on October 2, 2026. The Sunday-first calendar shows numeric counts for that subject; future or unstored dates remain blank. The current date has completed results, while Updates can separately report outstanding retries from other stored windows.</figcaption>
           </figure>
 
           <h2>Create a subject</h2>
@@ -2264,6 +2314,9 @@
 
           <p>The destination chooser initially selects your <a href="#add-to-library-settings">Setting &gt; Add to Library</a> default, initially <span class="ui">Library / unsorted</span>. You can confirm another active Library or Space folder for this addition. The choice does not change the global default.</p>
 
+          <h2>Read state, calendar and publication notices</h2>
+          <p>The calendar runs Sunday first through Saturday last. Its counts remain plain numbers for the selected subject. Selecting an individual paper by mouse or Up/Down acknowledges that paper only; opening the topic or date does not acknowledge all its papers. A subject or journal tab's blue dot reflects only its currently visible unread papers. Hidden results remain unread and can restore the dot when shown. See <a href="#monitor-unread">the shared Journal/Subject rules</a>.</p>
+          <p>Subject ingestion separates recognized correction and retraction notices from ordinary research-paper candidates and continues processing later results. Notices do not acquire independent research-paper Keys. The expandable <span class="ui">Publication updates</span> panel described in this guide is in Journal Monitor; for a saved original use <span class="ui">Refresh Info</span> and Paper Files.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
@@ -2349,7 +2402,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#my-publications">My Publications</a><a href="#network-access">Publisher and Network Access</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="browser" data-group="Browser" data-title="Browse, Bookmark, and Revisit Websites" data-keywords="browser Google Safari WebKit bookmarks favorites folders history address autocomplete suggestions tabs Home PDF download VPN Clash DIRECT proxy TUN network sidebar password passkey autofill Save to Gewu capture article library import identifier">
+        <article class="help-topic guide-topic" id="browser" data-group="Browser" data-title="Browse, Bookmark, and Revisit Websites" data-keywords="browser Google Safari WebKit bookmarks favorites folders history address autocomplete suggestions tabs Home PDF download VPN Clash DIRECT proxy TUN network sidebar password passkey autofill Save to Gewu capture article library import identifier Science ePDF loaded original WebCrypto keychain Save Download">
           <p class="topic-kicker">Browser</p>
           <h1>Browse, Bookmark, and Revisit Websites</h1>
           <p class="lead">Browser is the sixth main tab, after Author Monitor. By default, website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages. This includes Open Website and Google Scholar links. Choose <a href="#website-link-settings">Setting &gt; Website Links</a> to use the system default browser instead.</p>
@@ -2427,6 +2480,14 @@
           <p>Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. In a publisher's HTML viewer, click its PDF download link: Browser receives the PDF using its current website session and opens it in that tab, including supported page-generated files. <span class="ui">Opening PDF…</span> shows progress. Switching tabs does not interrupt it or let completion take focus; leaving the source page or closing its tab cancels that pending preview. Website sign-in and consent pages remain visible.</p>
           <p>Preview uses temporary browser storage, not your Downloads folder or Library. PDF attachment previews accept up to 128 MB and two minutes per transfer. Save to Gewu and the bottom-right <span class="ui">Save Download</span> arrow reuse a complete loaded PDF; they do not silently download it again. Both the bottom-right arrow and the PDF viewer’s own download arrow open a native save dialog, initially in Downloads. Confirm the filename and destination to write the file; Cancel leaves it unsaved. Original-file copies are temporary and bounded; navigating to another document or closing its tab releases them. To import a PDF, use <span class="ui">Save to Gewu</span> below or <a href="#import-files">import a saved file</a>. Library PDFs still open in macOS Preview.</p>
 
+          <h2 id="browser-save-choices">Choose the right save action</h2>
+          <table class="plain-table">
+            <tr><th>Action</th><th>Result</th></tr>
+            <tr><td><span class="ui">Save Download</span></td><td>Save the browser file to a location such as Downloads. This alone adds no Library placement or Paper Files record.</td></tr>
+            <tr><td><span class="ui">Save to Gewu</span></td><td>Review the article, optional PDF and destination, then save them to Library. An article can be saved without a PDF and receive or reuse its Gewu Key.</td></tr>
+            <tr><td><span class="ui">Download</span> on a research result</td><td>Run Gewu's managed download workflow for that paper, with supported direct routes and background webpage fallback. <span class="ui">Add to Library</span> remains a separate placement action.</td></tr>
+          </table>
+
           <h2>System networking and Clash rules</h2>
           <p>WebKit follows macOS networking without changing proxies/Clash. When system proxy or TUN routes traffic to Clash, its rules choose DIRECT/proxy. <span class="ui">System network</span> is policy, not proof of routing. DIRECT needs a school-recognized exit or institutional login. PDF/login/CDN domains match separately; browser-specific extensions/process rules are not inherited. Verify Clash connections; see <a href="#network-access">Publisher and Network Access</a>.</p>
 
@@ -2439,6 +2500,15 @@
             <li><strong>Choose the destination.</strong> Click the folder button under <span class="ui">Add to Library</span>. The same column picker used by Journal and Subject Monitor shows <span class="ui">My Library</span> and Spaces on the left, then subfolders in successive columns. Check the full path and click <span class="ui">Confirm</span> to select the destination. Choose the file type, then click <span class="ui">Save to Library</span> to import. Recognized publisher article PDFs suggest <span class="ui">Published version</span>, while recognized Science First Release PDFs suggest <span class="ui">Accepted manuscript</span>. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest <span class="ui">Preprint</span>, regardless of the article’s journal metadata. Review the suggestion; uncertain files remain <span class="ui">Unknown</span>. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF’s actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.</li>
           </ol>
           <p>Opening Details, identifying or cancelling imports nothing. Save reuses an existing active Library or Space placement, preferring the selected occurrence of that same paper. Attaching a PDF does not add a root-level entry. To add another location, explicitly choose and confirm its folder. Papers with no active placement use the folder saved in <a href="#add-to-library-settings">Setting &gt; Add to Library</a>, initially <span class="ui">Library / unsorted</span>, unless you confirm another folder. An unavailable saved default falls back to unsorted. Review creates no placement; the destination is checked again on Save. Paper Files refreshes immediately. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. <span class="ui">Show in Library</span> selects the saved occurrence. Browser keeps the webpage.</p>
+
+          <h2 id="browser-science-epdf">Save a Science ePDF already open in Browser</h2>
+          <p>Science's online ePDF reader displays the PDF inside a webpage. Once the document has loaded, <span class="ui">Save to Gewu</span> can read that reader's original PDF, including pages whose download control is an icon. This is the article file, not a screenshot or a printout of the webpage.</p>
+          <ol class="steps">
+            <li><strong>Wait for the actual Science PDF to load.</strong> An abstract page or access screen is not a loaded article PDF.</li>
+            <li><strong>Open <span class="ui">Save to Gewu &gt; Details</span>.</strong> Check the article title, DOI, Gewu Key and PDF status. If needed, choose <span class="ui">Use Loaded PDF</span>. Each original must be complete and no larger than 128 MB.</li>
+            <li><strong>Check File type and the destination, then save.</strong> A byte-identical file already attached to that paper reports <span class="ui">Existing PDF reused</span>; it keeps the existing resource and your manual Default.</li>
+          </ol>
+          <p>Keep the source document open during review. If it changes, reopen Save to Gewu for the new document. After Save or Cancel, the Science reader resumes displaying its pages. If the original cannot be read, wait for loading to finish and retry, or choose a PDF you have saved locally. <span class="ui">Download PDF Again</span> requests a fresh transfer and can still fail even when the browser has a readable copy. This workflow shares your existing article access; it cannot supply a missing subscription.</p>
           <h2>Use the original paper or correct the target</h2>
           <p> A tab opened with Open Website or the arXiv arrow remembers its source paper and Library occurrence, including related PDF tabs. Save to Gewu uses that existing paper when the current evidence agrees or provides no conflicting identifier. Manually corrected DOI/arXiv values take precedence over old automatic matches. If the page identifies another work, the source is not forced onto it.</p>
           <ol class="steps">
@@ -2471,9 +2541,14 @@
           <h2>Use macOS Passwords</h2>
           <p><span class="ui">Open Passwords</span> opens Apple's app (or use Passwords in System Settings on older Macs). Unlock and choose credentials there yourself. Gewu has no password vault and never imports, exports, lists or relays credentials.</p>
           <p><strong>Conservative AutoFill trigger.</strong> A single, unmodified click on an explicitly marked HTTPS login username or current-password input can open <span class="ui">AutoFill &gt; Passwords</span>. Search, ordinary email, registration, codes, embedded frames and uncertain fields are skipped, as are keyboard focus, double-clicks and dragging. Each field kind is offered once per site per App session, including cancellation; right-click AutoFill retries manually. Navigation or intervening input cancels a pending trigger. macOS handles authentication, selection and filling; Gewu never reads credentials or submits login. Site matching, Safari-style suggestions and successful filling are not guaranteed.</p>
-          <p>The <span class="ui">Gewu Insight WebCrypto Master Key</span> prompt protects WebKit's locally stored webpage keys, not metadata API credentials. Rebuilds may require renewed keychain permission. Handle the prompt yourself; never share your Mac password or delete the key to suppress it.</p>
           <p><strong>Password versus passkey.</strong> A Password contains text; a Passkey may show only a creation date and cannot fill a password field. Use the site's passkey sign-in flow or select a genuine Password. See <a href="#troubleshooting">AutoFill troubleshooting</a>; triggering AutoFill does not guarantee successful filling.</p>
+
+          <h2 id="browser-website-keys">Website keys and macOS authorization</h2>
+          <p>The current Browser declines persistent storage and retrieval of webpage cryptographic keys (WebCrypto keys). The same policy applies to background publisher views. It prevents those webpage-key operations from requesting the old <span class="ui">Gewu Insight WebCrypto Master Key</span> through Keychain. Ordinary webpage cryptography, cookies and local website storage remain enabled; this is separate from Apple Passwords and AutoFill.</p>
+          <p>A site that depends on saved WebCrypto keys may not work in this Browser, and keys saved by an earlier Gewu version cannot be read through the current Browser. Use the site's supported recovery/sign-in flow or <span class="ui">Open in Safari</span> when needed; Safari has its own session. Updating Gewu does not delete the old keychain item or reset the Browser profile. See <a href="#browser-key-prompt">Repeated keychain prompts</a> if that older prompt still appears.</p>
           <div class="important"><span class="callout-title">Website links</span>Research-view links follow <a href="#website-link-settings">Website Links</a>: Gewu Browser by default, or the macOS default browser. Existing Browser navigation stays here; local PDF/Preview and Finder actions stay native. For incompatible sites, choose <span class="ui">Open in Safari</span>; cookies are not transferred. The browser-hosted UI uses ordinary tabs. Access controls still apply.</div>
+          <h2>Share article access with background downloads</h2>
+          <p>The native background fallback for APS, ACS, Science and Nature uses the Gewu Browser website session. Complete a required website interaction in this Browser, check the actual PDF, and retry the paper's Download action. A login in Safari or another browser does not automatically transfer its cookies here. Background downloads keep the workspace you are using visible. See <a href="#download-sync">Download and Sync Versions</a> for supported routes and PDF-only supplement handling.</p>
         </article>
 
         <article class="help-topic guide-topic" id="citation-settings" data-group="Settings and Safety" data-title="Literature Data Source" data-keywords="OpenAlex API key Semantic Scholar NASA ADS token Crossref DataCite local SQLite environment security">
@@ -2581,6 +2656,8 @@
 
           <div class="note"><span class="callout-title">Note</span>Use <span class="ui">Restore Defaults</span> to save the four-field default immediately. Field Settings do not change arXiv discovery coverage; configure that separately in <span class="ui">arXiv Scope Settings</span>.</div>
 
+          <h2>Filter visible papers and their indicators</h2>
+          <p>This settings panel chooses which field names appear separately. The Monitor's <span class="ui">Field Filter</span> checkboxes then choose which papers to show. Journal and Subject tab blue dots count only unread papers visible under the current filters; hiding papers never marks them read. Showing another field can bring its unread dots back. Journal Monitor's Publication updates count and list also follow the selected fields and journals. Left-side Journal Filter totals remain the complete stored counts.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#arxiv-scope-settings">arXiv Scope Settings</a><a href="#citation-settings">Literature Data Source</a><a href="#journal-monitor">Journal Monitor</a><a href="#subject-monitor">Subject Monitor</a></div></div>
         </article>
 
@@ -2814,7 +2891,7 @@
             <li>Fill the command, one argument and two environment variables shown below. Use the values from your own <span class="ui">Copy MCP Configuration</span>.</li>
             <li>Save, then choose <span class="ui">Restart</span> to reload the MCP connection.</li>
           </ol>
-          <p>These fields follow <a href="https://learn.chatgpt.com/docs/extend/mcp?surface=cli">OpenAI's MCP configuration documentation</a> (checked September 24, 2026). The same local Codex host shares MCP configuration across the desktop app, CLI and IDE extension.</p>
+          <p>These fields follow <a href="https://learn.chatgpt.com/docs/extend/mcp?surface=app">OpenAI's MCP configuration documentation</a> (checked October 5, 2026). The same local Codex host shares MCP configuration across the desktop app, CLI and IDE extension.</p>
           <table class="plain-table">
             <tr><th>Codex field</th><th>Example value</th></tr>
             <tr><td>Name</td><td><code>gewu-insight</code></td></tr>
@@ -2891,6 +2968,8 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <div class="note"><span class="callout-title">Note</span>Choosing a Default PDF can move it to the main file folder and archive the previous main PDF in Associated Files. This does not apply the filename template or rewrite file contents; name conflicts use a unique filename. Use a naming or rename action to apply your preferred naming rule.</div>
 
+          <h2>Long filenames retain their extension</h2>
+          <p>Managed import and attachment names preserve the file extension, such as <code>.pdf</code>, when shortening a long basename to fit filesystem limits. A long title does not require losing the suffix. File type, Gewu Key and title are separate from the filename; renaming a file does not create another work or identify its scholarly version. Use the App's file controls for managed names so recorded paths and aliases stay consistent.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose File Types and the Default File</a><a href="#organize">Folders, Shortcuts, and Spaces</a></div></div>
         </article>
 
@@ -2946,6 +3025,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <h2>Protect credentials</h2>
           <p>Optional service credentials belong only in Literature Data Source or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.</p>
+          <p>Apple Passwords stays under macOS control. Gewu's refusal to persist webpage WebCrypto keys is a separate Browser compatibility policy; it does not turn off normal webpage encryption or clear cookies. See <a href="#browser-website-keys">Website keys and macOS authorization</a> for the effect on sites that rely on saved keys.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Literature Data Source</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
@@ -3057,6 +3137,8 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <p><strong>Paper Files mouse behavior:</strong> single-click selects, double-click opens, and Control-click opens the context menu.</p>
 
+          <h2>Selection and unread state in Discovery</h2>
+          <p>In Journal and Subject Monitor, Up/Down selection marks only the selected paper read, just as clicking that card does. Entering a date or journal tab is not a Read All action. The tab's blue dot disappears when no currently visible unread papers remain; unread papers hidden by filters keep their status.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a></div></div>
         </article>
 
@@ -3079,6 +3161,9 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <h2>Browser and your system network</h2>
           <p>The Browser tab uses native WebKit requests and does not proxy pages through the Python server. System proxy or TUN capture can send its traffic into Clash; only then do the active rules determine DIRECT or proxy routing. A DIRECT rule uses your current physical network, which must itself provide institutional access. Gewu Insight neither changes these rules nor guarantees a particular route; use Clash connection records to verify the actual route. See <a href="#browser">Browse, Bookmark, and Revisit Websites</a> for downloads, sign-in limits, and the separate browser profile.</p>
 
+          <h2>Check access to the actual main PDF</h2>
+          <p>An article's title and abstract can be public while its PDF requires a subscription. A working webpage, a DIRECT rule, or a successful open-access download does not establish access to every article. Away from campus, direct traffic uses your present network; use your institution's authorized access method when needed. Gewu does not force Science through a proxy or change Clash/VPN rules.</p>
+          <p>Article pages, PDF services and content-delivery hosts may follow different network routes. APS Harvest is the first direct APS download route; a denied or unavailable response can fall back to background browsing. Science, Nature and ACS also have supported background fallbacks in the native App. These attempts share Gewu Browser's session, but cannot supply missing institutional rights or complete human verification. A clear access-required or timeout message with preserved files is preferable to saving an HTML page as a PDF.</p>
           <h2>Secure-connection failures and VPN interruptions</h2>
           <p>A secure-connection error such as <code>NSURLErrorDomain -1200</code> means WebKit could not complete a secure connection; it does not by itself establish that the site's certificate has expired. Check the network, VPN quota or route, and the Mac's date and time. After restoring the connection, reload the page once and retry the failed download if needed. A change of VPN node can restore the route without any change to Library data. Certificate verification stays enabled.</p>
 
@@ -3100,6 +3185,10 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
             <figcaption><strong>Font Size.</strong> Preview one of five reading sizes. Save keeps the selected size; Cancel restores the previous preference.</figcaption>
           </figure>
 
+
+          <h2>Before the first launch</h2>
+          <p>The supplied native App requires macOS 14 or later, a working <code>python3</code>, and the complete Gewu project folder. Keep that folder in a regular local location such as <code>~/Applications/Gewu Insight</code>. On first launch, the launcher prepares its local Python environment and installs the required dependencies; network access is needed for that setup. Moving only the App into Applications separates it from required source and assets.</p>
+          <p>For an existing installation, follow <a href="#upgrade-installation">Back Up and Upgrade</a> before replacing files. The manual's edition date can change while the product remains Version 1.0.0 / Build 1; a newer manual does not require a fresh Library.</p>
 
           <h2>Normal startup</h2>
           <p>The first window frame contains the warm background, packaged icon, and Starting Gewu Insight panel. The native startup view is installed before the window is shown, so an empty white web background does not precede the branding. The panel stays visible while the local service and first Library view prepare, then fades into the workspace.</p>
@@ -3236,6 +3325,12 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
 
+          <h2 id="browser-key-prompt">A WebCrypto keychain prompt keeps appearing</h2>
+          <p>The current Browser declines persistent webpage-key access before WebKit asks Keychain for the <span class="ui">Gewu Insight WebCrypto Master Key</span>. If that exact prompt still appears, quit Gewu and reopen the updated App from the complete installation folder; an older copy may still be running. Record the App version/build and the dialog's exact wording if it persists. Do not delete the keychain item, reset the Browser profile or allow all applications as a repair. A macOS Passwords or AutoFill authentication request is a separate operation.</p>
+          <h2 id="science-loaded-pdf-help">Science displays a PDF but Save shows Article only</h2>
+          <p>Wait for the Science ePDF reader to finish loading, then reopen <span class="ui">Save to Gewu &gt; Details</span> and check the title, DOI and PDF status. Choose <span class="ui">Use Loaded PDF</span> if offered. A changed document, incomplete transfer or file above 128 MB can prevent the original from being read. Choose a saved local PDF, or save the article alone and attach its PDF later under the same Gewu Key. See <a href="#browser-science-epdf">Save a Science ePDF</a>; a failed fresh download does not prove that the loaded copy is unusable.</p>
+          <h2>The in-app guide and Print Guide look like different editions</h2>
+          <p>The searchable guide is loaded from the project source; Print Guide opens the fixed-layout PDF packaged in the App. If one is older, the installation's source and bundled resources are out of sync. Follow <a href="#upgrade-installation">Back Up and Upgrade</a> to install a complete matching version. For a source build, regenerate the PDF and package it before reopening the App. Clearing Monitor Cache does not replace a bundled guide.</p>
           <h2>A long task keeps returning as Continue</h2>
           <p>That task was paused or interrupted, so its remaining queue is saved. Choose the footer's <span class="ui">Details</span>, or open <span class="ui">Loader &gt; Refresh All Metadata</span> and select the task. Choose <span class="ui">Stop</span> to end it permanently. Completed work remains. Closing the window merely hides it; <span class="ui">Pause</span> deliberately keeps it resumable.</p>
           <h2>Two Paper Files cards seem to be the same file</h2>
@@ -3243,6 +3338,15 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <h2>Contact support</h2>
           <p><span class="ui">Help &gt; Contact Us</span> opens your default email application's draft to <strong>info@gewu-insight.com</strong>, with subject <strong>Gewu Insight — Feedback and Support</strong>. If no email handler is configured, use that address in your preferred mail service. Include the version/build, operation, displayed error and relevant screenshot; never include tokens or passwords. The app does not send the message automatically.</p>
 
+          <h2>Download reports supplements but no main PDF</h2>
+          <p>This reports two separate outcomes: some supplementary PDFs were saved, but the main article did not arrive as a readable PDF. MP4, ZIP, spreadsheets and other non-PDF supplements are skipped by automatic PDF collection. They do not turn a successful main-PDF download into a failure. Check access to the actual main PDF in Gewu Browser, then retry Download or use Save to Gewu with an already-loaded original. See <a href="#browser-save-choices">Choose the right save action</a>.</p>
+
+          <h2>A journal's unread dot returns after changing fields</h2>
+          <p>This is expected when the newly visible field contains unread papers. A tab counts only its currently visible unread results. Click or use Up/Down on each paper you read; opening the tab or changing fields does not acknowledge the whole list. Read history is not reset by the updated rule.</p>
+          <h2>A correction or retraction is missing</h2>
+          <p>For a saved original, check its DOI and request Refresh Info; inspect the source outcomes and Paper Files. In Journal Monitor, choose the notice's publication date and check the Journal and Field filters before expanding Publication updates. Saved papers do not receive a continuous retraction watch. Missing provider relations, delayed indexing or unavailable sources can leave a notice undiscovered. Verify the publisher record when necessary; do not create a duplicate article simply to store its notice.</p>
+          <h2>A mathematical note shows formula source</h2>
+          <p>Built-in Markdown math renders locally. Check paired formula delimiters and keep formulas outside code blocks. Unsupported or oversized expressions remain readable as source. This does not require refreshing the paper's metadata or downloading its PDF again.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#startup">Startup, Monitor Cache, and Text Size</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
@@ -3315,7 +3419,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
       function currentId() {
         try {
           const id = decodeURIComponent(location.hash.replace(/^#/, ''));
-          return topicById.has(id) ? id : 'welcome';
+          return document.getElementById(id)?.closest('.help-topic') ? id : 'welcome';
         } catch (_) {
           return 'welcome';
         }
@@ -3333,7 +3437,8 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
       }
 
       function showTopic(id, options = {}) {
-        const topic = topicById.get(id) || topicById.get('welcome');
+        const target = document.getElementById(id);
+        const topic = topicById.get(id) || target?.closest('.help-topic') || topicById.get('welcome');
         topics.forEach(item => item.classList.toggle('active', item === topic));
         links.forEach(link => {
           const isActive = link.dataset.topic === topic.id;
@@ -3351,7 +3456,9 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
         const activeLink = links.find(link => link.dataset.topic === topic.id);
         if (activeLink) activeLink.scrollIntoView({ block: 'nearest' });
-        if (!options.keepScroll) {
+        if (!options.keepScroll && target && target !== topic && topic.contains(target)) {
+          target.scrollIntoView({ block: 'start', behavior: 'auto' });
+        } else if (!options.keepScroll) {
           window.scrollTo({
             top: 0,
             behavior: options.instant || prefersReducedMotion ? 'auto' : 'smooth'
@@ -3360,7 +3467,8 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
       }
 
       function navigate(id) {
-        const targetLink = links.find(link => link.dataset.topic === id);
+        const owner = document.getElementById(id)?.closest('.help-topic');
+        const targetLink = links.find(link => link.dataset.topic === owner?.id);
         if (targetLink?.hidden) {
           search.value = '';
           runSearch();
@@ -3370,10 +3478,10 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
       }
 
       links.forEach(link => link.addEventListener('click', () => navigate(link.dataset.topic)));
-      document.querySelectorAll('.see-also a').forEach(link => {
+      document.querySelectorAll('.help-topic a[href^="#"]').forEach(link => {
         link.addEventListener('click', event => {
           const id = decodeURIComponent(link.hash.replace(/^#/, ''));
-          if (!topicById.has(id)) return;
+          if (!document.getElementById(id)?.closest('.help-topic')) return;
           event.preventDefault();
           navigate(id);
         });
@@ -3430,7 +3538,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
       showTopic(currentId(), { instant: true });
       runSearch();
-      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
+      requestAnimationFrame(() => showTopic(currentId(), { instant: true }));
     })();
   </script>
 </body>
