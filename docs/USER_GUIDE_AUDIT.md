@@ -1,4 +1,45 @@
-# User Guide audit — September 24, 2026
+# User Guide audits
+
+## Windows source desktop — October 5, 2026
+
+The active Windows Help menu reads `windows/Windows_Preview_Guide.html` and its
+matching PDF. Replaced the short Preview summary with the complete 49-topic
+Windows edition, derived from the shared manual by
+`scripts/build_windows_preview_guide.py`. The shared macOS HTML, TeX, PDF and
+screenshots were not changed in this update.
+
+Checked Windows menu labels in the original 0.1.21 App with Computer Use and
+cross-checked the source launcher, native menus/keyboard routing, Windows UI
+adaptation, Browser, MCP configuration and file classifications. Corrected
+source startup, data location, dynamic ports, close/recovery behavior, Windows
+file associations, Preview Settings, .lnk placements, Chrome bookmark paths,
+Recycle Bin, local MCP paths and platform exclusions. Shared Library, monitors,
+download, metadata, ownership, deduplication and AI grant instructions are retained.
+All 20 runtime file-type labels and 24 MCP tool names occur in the Windows guide.
+
+The searchable HTML embeds the three brand images and uses the sibling PDF;
+it does not present macOS screenshots as Windows UI. No new App screenshots or
+research-data mutations were made. PDF generation reuses the shared semantic
+hierarchy and explicitly keeps Product Identity chapters 4-1 through 4-4 flowing.
+
+Validation: 30 existing Guide/audit tests completed (29 passed, one platform skip),
+seven existing PDF-builder structure checks passed, and Python compilation,
+HTML JavaScript syntax and scoped diff whitespace checks passed. Windows-specific
+checks confirm 49 unique topics, valid HTML targets, 314 valid internal PDF links,
+20 file types, 24 MCP tools and complete font glyph coverage. The PDF has 84 pages;
+all pages were rendered/reviewed as contact sheets, with selected and subsequently
+changed pages inspected separately. Product Identity occupies pages 74–76, with
+4-1 and 4-2 sharing page 74. Evidence and the pre-edit recovery copies are in
+`tmp/user-guide-20261005/`.
+
+The real Help entries were inspected, but opening the HTML through the Windows
+association did not yield a verified guide view. Codex Browser also rejects local
+file URLs; no workaround or association change was attempted. Interactive HTML
+search/navigation and live PDF opening are therefore not claimed as verified.
+The documents are in the active source Help location; no restart, installer,
+application binary, permission, database, commit or push change was needed.
+
+## Historical macOS audit — September 24, 2026
 
 Reviewed the complete 49-topic manual against product commit `e3e0a81` and the
 original running macOS App. The guide edition changes; product version remains
