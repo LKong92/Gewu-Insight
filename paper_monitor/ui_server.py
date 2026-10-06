@@ -40452,12 +40452,12 @@ INDEX_HTML = """<!doctype html>
       const root = $("calendar");
       const structureKey = fmtMonth(state.viewYear, state.viewMonth);
       const firstDay = new Date(state.viewYear, state.viewMonth - 1, 1);
-      const startOffset = (firstDay.getDay() + 6) % 7;
+      const startOffset = firstDay.getDay();
       const days = new Date(state.viewYear, state.viewMonth, 0).getDate();
       if (root.dataset.structureKey !== structureKey) {
         root.innerHTML = "";
         root.dataset.structureKey = structureKey;
-        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].forEach((weekday) => {
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach((weekday) => {
           const element = document.createElement("div");
           element.className = "weekday";
           element.textContent = weekday;
