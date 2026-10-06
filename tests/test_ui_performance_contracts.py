@@ -154,12 +154,10 @@ class UiPerformanceContractTests(unittest.TestCase):
 
     def test_journal_library_round_trip_restores_the_monitor_viewport(self) -> None:
         show_in_library = self.js_function("showPaperInLibrary")
-        add_to_library = self.js_function("addPaperToLibrary")
         open_monitor = self.js_function("openJournalMonitor")
 
         self.assertIn("captureMonitorViewport(article)", show_in_library)
         self.assertIn("state.monitorReturnViewports[monitorViewport.mode] = monitorViewport", show_in_library)
-        self.assertIn("renderCurrentPaperSurface({monitorViewport})", add_to_library)
         self.assertIn("const returnViewport = state.monitorReturnViewports.report", open_monitor)
         self.assertGreater(
             open_monitor.index("restoreMonitorViewport(returnViewport)"),

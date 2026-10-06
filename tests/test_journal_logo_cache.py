@@ -52,7 +52,7 @@ class JournalLogoCacheTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(saved_content, SVG_LOGO)
         self.assertEqual(request.call_count, 1)
-        self.assertIn("cache/journal_logos", str(first))
+        self.assertIn("cache/journal_logos", first.as_posix())
 
     def test_prewarm_only_downloads_configured_or_known_direct_logos(self) -> None:
         raw = {

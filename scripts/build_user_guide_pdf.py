@@ -9,7 +9,7 @@ Pandoc, and compiles a publication-quality PDF with XeLaTeX.
 from __future__ import annotations
 
 import argparse
-import plistlib
+import ast
 import re
 import shutil
 import subprocess
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HTML_SOURCE = ROOT / "paper_monitor" / "user_guide.html"
 TEX_OUTPUT = ROOT / "paper_monitor" / "user_guide.tex"
 PDF_OUTPUT = ROOT / "paper_monitor" / "Gewu_Insight_User_Guide.pdf"
-INFO_PLIST = ROOT / "Gewu Insight.app" / "Contents" / "Info.plist"
+VERSION_SOURCE = ROOT / "paper_monitor" / "__init__.py"
 
 IMAGE_ROUTES = {
     "/api/about-calligraphy": ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png",
@@ -31,6 +31,8 @@ IMAGE_ROUTES = {
     "/api/startup-brand-art": ROOT / "assets" / "branding" / "GewuSealGlyphs.png",
     "/user-guide-assets/library-paper-files.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-paper-files.png",
     "/user-guide-assets/space-workspace.png": ROOT / "assets" / "user-guide" / "screenshots" / "space-workspace.png",
+    "/user-guide-assets/library-table.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-table.png",
+    "/user-guide-assets/shortcut-path.png": ROOT / "assets" / "user-guide" / "screenshots" / "shortcut-path.png",
     "/user-guide-assets/my-publications.png": ROOT / "assets" / "user-guide" / "screenshots" / "my-publications.png",
     "/user-guide-assets/journal-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "journal-monitor.png",
     "/user-guide-assets/subject-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-monitor.png",
@@ -40,8 +42,10 @@ IMAGE_ROUTES = {
     "/user-guide-assets/arxiv-scope.png": ROOT / "assets" / "user-guide" / "screenshots" / "arxiv-scope.png",
     "/user-guide-assets/field-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "field-settings.png",
     "/user-guide-assets/quick-look-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "quick-look-settings.png",
+    "/user-guide-assets/add-to-library-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "add-to-library-settings.png",
     "/user-guide-assets/website-links.png": ROOT / "assets" / "user-guide" / "screenshots" / "website-links.png",
     "/user-guide-assets/ai-access.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-access.png",
+    "/user-guide-assets/ai-write-permissions.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-write-permissions.png",
     "/user-guide-assets/ai-new-connection.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-new-connection.png",
     "/user-guide-assets/pdf-rename-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "pdf-rename-settings.png",
     "/user-guide-assets/font-size.png": ROOT / "assets" / "user-guide" / "screenshots" / "font-size.png",
@@ -97,15 +101,15 @@ SPLIT_TOPIC_HEADING_GROUPS = {"About Gewu Insight"}
 
 
 def app_version() -> tuple[str, str]:
-    try:
-        with INFO_PLIST.open("rb") as handle:
-            values = plistlib.load(handle)
-    except OSError:
-        return "0.1", "development"
-    return (
-        str(values.get("CFBundleShortVersionString") or "0.1"),
-        str(values.get("CFBundleVersion") or "development"),
-    )
+    # Read the release source before packaging; an older installed bundle must
+    # not stamp the new manual with its previous version.
+    values = {}
+    for node in ast.parse(VERSION_SOURCE.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {"__version__", "__build__"}:
+                    values[target.id] = ast.literal_eval(node.value)
+    return str(values["__version__"]), str(values["__build__"])
 
 
 def _new_tag(soup: BeautifulSoup, name: str, text: str | None = None, **attrs: str) -> Tag:
@@ -209,6 +213,13 @@ def clean_guide_html() -> str:
                 continue
             _retarget_copied_headings(clone, mode=mode)
             section.append(clone)
+        # The tall AI Access overview needs its heading and lead on the same
+        # page. Keep this local to that opening, not every figure or chapter.
+        if topic_id == "ai-access":
+            opening_figure = section.find("figure", class_="guide-screenshot")
+            if opening_figure is not None:
+                section.insert(0, _new_tag(output, "p", "GEWUINTROSTART"))
+                opening_figure.insert_after(_new_tag(output, "p", "GEWUINTROEND"))
         body.append(section)
 
     for lead in body.select("p.lead"):
@@ -506,9 +517,11 @@ def latex_preamble(version: str, build: str) -> str:
 \pretocmd{{\subsubsection}}{{\Needspace{{3\baselineskip}}}}{{}}{{}}
 % Product Identity is one continuous reading sequence. Suppress only the
 % chapter's forced break locally; normal page overflow, numbering, TOC entries
-% and labels are still handled by KOMA-Script. Other parts remain unchanged.
+% and labels are still handled by KOMA-Script. Reserve room for a two-line
+% chapter title plus a following subsection so neither title is orphaned.
+% Other parts remain unchanged.
 \newcommand{{\GewuIdentityChapter}}[1]{{%
-  \par\Needspace{{9\baselineskip}}%
+  \par\Needspace{{13\baselineskip}}%
   \let\GewuSavedClearPage\clearpage
   \let\GewuSavedClearDoublePage\cleardoublepage
   \let\clearpage\relax
@@ -546,7 +559,7 @@ def latex_preamble(version: str, build: str) -> str:
   {{\end{{list}}}}
 
 \renewenvironment{{quote}}
-  {{\begin{{tcolorbox}}[enhanced,breakable,colback=GewuPale,colframe=GewuPale,boxrule=0pt,
+  {{\Needspace{{5\baselineskip}}\begin{{tcolorbox}}[enhanced,breakable,colback=GewuPale,colframe=GewuPale,boxrule=0pt,
     borderline west={{1.6pt}}{{0pt}}{{GewuBlue}},arc=1.2mm,left=2.5mm,right=2.5mm,top=1.7mm,bottom=1.7mm,
     before skip=4pt,after skip=5pt,fontupper=\color{{GewuInk}}\small]}}
   {{\end{{tcolorbox}}}}
@@ -602,10 +615,14 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 
 
 LATEX_END = r"""
-\Needspace{7\baselineskip}
+\clearpage
 \section*{Copyright and product notice}
 \addcontentsline{toc}{section}{Copyright and product notice}
-Gewu Insight is proprietary software. Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved.
+Gewu Insight is source-available research software. Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved, except for the limited permissions in the Gewu Insight Academic and Non-Commercial Research License.
+
+The License permits academic/non-commercial research use, including downloading, installing, building, running and modifying the software. Original and modified versions, derivative works and patches may be shared free of charge for those purposes under the same research-use terms, with retained notices and clearly identified modifications. Public research forks and pull requests within those terms need no separate permission. Commercial use, commercial redistribution, sublicensing and integration into commercial products or services require separate prior written authorization. This is not an open-source license. The complete LICENSE in the distribution governs; the same text is included in the App resources. Contact: \href{mailto:info@gewu-insight.com}{info@gewu-insight.com}.
+
+Third-party software, fonts, artwork and research content retain their own terms. The Gewu License does not grant rights in those materials. See THIRD\_PARTY\_NOTICES.md and the dependency and asset audit before redistribution. Independent research outputs do not inherit this software license merely through use of Gewu.
 
 This manual describes the product as shipped at the version printed on the title page. Online services, publisher access, and third-party metadata may change independently of the application.
 \end{document}
@@ -627,6 +644,10 @@ def run(command: list[str], *, cwd: Path) -> None:
 
 
 def prepare_latex_body(source: str) -> str:
+    # Keep the short MCP configuration readable as one example after AI Access
+    # grows; its opening table name must not be stranded on the previous page.
+    source = source.replace("\\begin{verbatim}\n[mcp_servers.gewu-insight]",
+                            "\\Needspace{10\\baselineskip}\n\\begin{verbatim}\n[mcp_servers.gewu-insight]")
     # Scope the continuous-chapter rule by semantic part name, not page numbers
     # or individual chapter titles. Rebuilding or adding text must preserve it.
     parts = re.split(r"(\\part\{[^{}]*\})", source)
@@ -677,6 +698,13 @@ def prepare_latex_body(source: str) -> str:
         "GEWURESULTEND", "\n\\end{GewuResult}"
     )
     # Keep each real UI capture with its explanation, including compact settings.
+    # A marked opening is one measured block, so a page break happens before
+    # its heading rather than between the lead and its tall screenshot.
+    source = source.replace(
+        "GEWUINTROSTART", r"\par\noindent\begin{minipage}{\linewidth}"
+    ).replace(
+        "GEWUINTROEND", r"\end{minipage}\par\medskip"
+    )
     source = source.replace(
         "GEWUFIGURESTART", r"\par\noindent\begin{minipage}{\linewidth}"
     ).replace(

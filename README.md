@@ -1,520 +1,279 @@
 # Gewu Insight
 
-> This is the independent Windows Preview branch `codex/windows-preview-0.1.10-20260910`,
-> based on Mac source commit `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d`.
-> The macOS product continues on `main`. Windows updates must remain on their own branch.
-> See the [migration baseline and feature differences](docs/WINDOWS_MAC_PARITY_TRACKER.md).
+> This is the independent Windows source-desktop branch. Launch with
+> **Start Gewu Insight.cmd** and follow [Windows Desktop from Source](docs/WINDOWS_SOURCE_DESKTOP.md).
+> The macOS product continues on `main`; Windows changes remain on this branch.
+
+
+**A research workspace that keeps papers, their versions, and research context
+connected—from discovery to reuse.**
+
+Gewu Insight brings continuous literature discovery, organization, and reading
+into one workspace. Each paper retains a shared identity as metadata,
+publication versions, supporting files, and research context accumulate,
+building a lasting research record that researchers can inspect, revisit,
+and reuse.
 
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
-Gewu Insight is a local-first desktop workspace for discovering, organizing,
-reading, and preserving scholarly work. It connects a research library,
-versioned paper files, personal publications, and three complementary discovery
-monitors around one persistent paper identity.
+[Website](http://gewu-insight.com) · [Quick start](#quick-start-on-macos) ·
+[Explore the workspace](#explore-the-workspace) ·
+[User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) ·
+[AI & MCP](#work-with-an-ai-client) · [Citation](#citation) ·
+[License](#copyright-and-license)
 
-Gewu Insight is not only an RSS reader, a PDF folder, or unrelated pages.
-It is a personal research information infrastructure in which discovery becomes
-durable, file-backed, and auditable.
+**Version 1.0.0 · Build 1** · Native macOS App · Source-available research software
 
-<p align="center">
-  <img src="assets/gewu-insight-app-icon.png" width="112" alt="Gewu Insight app icon">
-</p>
-
-## A workspace built around the research object
-
-The interface keeps organization, evidence, and discovery close together. A
-paper can move from a monitor into the Library, retain its source provenance,
-gain identifiers and file versions, appear in a Space or My Publications, and
-still resolve to the same persistent paper object.
+Academic/non-commercial research use is permitted under the custom
+[LICENSE](LICENSE). Commercial use requires separate prior written authorization.
 
 <p align="center">
-  <img src="assets/user-guide/screenshots/library-paper-files.png" width="920" alt="Gewu Insight Library with Paper Files">
+  <img src="assets/gewu-insight-app-icon.png" width="96" alt="Gewu Insight app icon">
 </p>
 
-<p align="center"><em>The Library presents real folders and files while Paper Files keeps the current publication, earlier versions, and attachments connected.</em></p>
+<p align="center">
+  <a href="assets/user-guide/screenshots/library-paper-files.png"><img src="assets/user-guide/screenshots/library-paper-files.png" width="920" alt="Library folders, a selected paper's Published version and Preprint in Paper Files, and Paper Details"></a>
+</p>
+
+<p align="center"><em>One paper, connected files: inspect its versions, choose a Default, and read its metadata alongside your Library.</em></p>
+
+## Why Gewu Insight
+
+- **Follow the literature.** Track journals, research topics, and authors through
+  three complementary monitors. Save relevant papers into your own collections.
+- **Organize around your research.** Use Library folders and project Spaces;
+  the same paper can appear in several contexts with one shared identity.
+- **Keep the evidence together.** Read PDFs and Markdown notes, compare versions,
+  and retain supplements, annotations, data, and code in Paper Files.
+- **Continue with context.** Revisit saved reading material, maintain your own
+  publication record, and optionally let an authorized AI client read papers
+  and append analyses with source references.
+
+## Quick start on macOS
+
+**Requirements:** macOS 14 or later, a working `python3` command, and network
+access for the initial dependency installation and online research services.
+The supplied native launcher supports Apple silicon and Intel Macs.
+
+1. **Get the whole project.** Use this repository's **Code → Download ZIP** or
+   clone it. Extract or keep the complete folder in a regular local location,
+   such as `~/Applications/Gewu-Insight`.
+2. **Open `Gewu Insight.app` inside that folder.** Keep it beside
+   `paper_monitor`, `config`, and the other project files. The App is a launcher
+   for this folder-based installation, not a standalone installer.
+3. **Allow the first setup to finish.** The launcher prepares the local Python
+   environment, installs dependencies, and starts the local service and App.
+4. **Try one paper.** Drag a PDF into a Library folder, or visit an article in
+   **Browser** and choose **Save to Gewu**. Inspect its **Paper Files** and
+   **Paper Details**, then create a Space for the project you are working on.
+
+Open **Help → User Guide** in the App for illustrated instructions. If startup
+fails, see [installation and troubleshooting](DISTRIBUTION.md#recipient-requirements)
+and `logs/paper_monitor_launcher.log`; do not delete the database to repair startup.
+For a terminal-based setup, see [the development guide](docs/DEVELOPMENT.md#manual-setup).
+
+## Explore the workspace
+
+Six main tabs connect discovery, reading, organization, and your own publications.
+Spaces and shortcuts are part of the Library workspace. These screenshots show
+the real macOS App; select an image to inspect it at full size.
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="assets/user-guide/screenshots/space-workspace.png" alt="A Gewu Insight Space">
-      <br><strong>Spaces</strong><br>
-      Independent visible workspaces reuse the same paper identities and file
-      relationships without duplicating the underlying research object.
+      <a href="assets/user-guide/screenshots/space-workspace.png"><img src="assets/user-guide/screenshots/space-workspace.png" alt="A project Space in the Library workspace"></a>
+      <br><strong>Library &amp; Spaces</strong><br>
+      Organize papers and standalone files in folders and project Spaces.
+      Browse List or Table View, search a collection, and sort by Time added.
+      Shortcuts provide another route to existing folders.
     </td>
     <td width="50%" valign="top">
-      <img src="assets/user-guide/screenshots/my-publications.png" alt="My Publications in Gewu Insight">
+      <a href="assets/user-guide/screenshots/my-publications.png"><img src="assets/user-guide/screenshots/my-publications.png" alt="My Publications with authorship roles and citation metrics"></a>
       <br><strong>My Publications</strong><br>
-      Personal authorship roles, citation evidence, ordering, comments, and
-      exports stay connected to the shared paper record.
+      Maintain your publication list, authorship roles, ordering, and citation
+      evidence. Export to Word, LaTeX, PDF, or an Overleaf project. Manual roles
+      and ordering survive metric refreshes.
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="assets/user-guide/screenshots/journal-monitor.png" alt="Journal Monitor in Gewu Insight">
+      <a href="assets/user-guide/screenshots/journal-monitor.png"><img src="assets/user-guide/screenshots/journal-monitor.png" alt="Journal Monitor displaying Nature papers, a calendar, and article figures"></a>
       <br><strong>Journal Monitor</strong><br>
-      Browse venue and arXiv updates by date, source, field, and journal while
-      preserving paper-level provenance.
+      Follow selected journals and arXiv updates. Browse by date, venue, and
+      field, inspect figures and abstracts, and save papers with their source
+      information. Your subscription choices persist across updates.
     </td>
     <td width="50%" valign="top">
-      <img src="assets/user-guide/screenshots/subject-monitor.png" alt="Subject Monitor in Gewu Insight">
+      <a href="assets/user-guide/screenshots/subject-monitor.png"><img src="assets/user-guide/screenshots/subject-monitor.png" alt="Subject Monitor with a saved research topic and dated results"></a>
       <br><strong>Subject Monitor</strong><br>
-      Follow reusable research topics with subject-specific calendar counts,
-      explicit refresh state, and durable results.
+      Build reusable topics from search terms and review their dated results.
+      Selecting a calendar date opens saved results; refreshing a topic is a
+      separate action, with its status visible.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="assets/user-guide/screenshots/author-monitor.png"><img src="assets/user-guide/screenshots/author-monitor.png" alt="Author Monitor displaying Hong Ding's profile and publications"></a>
+      <br><strong>Author Monitor</strong><br>
+      Follow selected researchers through supported scholarly profiles, browse
+      their publications, and identify new unread papers. Refreshes respect
+      source limits and show cooldowns when a service restricts access.
+    </td>
+    <td width="50%" valign="top">
+      <a href="assets/user-guide/screenshots/browser.png"><img src="assets/user-guide/screenshots/browser.png" alt="The built-in Browser displaying a publisher PDF with Save to Gewu"></a>
+      <br><strong>Browser</strong><br>
+      Read publisher pages and PDFs in the built-in WebKit browser, with tabs,
+      bookmarks, and local history. Save to Gewu lets you review the paper's
+      identity, destination, and file type before importing it.
     </td>
   </tr>
 </table>
 
-The sixth main tab, **Browser**, provides a visible native WebKit browser with
-local Favorites-only Home, nested bookmarks, searchable local history, inline
-PDFs, and session-aware downloads. Home uses the entire main area for the fixed
-Favorites folder, without a Google webpage, separate search box or divider.
-Enter search terms in the address field to search Google, or enter a URL directly.
-Home is available offline, including after restarting the App; Reload on Home
-refreshes local bookmarks. Site icons can need network and otherwise show initials.
-Searches, webpages and sign-in still require a connection. Opening google.com
-explicitly displays an ordinary webpage, with no Home-specific styling or zoom.
-Nested Favorites use breadcrumbs; excess tiles use Previous/Next controls rather
-than vertical scrolling. Sidebar and page status bars share the same bottom height.
-A separate tab strip sits below the
-address toolbar. Use the top-right **New Tab** (+ / ⌘T), a tab's × (⌘W), or
-**Open Link in New Tab** in a webpage context menu. Command-click links also
-opens a tab; bookmarks, Favorites and History have **Open in New Tab** actions.
-Each tab retains its document, position and independent Back/Forward history;
-switching tabs does not reload or stop another tab's load. Each tab lazily keeps
-at most a Home and a browsing surface, with the same persistent Browser profile
-for sign-ins. Tabs are memory-only, up to 32, and not restored after App quit.
-Closing the final tab opens a fresh Home; bookmarks and saved history remain.
-The sidebar can be resized or hidden, with a compact **B** menu, New Folder,
-and Search at its bottom. B contains Import, Export, Sync from Safari, and
-Sync from Chrome. Manual sync reads one explicitly chosen local bookmark file,
-then one selected folder and its descendants. It adds entries and updates
-source-owned unchanged items while preserving local edits and source deletions;
-it never writes back or reads passwords, history, or cookies. If macOS denies
-Safari file access, use an HTML export with Import. Browser arrows connect its
-toolbar, webpage tabs, Favorites, and visible sidebar to the primary workspace
-tabs; ordinary webpage arrows retain scrolling, with Up at the top returning
-to chrome. Editing/custom controls retain their keys (⌘L then Escape returns
-to the toolbar). Library's existing root-navigation exception is unchanged.
-Bookmarks and
-folders support Safari/Chrome HTML import/export (including a Safari ZIP with
-one bookmark HTML file), and visible sites use a bounded local favicon cache.
-The Passwords toolbar button opens macOS Passwords without creating a password
-vault. A deliberate, unmodified click on a clearly marked HTTPS login username
-or current-password field can invoke the system's native AutoFill > Passwords
-menu action. Search, ordinary email, registration, verification-code and uncertain
-fields are excluded. Each field kind is offered at most once per site per App
-session, including cancellation; right-click AutoFill remains available manually.
-This only triggers the system picker: site matching, authentication and actual
-filling remain system/site-dependent, not Safari-equivalent guaranteed AutoFill.
-No credential values, password lists or clipboard data are read. Viewable PDF attachments
-stay inline; legacy HTTP GET redirects can retry once over HTTPS without
-disabling certificate checks. Bookmarks and
-history live in SQLite; cookies and cache use an independent persistent WebKit
-profile. Browser follows the system network without changing proxy or Clash
-rules. Website actions in Library, My Publications, Journal Monitor, Subject
-Monitor, and Author Monitor switch to Browser and open a new webpage tab,
-preserving existing pages. This includes publisher/Scholar/profile links,
-preprints, citation sources, remote PDFs, Note links, and the Overleaf export
-entry. The first link uses Browser's unused initial tab without loading Home
-first. Local PDFs still open in Preview; file/folder actions stay native.
-Browser's explicit Open in Safari remains a compatibility escape hatch.
-The browser-hosted CLI UI opens an ordinary tab instead of invoking Safari on
-the server. See the [website-entry audit](docs/WORKSPACE_BROWSER_LINKS.md).
+For an existing collection, **Folder Loader** imports a directory tree. Portable
+folder export includes files and a manifest for importing their relationships
+into another Gewu workspace; see the [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf).
 
-The complete illustrated workflow—including Author Monitor, Browser, file versions,
-portable export, backup, settings, and keyboard navigation—is available in the
-[offline User Guide PDF](paper_monitor/Gewu_Insight_User_Guide.pdf).
+Browser tab controls, bookmark import and sync, downloads, and system Passwords
+behavior are covered in the [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf)
+and [Browser documentation](#documentation). Website links from the other
+workspaces open in Browser; local PDFs open in macOS Preview.
+
+## One paper, connected files and evidence
+
+A paper's **Gewu Key** connects its identifiers, metadata, files, and placements
+across the workspace. Adding that paper to another folder or Space reuses the
+shared record. An ordinary standalone non-PDF file can also be stored in the
+Library, without being assigned a public Gewu Key.
+
+**Paper Files** keeps the Published version, accepted manuscript, preprints,
+supplements, annotated copies, and other attachments associated with that paper.
+You can inspect classifications and choose which file is **Default**. An explicit
+Default is retained when other versions arrive; supplements do not automatically
+replace the main article simply because they are PDFs.
+
+Use in-app **Quick Look** to preview PDFs and Markdown notes, or open a local PDF
+in **Preview**. Managed documents remain real files: the Default occupies the
+main managed location, and other Paper Files belong in **Associated Files**.
+Additional placements can use Finder aliases to the same originals. Move,
+rename, and reassign managed files through the App so records and disk paths
+stay coordinated. See [managed file layout](docs/MANAGED_FILE_LAYOUT.md).
+
+## Work with an AI client
+
+AI Access is **optional and off by default**. Gewu provides a local API and an
+MCP adapter so an AI client can work with explicitly authorized collections.
+Enabling access does not itself call a model, upload a library, or start an
+analysis job.
+
+A typical workflow is: select a paper → let the client read its authorized files
+→ save a Markdown analysis with source file and page references → review the
+note in Paper Files. A later authorized session can retrieve the saved paper
+and analysis to continue the work.
+
+In **Setting → AI Access**, create a named connection, choose its collection
+and expiry, and grant the operations it needs:
+
+- **Read:** metadata, directory browsing, and file contents have defined access
+  boundaries; file reading and directory browsing are separately enabled.
+- **Save analyses:** append Markdown notes with source references without
+  overwriting existing Paper Files or earlier analyses.
+- **Organize and import:** separately allow Space/folder creation, prepared
+  paper or standalone-file imports, Paper Files attachment, moves, or renames
+  within selected Library and Space roots. My Publications write access is
+  not exposed.
+
+Paper imports require metadata supplied by the AI client and reuse existing
+DOI/arXiv identities. They do **not** automatically run Resolve; resolving an
+existing paper is a separate permission and call. Connections can expire or be
+revoked, and existing connections do not gain new write permissions on upgrade.
+
+Your AI client may send authorized content to its chosen model provider. These
+grants govern API/MCP access; they do not restrict a program's independent
+operating-system access to local files. Review generated analyses against their
+sources. See [AI Access setup, tools, and permissions](docs/AI_ACCESS.md).
+
+## Local data and online services
+
+**SQLite is the source of truth** for paper identities, relationships, file
+records, and workspace state. PDFs and attachments remain on disk; reports and
+exports do not replace the database. Back up the database **and all managed file
+roots together**, or back up the complete project while the App and service are
+stopped. See [backup and update instructions](docs/DEVELOPMENT.md#safe-updates-and-backups).
+
+The workspace uses a local-first architecture, with online services supporting
+discovery, metadata, citation counts, and publisher access. Availability can depend on a
+service's limits, the network or VPN exit address, and institutional access.
+Gewu uses pacing and cooldowns; it does not bypass paywalls or access controls.
+Configure optional service keys in **Setting → Literature Data Source**.
 
 ## Platform support
 
-Gewu Insight separates a portable Python, SQLite, and web-interface core from
-platform-specific desktop integration.
+- **macOS** — the current native desktop release, with Finder, Preview, Quick
+  Look, Dock, and native drag-and-drop integration. This is the primary
+  development and validation platform.
+- **Windows** — developed separately on the experimental Windows branch.
+  This macOS baseline and its screenshots do not establish Windows feature parity;
+  consult that branch's own build instructions and limitations.
 
-- **macOS** — the current native desktop release. It is the primary development
-  and validation platform and includes Finder, Preview, Quick Look, Dock, and
-  native drag-and-drop integration.
-- **Windows** — an experimental x64 installer is now built locally on the
-  `codex/windows-preview-0.1.10-20260910` branch. It includes an official embedded Python
-  runtime, self-contained .NET shell and WebView2 workspace, with managed `.lnk`
-  placements. It is **not feature complete or accepted as equivalent to macOS**.
-  Use a new test Library only. See [Windows Preview status](docs/WINDOWS_PREVIEW_STATUS.md)
-  and the matching [Windows HTML guide](windows/Windows_Preview_Guide.html) /
-  [Windows PDF guide](windows/Windows_Preview_Guide.pdf) for supported boundaries,
-  installation requirements and remaining acceptance work.
+The Python, SQLite, and web-interface core is separated from native desktop
+integration. See [release scope](docs/RELEASE_1.0.0.md) and
+[distribution requirements](DISTRIBUTION.md).
 
-Instructions that name Finder, Preview, Quick Look, or the Dock describe the
-current macOS integration rather than a limitation of the underlying research
-data model.
+## Documentation
 
-## Core design commitments
+| Start here | What it covers |
+| --- | --- |
+| [Illustrated User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) | Daily workflows, settings, shortcuts, backup, and troubleshooting; also available through Help → User Guide. |
+| [AI Access & MCP](docs/AI_ACCESS.md) | Client setup, collection grants, reading, analysis saves, imports, moves, and renames. |
+| [Browser: Save to Gewu](docs/BROWSER_CAPTURE.md) | Reviewing article identity, PDF candidates, file types, and import destinations. |
+| [Browser: keyboard & bookmarks](docs/BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md) | Navigation, bookmark import/export, and explicit one-way sync. |
+| [Browser: PDFs](docs/BROWSER_PDF_PREVIEW.md) · [Passwords](docs/BROWSER_PASSWORD_AUTOFILL.md) | PDF viewing and the boundaries of system password integration. |
+| [Managed file layout](docs/MANAGED_FILE_LAYOUT.md) | Default files, Associated Files, aliases, and recovery boundaries. |
+| [Installation & distribution](DISTRIBUTION.md) | Folder-based installation, startup diagnostics, and clean packages. |
+| [Development guide](docs/DEVELOPMENT.md) | Manual setup, architecture, CLI commands, builds, updates, and verification. |
+| [Licensing explained](docs/LICENSING.md) · [Contributing](CONTRIBUTING.md) | Research use and sharing, reserved commercial rights, and contribution terms. |
 
-- **Local ownership** — the live database and managed research files remain in
-  the local project.
-- **Visible evidence** — PDFs and attachments stay as real files that Finder,
-  Preview, and other applications can inspect.
-- **Continuity over time** — a preprint, later DOI, Published version,
-  annotations, and personal contexts can accumulate around one paper object.
-- **Explicit state and provenance** — complete, empty, partial, failed,
-  downloaded, imported, and retried are distinct states.
-- **Researcher control** — automation assists discovery and maintenance;
-  scientific interpretation and organization remain with the researcher.
+The [HTML manual](paper_monitor/user_guide.html) is the source for the bundled
+PDF. [Guide coverage and screenshot provenance](docs/USER_GUIDE_AUDIT.md) are
+recorded separately from the product overview.
 
-Local-first does not mean offline-only. Publisher pages, scholarly APIs,
-profiles, and preprint services contribute evidence when network access is
-available, but they do not become the owner of the workspace.
+## Citation
 
-## System architecture
+If you use Gewu Insight in your research, please cite the accompanying paper.
+The manuscript is being prepared for arXiv; its identifier and link will be added
+here after it is posted. Until then, the provisional reference is:
 
-```text
-External research sources
-  journals · arXiv · metadata services · scholarly profiles
-                         │
-                         ▼
-              Local application service
-        identity resolution · scheduling · validation
-                    │                 │
-                    ▼                 ▼
-            SQLite state core   Visible research files
-        identity · relations     PDFs · versions · notes
-        resources · provenance   supplements · data · code
-                    │                 │
-                    └────────┬────────┘
-                             ▼
-                Personal Research Workspace
-        Library · Spaces · My Publications · Monitors
-```
+> Kong, L. & Wu, Z. A stateful research information infrastructure for scientific
+> discovery. Manuscript in preparation (2026).
 
-### SQLite is the source of truth
+Citation metadata is also available in [CITATION.cff](CITATION.cff) for GitHub's
+**Cite this repository** feature.
 
-`data/paper_monitor.sqlite` is authoritative for paper identities, external
-identifiers, relationships, folder placements, resource roles, source
-provenance, preferences, and operational state. JSON, Markdown, HTML, Word,
-LaTeX, and PDF outputs are exports or reading artifacts—not a second database.
-
-The storage layer applies additive migrations when a newer app first opens an
-older database. Existing paper identities, file paths, monitored-journal
-choices, and provenance are preserved. Back up the database and managed files
-together before a major update or migration.
-
-### Persistent paper objects
-
-A scholarly work is not reduced to one filename or one DOI. One stable Gewu Key
-can connect:
-
-- DOI, arXiv identifier, title, authors, venue, and dates;
-- Journal, Subject, and Author Monitor provenance;
-- Library folders, Spaces, and My Publications;
-- Published version, accepted manuscript, preprint revisions, and imported PDFs;
-- supplements, annotated copies, notes, presentations, data, code, and images;
-- read state, download state, retries, failures, and timestamps.
-
-Copying a paper to another folder creates another placement for the shared
-paper; it does not manufacture another scholarly identity.
-
-### Versioned, validated files
-
-Paper Files groups the current publication PDF, other versions, supplements,
-and attachments without pretending they are another Finder folder level.
-
-- Only publication-version PDFs can become current.
-- The Published version remains current when a preprint or accepted manuscript
-  arrives later.
-- Supplements and other attachments cannot become current merely because they
-  use the PDF format.
-- Exact SHA-256 detects byte-identical files; a content fingerprint can relate
-  clean and annotated copies while preserving their differences.
-- PDF validation rejects HTML responses, empty files, and truncated pseudo-PDFs
-  before they become registered resources.
-- Coordinated database and filesystem operations use rollback or compensating
-  recovery instead of leaving half-completed moves.
+<!-- After arXiv posting, update this reference and CITATION.cff together with
+     the confirmed author list, title, year, arXiv identifier and canonical URL. -->
 
 ## Name and Chinese origin
 
-Gewu Insight is known in Chinese as **格物洞见**.
-
-- **格物 · Gewu** — stay close to the research object: the paper, identifiers,
-  versions, sources, files, and relationships remain inspectable.
-- **洞见 · Insight** — let understanding grow through connected evidence,
-  repeated reading, comparison, and the researcher's judgment.
-
-The corresponding credo is: **让研究对象保持可见，让证据保持可追，让洞见能够积累。**
-
-## Five connected work areas
-
-### Library
-
-The Library is a Finder-like reading and organization workspace with:
-
-- multi-column folder navigation, keyboard control, drag and drop, copy/paste,
-  rename, Recycle, and recoverable deletion;
-- shortcut tabs and independent Spaces;
-- List and Table views plus scoped search;
-- Paper Details with DOI, arXiv, metadata, citations, figures, folders, and file
-  actions;
-- Paper Files navigation for current PDFs, earlier versions, supplements, and
-  attachments;
-- Quick Look inside the app and full opening in macOS Preview;
-- portable folder export with a verified manifest for relationship-aware import.
-
-Library, shortcuts, and Spaces share the same Paper Files keyboard path: select
-a paper, press Right Arrow to enter its resources, navigate with Up/Down, and
-press Left Arrow to return to the same paper.
-
-### My Publications
-
-My Publications reuses the shared paper and file model while adding personal
-authorship context:
-
-- profile discovery by name or exact Google Scholar URL;
-- manual co-first, corresponding-author, and review/perspective roles;
-- citation metrics from supported services;
-- manual ordering, highlights, export inclusion, and citation-comment reports;
-- LaTeX PDF, LaTeX source, Overleaf ZIP, and Word exports.
-
-Manual authorship roles and ordering are preserved during metric refreshes.
-
-### Journal Monitor
-
-Journal Monitor records papers by venue and publication date. It supports:
-
-- durable, SQLite-backed journal subscriptions;
-- add, disable, restore, and drag-to-reorder behavior;
-- per-source fetch progress and targeted journal retry;
-- calendar, journal, preprint, and field filters;
-- journal totals that remain independent of the active Field Filter;
-- local caching of configured journal logos;
-- inline mathematical typesetting in titles and abstracts;
-- paper-level provenance linked to the canonical paper, fetch run, and source.
-
-The journal list is personal database state. `config/journals.json` supplies
-initial/default source definitions; replacing source code does not reset a
-user's active list or re-enable a disabled journal.
-
-### Subject Monitor
-
-Subject Monitor discovers papers for reusable research topics using literal,
-case-insensitive terms. Its candidate layer can draw from supported local feed
-data and scholarly metadata services, then applies topic filtering and
-deduplication before display.
-
-Selecting a calendar date loads stored results; it does not silently start a
-network request. Refreshing all subjects and retrying one subject are explicit
-actions. Zenodo records are rejected during ingestion and cached-result display.
-
-### Author Monitor
-
-Author Monitor follows researchers through supported scholarly profiles:
-
-- exact-profile selection and an initial read baseline;
-- later unread/new-paper detection;
-- resumable identifier and abstract enrichment;
-- deliberately paced profile requests and visible cooldowns;
-- locally cached profile photographs, with manual photo override;
-- monitor deletion that removes the author relationship without deleting shared
-  Library papers or PDFs.
-
-## A continuous research loop
-
-```text
-Acquire → Identify → Resolve → Remember
-   ↑                              │
-   └──────── saved context ───────┘
-```
-
-1. **Acquire** through a monitor, Folder Loader, a DOI/arXiv identifier, or a
-   local file.
-2. **Identify** using external identifiers, title, authors, source evidence, and
-   existing records.
-3. **Resolve** metadata, resource roles, available versions, file paths,
-   fingerprints, and the current PDF.
-4. **Remember** provenance, placements, reading state, authorship, completion,
-   failures, and personal organization.
-
-## Quick start on macOS
-
-The repository includes the native launcher:
-
-```text
-Gewu Insight.app
-```
-
-Double-click the app. On first launch, the launcher can prepare the local Python
-environment, start the service at `127.0.0.1:8765`, wait for the first Library
-view, and open the native application window.
-
-Requirements:
-
-- macOS 10.15 or later;
-- a working `python3` command;
-- network access for dependency installation and online research services.
-
-Keep the project outside protected or synchronized folders when possible. A
-normal local development path is safer than Desktop, Documents, Downloads, or a
-cloud-provider placeholder directory.
-
-If startup fails, inspect:
-
-```text
-logs/paper_monitor_launcher.log
-```
-
-Do not delete SQLite as a startup repair.
-
-## Manual setup and build
-
-On Windows, **[Start Gewu Insight.cmd](Start%20Gewu%20Insight.cmd)** opens the
-independent **0.1.20 desktop shell with local Python/web source**, using the
-selected Library and retaining the native Browser and desktop integration.
-Close any existing Gewu window or Source Web service first. See
-[Windows Desktop from Source](docs/WINDOWS_SOURCE_DESKTOP.md) for setup and
-updates. The external-browser interface is optional through `--web`.
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-python3 -m paper_monitor ui --port 8765
-```
-
-Rebuild the native app after changing native UI, bundled assets, or app identity:
-
-```bash
-./scripts/build_macos_app.sh
-```
-
-Then open `http://127.0.0.1:8765/api/health` or launch the rebuilt app.
-
-## Safe updates and migration
-
-Before pulling a major update:
-
-1. Quit Gewu Insight and make sure the local server has stopped.
-2. Inspect `git status --short`; do not overwrite uncommitted product changes.
-3. Back up the complete project, especially SQLite and every managed file root.
-4. Pull or install the new version and rebuild `Gewu Insight.app`.
-5. Start the app once so additive database migrations can run.
-6. Verify a current PDF, an older version, an attachment, a Space, My
-   Publications, and one monitor before deleting the backup.
-
-Never migrate by copying only the database or only the visible Library folder.
-Either choice leaves half of the managed workspace behind.
-
-## Data layout
-
-```text
-data/paper_monitor.sqlite       authoritative SQLite database
-data/Library/                   visible main Library and current files
-data/Spaces/                    independent Space roots
-data/My Publications/          managed files for personal publications
-data/Associated Files/         versions, supplements, and attachments
-data/cache/journal_logos/       rebuildable local logo cache
-reports/                        generated notes and reports
-logs/                           launcher and runtime diagnostics
-config/journals.json            initial/default journal source definitions
-```
-
-Move and classify managed files through Gewu Insight. Manual Finder changes can
-leave the saved resource path and the physical location inconsistent.
-
-## Network services and credentials
-
-Gewu Insight can use OpenAlex, Crossref, Semantic Scholar, NASA ADS, PubMed,
-arXiv, scholarly profiles, feeds, and publisher pages where supported.
-
-- Publisher and API availability can vary by network, VPN exit address, rate
-  limit, institution, and access policy.
-- The app uses pacing, cooldowns, and bounded retries; it does not bypass
-  paywalls, CAPTCHA, browser verification, or access controls.
-- OpenAlex, Semantic Scholar, and NASA ADS credentials can be managed in
-  Open Source Settings.
-- arXiv discovery coverage is managed separately in **Setting > arXiv Scope
-  Settings**. One or more archive groups can be selected across primary
-  subjects; the default is Physics > Condensed Matter.
-- Credentials are local configuration. Do not write keys into source code,
-  logs, tests, commits, screenshots, or issue reports.
-
-Optional polite API identity values can be provided through the environment:
-
-```bash
-export OPENALEX_MAILTO=your.name@example.edu
-export CROSSREF_MAILTO=your.name@example.edu
-```
-
-## User Guide
-
-**Setting → AI Access** provides optional, revocable access for AI clients through
-Gewu Keys. It is off by default. Create a connection with a paper collection and
-permissions, then copy its MCP configuration into your AI client. Reading file
-contents and adding Markdown analyses are separate permissions; ordinary App use
-needs no AI token. See [AI Access and API v1](docs/AI_ACCESS.md) for setup, limits
-and the access boundary.
-
-Choose **Help → User Guide** inside the app. The offline manual covers:
-
-- product philosophy and the persistent paper object;
-- SQLite, visible files, provenance, and safe state changes;
-- Library, Spaces, Paper Files, and version selection;
-- Folder Loader, portable export, backup, and migration;
-- My Publications and all three monitors;
-- Browser tabs, retained Home, local address suggestions, bookmarks, history,
-  website-link routing, downloads, and system Passwords limitations;
-- Open Source Settings, publisher access, contextual keyboard shortcuts,
-  startup, and troubleshooting.
-
-The source manual is [paper_monitor/user_guide.html](paper_monitor/user_guide.html).
-The [PDF manual](paper_monitor/Gewu_Insight_User_Guide.pdf) is built from that
-same source and bundled with the macOS App. The
-[September 2026 guide audit](docs/USER_GUIDE_AUDIT.md) records topic coverage,
-implementation evidence, screenshot provenance, and verification boundaries.
-
-## Useful CLI commands
-
-```bash
-# Journal Monitor default window
-python3 -m paper_monitor journal
-
-# Explicit publication window
-python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD
-
-# Download one paper
-python3 -m paper_monitor download PAPER_ID
-
-# Export diagnostic JSON without replacing SQLite
-python3 -m paper_monitor export-json reports/export.json
-```
-
-## Development and verification
-
-Project rules are documented in [AGENTS.md](AGENTS.md). Product runtime belongs
-on `main`; benchmark-only instrumentation, data, and artifacts must remain in a
-separate local benchmark worktree and must never be pushed to this repository.
-
-Typical verification:
-
-```bash
-.venv/bin/python -X pycache_prefix=/private/tmp/gewu-pycache \
-  -m py_compile paper_monitor/*.py paper_monitor/sources/*.py
-
-.venv/bin/python -X pycache_prefix=/private/tmp/gewu-pycache \
-  -m unittest discover -s tests -v
-
-git diff --check
-```
-
-Use temporary, isolated SQLite databases in tests. Do not modify or rebuild a
-user's production database for verification.
-
-## Distribution
-
-Create a clean collaborator package with:
-
-```bash
-scripts/make_release.sh
-```
-
-The release workflow excludes local databases, managed research files,
-generated notes, credentials, logs, virtual environments, and other personal
-artifacts. See [DISTRIBUTION.md](DISTRIBUTION.md).
+Gewu Insight is known in Chinese as **格物洞见**. The name draws on **格物致知**
+and expresses a research outlook shaped by the practice of physics.
+
+- **格物 · Gewu** — begin with concrete phenomena, experimental observations,
+  and questions from nature; keep research in contact with the world it seeks
+  to understand.
+- **洞见 · Insight** — seek the patterns and mechanisms behind phenomena
+  through physical pictures, intuition, imagination, and insightful guesses.
+  Mathematics serves as a tool for developing and expressing that understanding.
+
+The workspace supports this practice by keeping papers, versions, supporting
+files, and notes connected, so researchers can revisit experimental results,
+compare physical pictures, and pursue emerging ideas. Questions, interpretation,
+and scientific judgment remain with the researcher. Read more in the
+[User Guide's explanation of the name](paper_monitor/user_guide.html#visual-identity).
+
+**Investigate nature through experimental phenomena; seek insight through
+physical pictures and intuition.**
+
+（从实验现象中格物，以物理图像和直觉求洞见。）
 
 ## Copyright and license
 
@@ -523,10 +282,22 @@ Developed with coding assistance from **OpenAI Codex**.
 
 Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.
 
-Gewu Insight is proprietary software and is **not** distributed under the MIT
-License or another open-source license. Viewing or forking this repository does
-not grant permission to reuse, modify, redistribute, sublicense, or sell its
-copyrighted contents. See [LICENSE](LICENSE) for the complete notice.
+Gewu Insight is **source-available research software** under the custom
+**Gewu Insight Academic and Non-Commercial Research License**, not an
+open-source license. The [LICENSE](LICENSE) permits academic/non-commercial
+research use, including downloading, installing, running, studying, and modifying
+it. Original and modified versions, derivatives, and patches may be shared free
+of charge for permitted research under the same terms, retaining notices and
+identifying modifications. This includes public research forks and pull requests.
 
-Third-party components and services remain subject to their own licenses and
-terms.
+Commercial use, commercial redistribution, sublicensing, and integration into
+commercial products or services require **separate prior written authorization**.
+Contact [info@gewu-insight.com](mailto:info@gewu-insight.com).
+Independent research outputs do not inherit the software license merely by using
+Gewu. A pull request does not transfer its author's copyright or grant additional
+commercial rights; see the [contribution policy](CONTRIBUTING.md).
+
+Third-party components, scholarly content, and services retain their own terms.
+See [third-party notices](THIRD_PARTY_NOTICES.md) and the
+[dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md), including
+outstanding font and artwork permissions.

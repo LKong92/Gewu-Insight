@@ -12,6 +12,7 @@
 - SQLite is the source of truth; JSON is export-only.
 - Obtain paper files through configured Gewu MCP: `get_paper_file` provides an authorized read-only client copy for local reading/rendering/OCR, not direct Library/SQLite access. Write derived files separately; `save_analysis` only appends classified Markdown notes and never edits existing Paper Files or earlier analyses.
 - Keep Markdown reports and analysis notes useful as user-facing reading artifacts.
+- Do not create or update help documents, user guides, or their PDFs unless the user explicitly requests them; prioritize software changes and necessary validation.
 - Prefer scoped edits that reuse existing `paper_monitor` modules.
 - Avoid filtering by user research keywords unless explicitly requested.
 - UI labels should stay in English unless the user asks otherwise.
@@ -26,10 +27,11 @@
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
 - Windows development and releases stay on a separate Windows branch (`codex/windows-preview-0.1.10-20260910` or an explicitly chosen successor). Never merge or push Windows changes into remote `main` or any macOS branch without a new explicit user request.
+- Current Windows delivery is **0.1.21 desktop from local source**: use `Start Gewu Insight.cmd`, `dist/windows-preview-0.1.21`, and `.venv`. Installed 0.1.19 was explicitly uninstalled on 2026-09-29; archived copies are recovery backups, not active apps. Continue the user's source-only/no-signing-required route; do not reinstall an older Preview or switch to external-browser mode without a new request.
 - Windows parity excludes Apple Passwords/AutoFill, Safari source sync, and macOS system Quick Look; the user does not need those Apple-specific capabilities.
 - Windows product updates include backing up, installing the verified Preview, reopening the original App, and checking its version/data. Do not wait for a separate installation request after the user asks to continue fixes or feature alignment. Respect an explicit source-only request or an actual installation blocker; commit/push still require explicit authorization.
 - Keep local upgrades efficient: reuse existing installation/backup scripts and validated artifacts when unchanged. Keep a verified recovery backup and check the installed version, startup and data integrity; repeat or broaden checks only for changed behavior, failures or unresolved concerns. Batch independent checks instead of adding many separate tool rounds.
-- Windows updates require the signed release builder and a fresh `scripts/test_windows_release.ps1` check before closing the original App. Do not recreate temporary unsigned installers or treat a previously allowed unsigned version as release acceptance. A static pass still requires isolated startup and installed-version/data checks.
+- Packaged Windows installer updates require the signed release builder and a fresh `scripts/test_windows_release.ps1` check before closing the original App. Do not recreate temporary unsigned installers or treat a previously allowed unsigned version as release acceptance. A static pass still requires isolated startup and installed-version/data checks; the selected source-desktop workflow does not install a release package.
 - Notify the user promptly once installation and essential verification succeed, before lengthy documentation cleanup. Keep the handoff concise; when explaining elapsed time, distinguish actual installer time from preparation, backup, verification and documentation time.
 
 ## Commit Messages
@@ -46,7 +48,8 @@
 - Run explicit journal window: `python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD`
 - Download paper: `python3 -m paper_monitor download PAPER_ID`
 - Compile check: `python3 -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
-- Clickable launcher: `Gewu Insight.app`
+- Windows clickable launcher: `Start Gewu Insight.cmd` (desktop from source, 0.1.21 shell).
+- macOS clickable launcher: `Gewu Insight.app`.
 
 ## Key Paths
 

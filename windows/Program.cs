@@ -29,6 +29,7 @@ internal sealed class BrowserPage
     public string Url = "";
     public int Generation;
     public string OriginPaperId = "";
+    public string OriginLibraryItemId = "";
     public string OriginUrl = "";
     public readonly List<BrowserHistoryEntry> History = [new(null)];
     public int HistoryIndex;
@@ -124,7 +125,7 @@ internal sealed partial class WorkspaceWindow : Form
             } catch (Exception error) { log?.WriteLine("Naming Rule menu: " + error.Message); }
         };
         settings.DropDownItems.Add(naming);
-        foreach (var (label, function) in new[] { ("PDF Rename Settings", "openPdfRenameSettings"), ("Preview Settings", "openQuickLookSettings"), ("Website Links", "openWebsiteLinkSettings"), ("AI Access", "openAIAccessSettings"), ("arXiv Scope Settings", "openArxivSettings"), ("Open Source Settings", "openCitationSettings"), ("Field Settings", "openFieldSettings"), ("Font Size", "openFontSizeSettings") }) {
+        foreach (var (label, function) in new[] { ("Add to Library", "openLibraryDestinationSettings"), ("PDF Rename Settings", "openPdfRenameSettings"), ("Preview Settings", "openQuickLookSettings"), ("Website Links", "openWebsiteLinkSettings"), ("AI Access", "openAIAccessSettings"), ("arXiv Scope Settings", "openArxivSettings"), ("Literature Data Sources", "openCitationSettings"), ("Field Settings", "openFieldSettings"), ("Font Size", "openFontSizeSettings") }) {
             settings.DropDownItems.Add(label, null, async (_, _) => { if (workspace.CoreWebView2 != null) await workspace.CoreWebView2.ExecuteScriptAsync(function + "()"); });
         }
         settings.DropDownItems.Add("Clear Monitor Cache", null, async (_, _) => {
@@ -138,6 +139,8 @@ internal sealed partial class WorkspaceWindow : Form
         help.DropDownItems.Add("Windows Preview Guide", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.html")) { UseShellExecute = true }));
         help.DropDownItems.Add("Windows Preview Guide (PDF)", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.pdf")) { UseShellExecute = true }));
         help.DropDownItems.Add("Windows Preview Status", null, (_, _) => MessageBox.Show(File.Exists(Path.Combine(root, "PREVIEW.txt")) ? File.ReadAllText(Path.Combine(root, "PREVIEW.txt")) : "Windows development build. Feature parity has not been accepted.", "Windows Preview"));
+        help.DropDownItems.Add("Contact Us", null, (_, _) => Process.Start(new ProcessStartInfo("mailto:info@gewu-insight.com") { UseShellExecute = true }));
+        help.DropDownItems.Add("Project Website", null, (_, _) => Process.Start(new ProcessStartInfo("https://gewu-insight.com") { UseShellExecute = true }));
         menu.Items.AddRange([file, edit, viewMenu, loader, settings, help]); MainMenuStrip = menu; Controls.Add(menu);
     }
 
@@ -160,6 +163,7 @@ internal sealed partial class WorkspaceWindow : Form
         var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataRoot, "webview", "workspace"));
         remoteEnvironment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataRoot, "webview", "browser"));
         await workspace.EnsureCoreWebView2Async(environment);
+        ConnectWorkspaceRecovery();
         workspace.GotFocus += (_, _) => DismissMenus();
         workspace.CoreWebView2.Settings.AreHostObjectsAllowed = false;
         workspace.CoreWebView2.NavigationStarting += (_, e) => { if (!Trusted(e.Uri)) e.Cancel = true; };
@@ -261,12 +265,13 @@ internal sealed partial class WorkspaceWindow : Form
         await EmitAsync(new { @event = "state", tab_id = selected?.Id, url = selected?.Url ?? "", title = selected?.Title ?? "Home", home = selected?.Home ?? true, loading = selected?.Loading ?? false, progress = 0.5, canBack = selected != null && selected.HistoryIndex > 0, canForward = selected != null && selected.HistoryIndex < selected.History.Count - 1 });
     }
 
-    async Task OpenPageAsync(string url, bool newTab, string originPaperId = "")
+    async Task OpenPageAsync(string url, bool newTab, string originPaperId = "", string originLibraryItemId = "")
     {
         if (url.Length > 0 && !PublicUrl(url)) throw new InvalidOperationException("Only public HTTP(S) websites are allowed.");
         if (newTab || selected == null) { if (pages.Count >= 32) throw new InvalidOperationException("Close a webpage tab before opening another (32 tab limit)."); selected = new BrowserPage(); pages.Add(selected); }
         var page = selected;
         page.OriginPaperId = originPaperId;
+        page.OriginLibraryItemId = originLibraryItemId;
         page.OriginUrl = originPaperId.Length > 0 ? url : "";
         if (url.Length == 0) { await ShowHomeAsync(page); return; }
         await EnsureBrowserViewAsync(page);
@@ -287,13 +292,14 @@ internal sealed partial class WorkspaceWindow : Form
             core.Settings.AreHostObjectsAllowed = false; core.Settings.IsWebMessageEnabled = false;
             core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
             ConnectNavigation(page);
+            await ConnectLoadedPdfsAsync(page);
             ConnectBrowserKeys(page);
             core.FaviconChanged += async (_, _) => await favicons.RequestAsync(core.Source, core.FaviconUri);
             core.NewWindowRequested += async (_, e) => {
                 using var deferral = e.GetDeferral();
                 e.Handled = true;
                 if (!PublicUrl(e.Uri) || pages.Count >= 32 || stopping) return;
-                var popup = new BrowserPage(); pages.Add(popup);
+                var popup = new BrowserPage { OriginPaperId = page.OriginPaperId, OriginLibraryItemId = page.OriginLibraryItemId, OriginUrl = page.OriginUrl }; pages.Add(popup);
                 try {
                     await EnsureBrowserViewAsync(popup);
                     if (stopping || !pages.Contains(popup)) return;
@@ -316,6 +322,7 @@ internal sealed partial class WorkspaceWindow : Form
                 if (document && !PdfSources.Approved(e.DownloadOperation.Uri)) {
                     e.Cancel = true; e.Handled = true; _ = EmitAsync(new { @event = "error", message = PdfSources.Unverified }); return;
                 }
+                if (document && BeginPdfPreview(page, e)) return;
                 using var save = new SaveFileDialog { FileName = Path.GetFileName(e.ResultFilePath), Title = "Save Download" };
                 if (save.ShowDialog(this) == DialogResult.OK) e.ResultFilePath = save.FileName; else e.Cancel = true;
                 e.Handled = true;
@@ -326,8 +333,8 @@ internal sealed partial class WorkspaceWindow : Form
     }
 
     void LayoutBrowser() { foreach (var page in pages) if (page.View != null) { page.View.Bounds = browserBounds; page.View.Visible = (browserVisible || (browserActive && capturePreparing)) && page == selected && !page.Home; if (page.View.Visible) page.View.BringToFront(); } if (suggestions.Visible) suggestions.BringToFront(); }
-    async Task ClosePageAsync(string id) { var page = pages.FirstOrDefault(p => p.Id == id); if (page == null) return; pages.Remove(page); page.View?.Dispose(); if (selected == page) selected = pages.LastOrDefault(); if (selected == null) await OpenPageAsync("", true); LayoutBrowser(); await SendStateAsync(); }
-    static string TextValue(JsonElement e, string key) => e.TryGetProperty(key, out var value) ? value.GetString() ?? "" : "";
+    async Task ClosePageAsync(string id) { var page = pages.FirstOrDefault(p => p.Id == id); if (page == null) return; pages.Remove(page); ForgetLoadedPdfs(page); page.View?.Dispose(); if (selected == page) selected = pages.LastOrDefault(); if (selected == null) await OpenPageAsync("", true); LayoutBrowser(); await SendStateAsync(); }
+    static string TextValue(JsonElement e, string key) => e.TryGetProperty(key, out var value) ? value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : value.ValueKind == JsonValueKind.Number ? value.GetRawText() : "" : "";
 
     async Task BrowserCommandAsync(JsonElement command)
     {
@@ -343,8 +350,8 @@ internal sealed partial class WorkspaceWindow : Form
                 double scale = workspace.Width / Math.Max(1.0, command.GetProperty("viewportWidth").GetDouble());
                 browserBounds = new Rectangle(workspace.Left + (int)(command.GetProperty("x").GetDouble() * scale), workspace.Top + (int)(command.GetProperty("y").GetDouble() * scale), Math.Max(0, (int)(command.GetProperty("width").GetDouble() * scale)), Math.Max(0, (int)(command.GetProperty("height").GetDouble() * scale)));
                 browserVisible = command.GetProperty("visible").GetBoolean(); LayoutBrowser(); break;
-            case "new-tab": await OpenPageAsync(TextValue(command, "url"), true, TextValue(command, "origin_paper_id")); break;
-            case "navigate": await OpenPageAsync(TextValue(command, "url"), false, TextValue(command, "origin_paper_id")); break;
+            case "new-tab": await OpenPageAsync(TextValue(command, "url"), true, TextValue(command, "origin_paper_id"), TextValue(command, "origin_library_item_id")); break;
+            case "navigate": await OpenPageAsync(TextValue(command, "url"), false, TextValue(command, "origin_paper_id"), TextValue(command, "origin_library_item_id")); break;
             case "home": await OpenPageAsync("", false); break;
             case "select-tab": selected = pages.FirstOrDefault(p => p.Id == TextValue(command, "tab_id")) ?? selected; LayoutBrowser(); await SendStateAsync(); break;
             case "close-tab": await ClosePageAsync(TextValue(command, "tab_id")); break;

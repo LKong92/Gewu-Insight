@@ -39,8 +39,15 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
-from . import publication_jobs
+from . import finder_alias
+from . import folder_rename
+from .file_layout import normalize_files, sync_associated_aliases, finish_aliases, bundle_name
+from . import search_matching, author_profile_retry
+from .library_destination import active_folders, default_add_destination, save_default_add_folder
+from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
 from .publication_deletion import delete_publications
+from .recycle import delete_recycle_selection, preview_recycle_selection
+from .file_placement import active_directories, move_original, rescue_active_original
 from .publication_errors import report_publication_error
 from .workflow_store import (publication_work_snapshot, preserve_subject_history,
                              subject_revision, subject_window_preserved)
@@ -63,9 +70,11 @@ from .config import (
     load_config,
 )
 from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha256_for_file
+from .resource_dedup import serialize_writes as serialize_paper_file_writes
 from .download import (
     convert_word_document_to_pdf,
     download_paper,
+    paper_download_lock,
     is_nature_reference_pdf_url,
     normalize_doi,
     publisher_browser_candidate,
@@ -76,6 +85,7 @@ from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .pdf_utils import is_valid_pdf_bytes, is_valid_pdf_file, merge_pdfs
+from .science_pdf import is_science_first_release_pdf, science_main_pdf_rejection, merge_science_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import (
@@ -182,32 +192,6 @@ SEMANTIC_INFLUENTIAL_CACHE: dict[tuple[str, int], tuple[float, list[dict[str, An
 SEMANTIC_INFLUENTIAL_RATE_LIMITED_UNTIL: dict[str, float] = {}
 
 
-MACOS_TRASH_JXA = r'''
-function run(argv) {
-  ObjC.import("Foundation");
-  const source = $.NSURL.fileURLWithPath($(argv[0]).stringByStandardizingPath);
-  const manager = $.NSFileManager.defaultManager;
-  const destination = Ref();
-  const error = Ref();
-  const ok = manager.trashItemAtURLResultingItemURLError(source, destination, error);
-  const sourceStillExists = manager.fileExistsAtPath(source.path);
-  if (!ok && sourceStillExists) {
-    let detail = "macOS refused the Trash operation";
-    try {
-      if (error[0]) detail = ObjC.unwrap(error[0].localizedDescription);
-    } catch (_) {
-    }
-    throw new Error(detail);
-  }
-  try {
-    if (destination[0]) return ObjC.unwrap(destination[0].path);
-  } catch (_) {
-  }
-  return "";
-}
-'''
-
-
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
 FETCH_PROGRESS_LOCK = threading.Lock()
 GOOGLE_SCHOLAR_REQUEST_LOCK = threading.Lock()
@@ -217,7 +201,7 @@ LIBRARY_IMPORT_JOBS_LOCK = threading.Lock()
 MY_PUBLICATION_METRICS_JOBS: dict[str, dict[str, Any]] = {}
 MY_PUBLICATION_METRICS_JOBS_LOCK = threading.Lock()
 AUTHOR_MONITOR_ENRICHMENT_JOBS: dict[str, dict[str, Any]] = {}
-AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK = threading.Lock()
+AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK = threading.RLock()
 ACTIVE_FETCH_DATES: set[str] = set()
 ACTIVE_THEME_FETCH_DATES: set[str] = set()
 ACTIVE_AUTHOR_MONITOR_IDS: set[int] = set()
@@ -482,6 +466,13 @@ def run_ui_server(
         configure_semantic_scholar_api_key(
             credential_storage.get_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, "")
         )
+        if (not documentation_mode
+                and db_path.parent.resolve() == LIBRARY_LOCAL_COPY_ROOT.resolve().parent):
+            # Only replay unfinished move journals before workers can touch the
+            # same files. No Library scan, layout migration or database backup.
+            from .file_layout_journal import recover
+            folder_rename.recover(credential_storage)
+            recover(credential_storage)
     finally:
         credential_storage.close()
     prewarm_author_monitor_photo_cache(db_path)
@@ -496,6 +487,7 @@ def run_ui_server(
         threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_author_monitor_scheduler, args=(db_path,), daemon=True).start()
+        threading.Thread(target=author_metadata_work.run_scheduler, args=(db_path,), daemon=True).start()
         publication_jobs.start_workers(db_path)
 
     documentation_mode_enabled = documentation_mode
@@ -526,6 +518,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     documentation_mode = False
 
     server_version = "GewuInsightUI/0.1"
+
+    def handle(self):
+        with scholar_access.database(self.configured_db_path):
+            super().handle()
 
     def end_headers(self):
         if getattr(self, "workspace_cookie_pending", False):
@@ -592,10 +588,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 content_type = "text/javascript; charset=utf-8" if filename.endswith(".js") else "text/css; charset=utf-8"
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type=content_type)
                 return
-            if parsed.path in {"/markdown-preview-worker.js", "/markdown-it.min.js"}:
+            if parsed.path in {"/markdown-preview-worker.js", "/markdown-it.min.js", "/js-yaml.min.js", "/katex.min.js"}:
                 filename = {
                     "/markdown-preview-worker.js": "markdown_preview_worker.js",
                     "/markdown-it.min.js": "vendor/markdown-it/markdown-it.min.js",
+                    "/js-yaml.min.js": "vendor/js-yaml/js-yaml.min.js",
+                    "/katex.min.js": "vendor/katex/katex.min.js",
                 }[parsed.path]
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type="text/javascript; charset=utf-8")
                 return
@@ -670,6 +668,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/theme-report":
                 self.handle_theme_report(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/library/metadata-refresh/jobs":
+                storage = Storage(self.configured_db_path)
+                try:
+                    history = metadata_jobs.listing(storage)
+                    visible = [j for j in history if j["status"] != "completed"] + [j for j in history if j["status"] == "completed"][:30]
+                    self.send_json({"jobs": [{k: v for k, v in j.items() if k != "logs"} for j in visible]})
+                finally:
+                    storage.close()
+                return
             if parsed.path == "/api/library/import-folder/progress":
                 self.handle_library_import_folder_progress(parse_qs(parsed.query))
                 return
@@ -712,6 +719,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/page-proxy":
                 self.handle_page_proxy(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/library/changes":
+                self.handle_library_changes(parse_qs(parsed.query))
+                return
             if parsed.path == "/api/library/bootstrap":
                 self.handle_library_bootstrap(parse_qs(parsed.query))
                 return
@@ -744,6 +754,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/quick-look":
                 self.handle_get_quick_look_settings()
+                return
+            if parsed.path == "/api/settings/add-to-library":
+                self.handle_get_library_destination_settings()
                 return
             if parsed.path == "/api/settings/website-links":
                 self.handle_get_website_link_settings()
@@ -846,6 +859,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path in {"/api/paper-files/role", "/api/paper-files/version-role"}:
                 self.handle_set_paper_file_role(payload)
                 return
+            if parsed.path == "/api/paper-files/reassign":
+                self.handle_reassign_paper_file(payload)
+                return
             if parsed.path == "/api/paper-files/delete":
                 self.handle_delete_paper_file(payload)
                 return
@@ -932,6 +948,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/quick-look":
                 self.handle_set_quick_look_settings(payload)
+                return
+            if parsed.path == "/api/settings/add-to-library":
+                self.handle_set_library_destination_settings(payload)
                 return
             if parsed.path == "/api/settings/website-links":
                 self.handle_set_website_link_settings(payload)
@@ -1130,6 +1149,19 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/import-folder/start":
                 self.handle_start_library_import_folder(payload)
+                return
+            if parsed.path == "/api/library/metadata-refresh/control":
+                storage = Storage(self.configured_db_path)
+                try:
+                    job = metadata_jobs.control(storage, str(payload.get("job_id") or ""), str(payload.get("action") or ""))
+                except (KeyError, ValueError) as exc:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                finally:
+                    storage.close()
+                if job["status"] == "queued":
+                    metadata_jobs.start(self.configured_db_path)
+                self.send_json({"job": job})
                 return
             if parsed.path == "/api/library/metadata-refresh/start":
                 self.handle_start_library_metadata_refresh(payload)
@@ -1385,6 +1417,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             resources = storage.list_paper_resources(paper_id)
             resolved = storage.resolve_default_paper_resource(paper_id)
+            from .publication_notices import for_paper
+            notices = for_paper(storage,paper['paper_id'])
             paper = storage.get_paper(paper_id) or paper
         finally:
             storage.close()
@@ -1398,6 +1432,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "default_resource_id": int((resolved or {}).get("id") or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
                 "files": paper_resources_to_api(resources),
+                "publication_notices": notices,
             }
         )
 
@@ -1432,63 +1467,64 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        storage = Storage(self.configured_db_path)
-        try:
-            force_download = bool(payload.get("force"))
-            target_dir = local_copy_dir_for_download_context(storage, payload)
-            if target_dir is None:
-                target_dir = preferred_local_pdf_dir_for_paper(storage, paper_id)
-            if target_dir:
-                reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
-            download_snapshot = snapshot_primary_resource_before_download(
-                storage,
-                paper_id,
-                force=force_download,
-            )
+        with paper_download_lock(self.configured_db_path, paper_id):
+            storage = Storage(self.configured_db_path)
             try:
-                result = download_paper(
-                    storage=storage,
-                    paper_id=paper_id,
-                    target_dir=target_dir,
-                    force=force_download,
-                )
-                register_downloaded_paper_resource(
+                force_download = bool(payload.get("force"))
+                target_dir = local_copy_dir_for_download_context(storage, payload)
+                if target_dir is None:
+                    target_dir = preferred_local_pdf_dir_for_paper(storage, paper_id)
+                if target_dir:
+                    reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
+                download_snapshot = snapshot_primary_resource_before_download(
                     storage,
                     paper_id,
-                    result=result,
-                    snapshot=download_snapshot,
+                    force=force_download,
                 )
+                try:
+                    result = download_paper(
+                        storage=storage,
+                        paper_id=paper_id,
+                        target_dir=target_dir,
+                        force=force_download,
+                    )
+                    register_downloaded_paper_resource(
+                        storage,
+                        paper_id,
+                        result=result,
+                        snapshot=download_snapshot,
+                    )
+                finally:
+                    cleanup_download_resource_snapshot(download_snapshot)
+                if target_dir:
+                    reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
+                if target_dir:
+                    context = clean_text(str(payload.get("context") or "")).lower()
+                    if context == "my-publications":
+                        sync_my_publication_alias(storage, paper_id)
+                    elif context in {"library", "workspace", "space"}:
+                        folder_id = int(payload.get("folder_id") or 0)
+                        item_id = int(payload.get("item_id") or 0)
+                        if item_id:
+                            item = storage.get_library_item(item_id)
+                            if item:
+                                folder_id = int(item.get("folder_id") or folder_id or 1)
+                        if folder_id:
+                            sync_alias_for_library_item(storage, paper_id, folder_id)
+                sync_all_pdf_aliases_for_paper(storage, paper_id)
+                files_snapshot = paper_files_state_payload(storage, paper_id)
+                paper = storage.get_paper(paper_id)
             finally:
-                cleanup_download_resource_snapshot(download_snapshot)
-            if target_dir:
-                reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
-            if target_dir:
-                context = clean_text(str(payload.get("context") or "")).lower()
-                if context == "my-publications":
-                    sync_my_publication_alias(storage, paper_id)
-                elif context in {"library", "workspace", "space"}:
-                    folder_id = int(payload.get("folder_id") or 0)
-                    item_id = int(payload.get("item_id") or 0)
-                    if item_id:
-                        item = storage.get_library_item(item_id)
-                        if item:
-                            folder_id = int(item.get("folder_id") or folder_id or 1)
-                    if folder_id:
-                        sync_alias_for_library_item(storage, paper_id, folder_id)
-            sync_all_pdf_aliases_for_paper(storage, paper_id)
-            files_snapshot = paper_files_state_payload(storage, paper_id)
-            paper = storage.get_paper(paper_id)
-        finally:
-            storage.close()
-        response_payload: dict[str, Any] = {
-            "result": result,
-            "paper": paper_to_api(paper) if paper else None,
-            "paper_files": [files_snapshot],
-        }
-        browser_fallback = published_pdf_browser_fallback(paper, result)
-        if browser_fallback:
-            response_payload["browser_fallback"] = browser_fallback
-        self.send_json(response_payload)
+                storage.close()
+            response_payload: dict[str, Any] = {
+                "result": result,
+                "paper": paper_to_api(paper) if paper else None,
+                "paper_files": [files_snapshot],
+            }
+            browser_fallback = published_pdf_browser_fallback(paper, result)
+            if browser_fallback:
+                response_payload["browser_fallback"] = browser_fallback
+            self.send_json(response_payload)
 
     def handle_manual_pdf(self) -> None:
         fields, files = self.read_multipart_body()
@@ -1724,6 +1760,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             }
         )
 
+    def handle_reassign_paper_file(self, payload: dict[str, Any]) -> None:
+        from .file_reassignment import reassign_paper_file
+        storage = Storage(self.configured_db_path)
+        try:
+            result = reassign_paper_file(storage, clean_text(str(payload.get("paper_id") or "")),
+                int(payload.get("resource_id") or 0), target_key=clean_text(str(payload.get("target_key") or "")),
+                new_title=clean_text(str(payload.get("new_title") or "")), folder_id=int(payload.get("folder_id") or 0),
+                target_paper_id=clean_text(str(payload.get("target_paper_id") or "")))
+            response = {"reassignment": result, "paper_files": paper_files_state_payloads(storage,
+                         [result["source_paper_id"], result["target_paper_id"]])}
+        except (ValueError, KeyError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Could not reassign Paper File")
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not move the file to another paper. Refresh Paper Files and try again.")
+            return
+        finally:
+            storage.close()
+        self.send_json(response)
+
     def handle_delete_paper_file(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
         resource_id = int(payload.get("resource_id") or 0)
@@ -1816,6 +1873,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "source_path is required")
             return
         storage = Storage(self.configured_db_path)
+        publisher_main_resource_id = 0
         try:
             publisher_download_kind = clean_text(str(payload.get("publisher_download_kind") or ""))
             if publisher_download_kind in {"aaas-supplement-pdf", "publisher-supplement-file"}:
@@ -1843,6 +1901,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 )
             files_snapshot = paper_files_state_payload(storage, paper_id)
             paper = storage.get_paper(paper_id)
+            if publisher_download_kind == "aaas-published-pdf":
+                for resource in storage.list_paper_resources(paper_id, ensure_primary=False):
+                    path = storage.resource_local_path(resource)
+                    if path and Path(path).expanduser().resolve() == target_path:
+                        publisher_main_resource_id = int(resource["id"])
+                        break
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
@@ -1858,7 +1922,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None, "paper_files": [files_snapshot]})
+        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None, "paper_files": [files_snapshot], "publisher_main_resource_id": publisher_main_resource_id})
 
     def handle_library(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
@@ -1875,6 +1939,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(snapshot)
+
+    def handle_library_changes(self, query: dict[str, list[str]]) -> None:
+        from .library_live import changes
+        storage = Storage(self.configured_db_path)
+        try:
+            result = changes(storage, since=first(query, "since"),
+                             folder_ids=query.get("folder_id", []),
+                             paper_id=str(first(query, "paper_id") or ""))
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(result)
 
     def handle_library_search(self, query: dict[str, list[str]]) -> None:
         search_query = clean_text(first(query, "q") or "")[:300]
@@ -1925,6 +2003,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            paper_id = storage.resolve_paper_id(paper_id)
             paper = storage.get_paper(paper_id)
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -1937,7 +2016,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             navigation = library_navigation_snapshot(storage)
         finally:
             storage.close()
-        self.send_json({"items": items, **navigation})
+        self.send_json({"paper_id": paper_id, "items": items, **navigation})
 
     def handle_my_publications(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
@@ -2040,17 +2119,23 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     "unreadCount": sum(int(item.get("unread_count") or 0) for item in authors),
                     "checkedAt": now_iso(),
                     "scholarCooldown": google_scholar_global_cooldown(storage),
+                    "metadataWork": author_metadata_work.snapshot(storage),
                     "indexReady": bool(cache_status.get("ready")),
                     "indexPendingCount": int(cache_status.get("pending_count") or 0),
                 }
                 if not payload["indexReady"]:
                     request_author_monitor_card_cache_build(self.configured_db_path)
             elif first(query, "index") == "1":
-                payload = author_monitor_index_snapshot(storage)
+                payload = author_monitor_index_snapshot(
+                    storage, include_metadata_work=first(query, "cards_only") != "1"
+                )
                 if not payload.get("indexReady"):
                     request_author_monitor_card_cache_build(self.configured_db_path)
             else:
-                payload = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
+                payload = author_monitor_snapshot(
+                    storage, author_monitor_id=author_monitor_id,
+                    include_metadata_work=first(query, "cards_only") != "1",
+                )
         finally:
             storage.close()
         self.send_json(payload)
@@ -2551,6 +2636,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json(read_state)
 
     def handle_enrich_author_monitor(self, payload: dict[str, Any]) -> None:
+        with AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK:
+            self._handle_enrich_author_monitor(payload)
+
+    def _handle_enrich_author_monitor(self, payload: dict[str, Any]) -> None:
         author_monitor_id = int(payload.get("author_id") or 0)
         paper_id = clean_text(payload.get("paper_id") or "")
         force = bool(payload.get("force"))
@@ -2561,6 +2650,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             priority_queued = bool(
                 paper_id
                 and force
+                and not active.get("automatic")
                 and queue_author_monitor_enrichment_priority(str(active["job_id"]), paper_id)
             )
             self.send_json({
@@ -2674,11 +2764,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
             work = publication_work_snapshot(storage)
+            refreshed_files = paper_files_state_payloads(storage, [])
         finally:
             storage.close()
         if not self.documentation_mode:
             publication_jobs.start_workers(self.configured_db_path)
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications, "work": work})
+        self.send_json({"publication": my_publication_to_api(publication), "publications": publications, "work": work,
+                        "paper_files": refreshed_files})
 
     def handle_import_google_scholar_publications(self, payload: dict[str, Any]) -> None:
         profile_url = str(payload.get("url") or "").strip()
@@ -3224,26 +3316,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             folder_api: dict[str, Any] = {}
+            rename_result: dict[str, Any] = {}
             tabs = library_workspace_tabs(storage)
             index = library_navigation_tab_index(tabs, payload)
             label = " ".join(str(payload.get("label") or "").split()) or str(tabs[index].get("label") or f"Space {index + 1}")
             tabs[index]["label"] = label[:80]
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if root_folder_id:
-                pdf_move_plan = folder_tree_pdf_move_plan(storage, root_folder_id)
-                folder = storage.rename_library_folder(folder_id=root_folder_id, name=label[:80])
-                apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
+                folder, rename_result = folder_rename.rename(storage, root_folder_id, label[:80], workspace_tabs=tabs)
                 tabs[index]["root_folder_id"] = int(folder.get("id") or root_folder_id)
                 tabs[index]["label"] = str(folder.get("name") or label)[:80]
                 folder_api = library_folder_to_api(folder, storage=None, include_native_path=False)
-            save_library_workspace_tabs(storage, tabs)
+            else:
+                save_library_workspace_tabs(storage, tabs)
             snapshot = library_navigation_snapshot(storage)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"folder": folder_api, **snapshot})
+        self.send_json({"folder": folder_api, **rename_result, **snapshot})
 
     def handle_add_library_workspace_doi(self, payload: dict[str, Any]) -> None:
         self.handle_add_library_navigation_paper({**payload, "tab_type": "workspace"})
@@ -3490,22 +3582,18 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"job_id": job_id, "job": get_library_import_job(job_id)})
 
     def handle_start_library_metadata_refresh(self, payload: dict[str, Any]) -> None:
-        metadata_mode = normalize_metadata_refresh_mode(payload.get("metadata_mode"))
-        skip_days = int(payload.get("skip_days") or 3)
-        skip_days = max(0, min(30, skip_days))
-        job_id = create_library_metadata_refresh_job(metadata_mode=metadata_mode, skip_days=skip_days)
-        thread = threading.Thread(
-            target=run_library_metadata_refresh_job,
-            kwargs={
-                "job_id": job_id,
-                "db_path": self.configured_db_path,
-                "metadata_mode": metadata_mode,
-                "skip_days": skip_days,
-            },
-            daemon=True,
-        )
-        thread.start()
-        self.send_json({"job_id": job_id, "job": get_library_import_job(job_id)})
+        storage = Storage(self.configured_db_path)
+        try:
+            folder_id = int(payload["folder_id"]) if payload.get("folder_id") is not None else None
+            job = metadata_jobs.create(storage, mode=normalize_metadata_refresh_mode(payload.get("metadata_mode")),
+                skip_days=max(0, min(30, int(payload.get("skip_days", 3)))), folder_id=folder_id)
+        except (TypeError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        metadata_jobs.start(self.configured_db_path)
+        self.send_json({"job_id": job["job_id"], "job": job})
 
     def handle_start_library_identifier_recovery(self, payload: dict[str, Any]) -> None:
         skip_days = int(payload.get("skip_days") or 7)
@@ -3527,13 +3615,23 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         job_id = first(query, "job_id") or first(query, "id")
         job = get_library_import_job(job_id)
         if not job:
+            storage = Storage(self.configured_db_path)
+            try:
+                job = metadata_jobs.get(storage, job_id)
+            finally:
+                storage.close()
+        if not job:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown import job")
             return
         self.send_json({"job": job})
 
     def handle_stop_library_import_folder(self, payload: dict[str, Any]) -> None:
         job_id = str(payload.get("job_id") or "")
-        job = request_stop_library_import_job(job_id)
+        storage = Storage(self.configured_db_path)
+        try:
+            job = request_stop_library_import_job(job_id, storage=storage)
+        finally:
+            storage.close()
         if not job:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown import job")
             return
@@ -3675,17 +3773,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
-            pdf_move_plan = folder_tree_pdf_move_plan(storage, folder_id) if storage.get_library_folder(folder_id) else []
-            folder = storage.rename_library_folder(folder_id=folder_id, name=name)
-            apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
+            folder, rename_result = folder_rename.rename(storage, folder_id, name)
             snapshot = library_snapshot(storage) if include_snapshot else {}
             folder_api = library_folder_to_api(folder, storage)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"folder": folder_api, **snapshot})
+        self.send_json({"folder": folder_api, **rename_result, **snapshot})
 
     def handle_color_library_folder(self, payload: dict[str, Any]) -> None:
         folder_id = int(payload.get("folder_id") or 0)
@@ -3741,55 +3837,60 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        storage = Storage(self.configured_db_path)
-        try:
-            target_folder = None
-            if payload.get("unsorted"):
-                target_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME)
-                folder_id = int(target_folder.get("id") or 1)
-            else:
-                target_folder = storage.get_library_folder(folder_id)
-                if not target_folder:
-                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library or Space folder was not found")
+        with paper_download_lock(self.configured_db_path, paper_id):
+            storage = Storage(self.configured_db_path)
+            try:
+                target_folder = None
+                if payload.get("unsorted"):
+                    target_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME)
+                    folder_id = int(target_folder.get("id") or 1)
+                else:
+                    if not payload.get("folder_id"):
+                        folder_id = int(default_add_destination(storage, create=True)["folder_id"])
+                    target_folder = storage.get_library_folder(folder_id)
+                    if not target_folder:
+                        self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library or Space folder was not found")
+                        return
+                    recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
+                    if recycle_id and library_folder_is_within(storage, folder_id, recycle_id):
+                        self.send_error_json(HTTPStatus.BAD_REQUEST, "Recycle cannot be used as an Add to Library target")
+                        return
+                paper = storage.get_paper(paper_id)
+                if not paper:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                     return
-                recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
-                if recycle_id and library_folder_is_within(storage, folder_id, recycle_id):
-                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Recycle cannot be used as an Add to Library target")
-                    return
-            paper = storage.get_paper(paper_id)
-            if not paper:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
-                return
-            if payload.get("refresh_metadata"):
-                paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
-            item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
-            if item and not item.get("display_name"):
-                naming_rule = library_naming_rule(storage)
-                item = storage.rename_library_item(
-                    item_id=int(item["id"]),
-                    name=default_library_item_display_name(paper, rule=naming_rule),
-                )
-            if item:
-                reconcile_paper_pdf_storage(
-                    storage,
-                    paper_id,
-                    target_dir=local_copy_dir_for_library_folder(storage, folder_id),
-                )
-                sync_alias_for_library_item(storage, paper_id, folder_id)
-            target_folder_api = library_folder_to_api(target_folder, storage) if target_folder else None
-            updated_paper = storage.get_paper(paper_id) or paper
-            updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
-            updated_paper = updated_papers[0] if updated_papers else updated_paper
-            item_api = library_item_to_api(item, updated_paper) if item else {}
-            snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
-        finally:
-            storage.close()
-        self.send_json({
-            "item": item_api,
-            "folder": target_folder_api,
-            "paper": paper_to_api(updated_paper),
-            **snapshot,
-        })
+                if payload.get("refresh_metadata"):
+                    paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
+                item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+                if item and not item.get("display_name"):
+                    naming_rule = library_naming_rule(storage)
+                    item = storage.rename_library_item(
+                        item_id=int(item["id"]),
+                        name=default_library_item_display_name(paper, rule=naming_rule),
+                    )
+                if item:
+                    reconcile_paper_pdf_storage(
+                        storage,
+                        paper_id,
+                        target_dir=local_copy_dir_for_library_folder(storage, folder_id),
+                    )
+                    sync_alias_for_library_item(storage, paper_id, folder_id)
+                target_folder_api = library_folder_to_api(target_folder, storage) if target_folder else None
+                updated_paper = storage.get_paper(paper_id) or paper
+                updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
+                updated_paper = updated_papers[0] if updated_papers else updated_paper
+                item_api = library_item_to_api(item, updated_paper) if item else {}
+                refreshed_files = paper_files_state_payloads(storage, [])
+                snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
+            finally:
+                storage.close()
+            self.send_json({
+                "item": item_api,
+                "folder": target_folder_api,
+                "paper": paper_to_api(updated_paper),
+                "paper_files": refreshed_files,
+                **snapshot,
+            })
 
     def handle_get_library_naming_rule(self) -> None:
         storage = Storage(self.configured_db_path)
@@ -3858,6 +3959,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(response)
+
+    def handle_get_library_destination_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            self.send_json(default_add_destination(storage))
+        finally:
+            storage.close()
+
+    def handle_set_library_destination_settings(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            self.send_json(save_default_add_folder(storage, payload.get("folder_id")))
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        finally:
+            storage.close()
 
     def handle_get_website_link_settings(self) -> None:
         storage = Storage(self.configured_db_path)
@@ -3944,7 +4061,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError:
             allowed = False
         if not allowed:
-            self.send_error_json(HTTPStatus.FORBIDDEN, "Reveal is available only from local Open Source Settings")
+            self.send_error_json(HTTPStatus.FORBIDDEN, "Reveal is available only from local Literature Data Source")
             return
         provider = payload.get("provider")
         if provider not in {"openalex", "semantic_scholar", "ads"}:
@@ -4337,6 +4454,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             deleted = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
+            refreshed_files = deleted.get("paper_files", []) + paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -4347,7 +4465,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"deleted": deleted, **snapshot})
+        self.send_json({"deleted": deleted, "paper_files": refreshed_files, **snapshot})
 
     def handle_delete_library_entries(self, payload: dict[str, Any]) -> None:
         entries = payload.get("entries")
@@ -4359,21 +4477,29 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         deleted: list[dict[str, Any]] = []
         try:
-            windows_result = None
-            if sys.platform == "win32":
-                from .windows_library_recycle import delete_entries
-                windows_result = delete_entries(storage, entries, confirmed=confirmed)
-            for entry in ([] if windows_result is not None else entries):
+            recycle_id = int(ensure_library_special_folders(storage)["recycle"]["id"])
+            all_in_recycle = True
+            for entry in entries:
                 if not isinstance(entry, dict):
                     raise ValueError("Each entry must be an object")
+                entry_id = int(entry.get("id") or 0)
+                item = storage.get_library_item(entry_id) if entry.get("type") == "item" else None
+                folder_id = int(item["folder_id"]) if item else entry_id if entry.get("type") == "folder" else 0
+                all_in_recycle = all_in_recycle and bool(folder_id) and library_folder_is_within(storage, folder_id, recycle_id)
+            if all_in_recycle:
+                result = delete_recycle_selection(storage, entries, recycle_id=recycle_id, confirmed=confirmed)
+                deleted = [{"type": entry["type"], "id": int(entry["id"]), "mode": "removed",
+                            "paper_ids": result["paper_ids"], "cleanup": result["cleanup"],
+                            "retained_paper_ids": result["retained_paper_ids"], "paper_files": result["paper_files"]} for entry in entries]
+            for entry in ([] if all_in_recycle else entries):
                 entry_type = str(entry.get("type") or "")
                 entry_id = int(entry.get("id") or 0)
                 result = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
                 deleted.append(result or {"type": entry_type, "id": entry_id})
-            if windows_result is not None:
-                deleted = windows_result["deleted"]
+            refreshed_files = list({p["paper_id"]: p for result in deleted for p in result.get("paper_files", [])}.values())
+            refreshed_files += paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
-        except ValueError as exc:
+        except (ValueError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         except (OSError, sqlite3.Error) as exc:
@@ -4382,7 +4508,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"deleted": deleted, **snapshot})
+        self.send_json({"deleted": deleted, "paper_files": refreshed_files, **snapshot})
 
     def handle_library_delete_preview(self, payload: dict[str, Any]) -> None:
         entries = payload.get("entries")
@@ -4396,13 +4522,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             special = ensure_library_special_folders(storage)
             recycle_id = int(special["recycle"].get("id") or 0)
-            preview = recycle_delete_preview_for_entries(storage, preview_entries, recycle_folder_id=recycle_id)
-            if payload.get("clear_special"):
-                orphan_paths = library_recycle_orphan_paths(storage, recycle_id)
-                preview["orphan_local_copy_paths"] = [str(path) for path in orphan_paths]
-                preview["orphan_local_copy_count"] = len(orphan_paths)
-                preview["requires_confirmation"] = bool(preview.get("requires_confirmation") or orphan_paths)
-        except ValueError as exc:
+            preview = preview_recycle_selection(storage, preview_entries, recycle_id=recycle_id,
+                                                empty=bool(payload.get("clear_special")))
+        except (ValueError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
@@ -4425,20 +4547,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             folder_id = int(item.get("folder_id") or 1)
             paper_ids = [str(item.get("paper_id") or "")]
             if library_folder_is_within(storage, folder_id, recycle_id):
-                preview = recycle_delete_preview_for_entries(storage, [{"type": "item", "id": entry_id}], recycle_folder_id=recycle_id)
-                if preview.get("requires_confirmation") and not confirmed:
-                    raise ValueError("confirmation is required")
-                file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=recycle_id)
-                has_outside_reference = paper_has_reference_outside_recycle(storage, paper_ids[0], recycle_id)
-                if has_outside_reference:
-                    promote_canonical_pdf_outside_recycle(storage, paper_ids[0], recycle_id)
-                    remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
-                else:
-                    remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], [folder_id])
-                storage.delete_library_item(item_id=entry_id)
-                cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id, delete_files=False)
-                cleanup["trashed_files"] = file_cleanup["trashed_files"]
-                return {"type": "item", "id": entry_id, "mode": "removed", "paper_ids": paper_ids, "cleanup": cleanup}
+                result = delete_recycle_selection(storage, [{"type": "item", "id": entry_id}],
+                                                  recycle_id=recycle_id, confirmed=confirmed)
+                return {"type": "item", "id": entry_id, "mode": "removed", **result}
             else:
                 remaining = first_outside_reference_item(storage, paper_ids[0], recycle_id, exclude_item_id=entry_id)
                 retained_by_my_publications = paper_has_my_publication_reference(storage, paper_ids[0])
@@ -4486,21 +4597,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if int(folder.get("id") or 0) in {1, unsorted_id, recycle_id} or folder.get("parent_id") is None:
                 raise ValueError("This folder cannot be deleted")
             if library_folder_is_within(storage, int(folder.get("parent_id") or 0), recycle_id):
-                preview = recycle_delete_preview_for_entries(storage, [{"type": "folder", "id": entry_id}], recycle_folder_id=recycle_id)
-                if preview.get("requires_confirmation") and not confirmed:
-                    raise ValueError("confirmation is required")
-                paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
-                removed_folder_ids = library_folder_tree_ids(storage, entry_id)
-                file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=recycle_id)
-                for paper_id in paper_ids:
-                    if paper_has_reference_outside_recycle(storage, paper_id, recycle_id):
-                        promote_canonical_pdf_outside_recycle(storage, paper_id, recycle_id)
-                        remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
-                remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], removed_folder_ids)
-                storage.delete_library_folder(folder_id=entry_id)
-                cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id, delete_files=False)
-                cleanup["trashed_files"] = file_cleanup["trashed_files"]
-                return {"type": "folder", "id": entry_id, "mode": "removed", "paper_ids": paper_ids, "cleanup": cleanup}
+                result = delete_recycle_selection(storage, [{"type": "folder", "id": entry_id}],
+                                                  recycle_id=recycle_id, confirmed=confirmed)
+                return {"type": "folder", "id": entry_id, "mode": "removed", **result}
             else:
                 pdf_move_plan = folder_tree_pdf_move_plan(storage, entry_id)
                 moved = storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
@@ -4589,38 +4688,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not folder or folder_id not in allowed_ids:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "Only Recycle can be cleared")
                 return
-            preview = recycle_delete_preview_for_entries(
-                storage,
-                [{"type": "folder", "id": folder_id}],
-                recycle_folder_id=folder_id,
-            )
-            orphan_paths = library_recycle_orphan_paths(storage, folder_id)
-            if (preview.get("requires_confirmation") or orphan_paths) and not confirmed:
-                self.send_error_json(HTTPStatus.BAD_REQUEST, "confirmation is required")
-                return
-            if sys.platform == "win32":
-                from .windows_library_recycle import delete_entries
-                result = delete_entries(storage, [{"type": "folder", "id": folder_id}], confirmed=confirmed, clear_folder_id=folder_id)
-                snapshot = library_snapshot(storage) if include_snapshot else {}
-                self.send_json({"removed": result["removed"], "cleanup": result["cleanup"], **snapshot})
-                return
-            paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=folder_id)
-            removed_folder_ids = library_folder_tree_ids(storage, folder_id)
-            file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=folder_id)
-            trashed_orphans: list[str] = []
-            for path in orphan_paths:
-                move_path_to_macos_trash(path)
-                trashed_orphans.append(str(path))
-            for paper_id in paper_ids:
-                if paper_has_reference_outside_recycle(storage, paper_id, folder_id):
-                    promote_canonical_pdf_outside_recycle(storage, paper_id, folder_id)
-                    remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
-            remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], removed_folder_ids)
-            removed = clear_library_folder_contents(storage, folder_id=folder_id)
-            cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=folder_id, delete_files=False)
-            cleanup["trashed_files"] = file_cleanup["trashed_files"]
-            cleanup["trashed_orphan_files"] = trashed_orphans
+            result = delete_recycle_selection(storage, [], recycle_id=folder_id,
+                                              empty=True, confirmed=confirmed)
+            removed, cleanup = result["removed"], result["cleanup"]
+            refreshed_files = result["paper_files"]
             snapshot = library_snapshot(storage) if include_snapshot else {}
+        except (ValueError, sqlite3.Error) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         except IsADirectoryError:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Refusing to delete a folder")
             return
@@ -4632,7 +4707,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"removed": removed, "cleanup": cleanup, **snapshot})
+        self.send_json({"removed": removed, "cleanup": cleanup, "paper_files": refreshed_files, **snapshot})
 
     def handle_recover_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -4643,13 +4718,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             recovered = self.recover_library_entry_in_storage(storage, entry_type, entry_id)
             if entry_type == "folder" and recovered:
                 recovered = library_folder_to_api(recovered, storage)
+            refreshed_files = paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"recovered": dict(recovered or {}), **snapshot})
+        self.send_json({"recovered": dict(recovered or {}), "paper_files": refreshed_files, **snapshot})
 
     def recover_library_entry_in_storage(self, storage: Storage, entry_type: str, entry_id: int) -> dict[str, Any]:
         special = ensure_library_special_folders(storage)
@@ -4713,62 +4789,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json(snapshot)
 
     def handle_refresh_library_metadata(self, payload: dict[str, Any]) -> None:
-        paper_id = str(payload.get("paper_id") or "")
-        identifier = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
-        doi = normalize_publication_doi(identifier)
-        arxiv_id = normalize_arxiv_identifier(identifier)
-        include_snapshot = payload.get("snapshot", True) is not False
+        paper_id = clean_text(str(payload.get("paper_id") or ""))
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        if not (doi and looks_like_doi(doi)) and not arxiv_id:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid DOI or arXiv ID is required")
-            return
         storage = Storage(self.configured_db_path)
         try:
-            try:
-                if arxiv_id and not looks_like_doi(identifier):
-                    normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id)
-                    lookup_label = arxiv_id
-                    lookup_kind = "arXiv ID"
-                else:
-                    normalized = publication_metrics_metadata_from_doi(
-                        doi,
-                        allow_data_repository=doi_is_likely_data_repository(doi),
-                    )
-                    lookup_label = doi
-                    lookup_kind = "data DOI" if doi_is_likely_data_repository(doi) else "DOI"
-            except Exception as exc:
-                self.send_error_json(HTTPStatus.BAD_GATEWAY, f"{lookup_kind} metrics lookup failed: {exc}")
-                return
-            paper = None
-            if normalized:
-                paper = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(storage.get_paper(paper_id), normalized))
-            if not paper:
-                paper = storage.get_paper(paper_id)
-            if not paper:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
-                return
-            pubmed_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
-            if pubmed_doi and looks_like_doi(pubmed_doi):
-                paper = refresh_pubmed_if_possible(storage, paper, doi=pubmed_doi, timeout=12, max_retries=1) or paper
-            semantic_lookup_paper = dict(paper)
-            if doi and looks_like_doi(doi):
-                semantic_lookup_paper["doi"] = doi
-            if arxiv_id:
-                raw = parse_raw_json(semantic_lookup_paper)
-                raw["arxiv_id"] = arxiv_id
-                semantic_lookup_paper["raw_json"] = json.dumps(raw, ensure_ascii=False)
-            paper = refresh_semantic_scholar_if_possible(storage, semantic_lookup_paper, timeout=12, max_retries=1) or paper
-            paper = refresh_ads_if_possible(storage, paper, timeout=12, max_retries=1) or paper
-            if not normalized and not parse_semantic_scholar_json(paper):
-                self.send_error_json(HTTPStatus.NOT_FOUND, f"No publication found for this {lookup_kind}: {lookup_label}")
-                return
-            snapshot = library_snapshot(storage) if include_snapshot else {}
+            result = metadata_refresh.refresh(storage, paper_id, detailed=True,
+                identifier=clean_text(str(payload.get("identifier") or payload.get("doi") or "")))
+            snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         finally:
             storage.close()
-        self.send_json({"paper": paper_to_api(paper), "publications": publications, **snapshot})
+        self.send_json({"paper": paper_to_api(result["paper"]), "metadata_refresh": result["metadata_refresh"],
+                        "publications": publications, **snapshot})
 
     def handle_update_preprint_identifier(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
@@ -4778,7 +4818,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
-            paper = update_manual_preprint_identifier(storage, paper_id, identifier)
+            paper = (metadata_refresh.save_doi(storage, paper_id, identifier) if payload.get("kind") == "doi"
+                     else update_manual_preprint_identifier(storage, paper_id, identifier))
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -4854,13 +4895,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if entry_type == "folder" and pasted
                 else None
             )
+            refreshed_files = paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"pasted": dict(pasted or {}), "pasted_tree": pasted_tree, **snapshot})
+        self.send_json({"pasted": dict(pasted or {}), "pasted_tree": pasted_tree, "paper_files": refreshed_files, **snapshot})
 
     def handle_paste_library_entries(self, payload: dict[str, Any]) -> None:
         target_folder_id = int(payload.get("target_folder_id") or 1)
@@ -4882,13 +4924,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if entry_type == "folder" and pasted:
                     pasted_entry["tree"] = library_folder_tree_snapshot(storage, int(pasted.get("id") or 0))
                 pasted_entries.append(pasted_entry)
+            refreshed_files = paper_files_state_payloads(storage, [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"pasted": pasted_entries, **snapshot})
+        self.send_json({"pasted": pasted_entries, "paper_files": refreshed_files, **snapshot})
 
     def paste_library_entry_in_storage(
         self,
@@ -5587,7 +5630,25 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not requested.is_file():
             self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
             return
-        self.send_json(markdown_preview_payload(requested))
+        # Revalidate each open, including permission/existence checks above. The
+        # UI may reuse parsed HTML only for this exact on-disk file revision.
+        etag = markdown_preview_file_etag(requested)
+        unchanged = getattr(self, "headers", {}).get("If-None-Match") == etag
+        data = b"" if unchanged else json.dumps(markdown_preview_payload(requested), ensure_ascii=False).encode("utf-8")
+        if not unchanged and markdown_preview_file_etag(requested) != etag:
+            etag = ""  # A concurrent edit must not seed a reusable preview.
+        self.send_response(HTTPStatus.NOT_MODIFIED if unchanged else HTTPStatus.OK)
+        self.send_header("Cache-Control", "no-store")
+        if etag:
+            self.send_header("ETag", etag)
+        if not unchanged:
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def handle_pdf_info(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
@@ -5828,7 +5889,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             length = int(self.headers.get("Content-Length") or 0)
             if not 0 < length <= MAX_PDF_BYTES:
                 self.close_connection = True
-                self.send_error_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Choose a PDF up to 64 MB.")
+                self.send_error_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Choose a PDF up to 128 MB.")
                 return
             content = self.rfile.read(length)
             if len(content) != length:
@@ -8698,7 +8759,7 @@ def cache_file_entries(root: Path) -> tuple[int, list[tuple[float, int, Path]]]:
     entries: list[tuple[float, int, Path]] = []
     for path in root.rglob("*"):
         try:
-            if path.is_symlink() or not path.is_file():
+            if finder_alias.is_alias(path) or not path.is_file():
                 continue
             stat = path.stat()
         except OSError:
@@ -9697,11 +9758,15 @@ def author_monitor_checked_today(monitor: dict[str, Any], today: date) -> bool:
     return checked.astimezone(local_timezone()).date() == today
 
 
-def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any]:
+def run_auto_author_monitor_once(
+    db_path: Path, run_date: date, *, retry_only: bool = False, now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or datetime.now(local_timezone())
     storage = Storage(db_path)
     try:
         authors = storage.list_author_monitors()
         global_cooldown = google_scholar_global_cooldown(storage)
+        network_retry = author_profile_retry.read(storage)
     finally:
         storage.close()
     results: list[dict[str, Any]] = []
@@ -9713,8 +9778,17 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
         )
     ]
     scholar_request_seen = False
+    retry_count = 0
+    unavailable_providers: set[str] = set()
     for author in eligible_authors:
-        if author_monitor_checked_today(author, run_date):
+        network_error = author_profile_retry.retryable(author)
+        source = author_profile_retry.provider(author)
+        if source in unavailable_providers or not author_profile_retry.provider_ready(network_retry, author, current):
+            continue
+        if network_error:
+            if retry_count >= author_profile_retry.BATCH_SIZE or not author_profile_retry.due(network_retry, author, current):
+                continue
+        elif retry_only or author_monitor_checked_today(author, run_date):
             continue
         is_scholar = clean_text(
             author.get("source_type") or "google_scholar"
@@ -9733,7 +9807,7 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
                 }
             )
             continue
-        if is_scholar and author_monitor_cooldown_active(author):
+        if is_scholar and author_monitor_cooldown_active(author, now=current):
             results.append(
                 {
                     "author_id": int(author.get("id") or 0),
@@ -9751,14 +9825,21 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
             )
         if is_scholar:
             scholar_request_seen = True
-        results.append(
-            refresh_author_monitor_for_db(
-                db_path,
-                int(author.get("id") or 0),
-                initial=False,
-                force=False,
-            )
+        if network_error:
+            retry_count += 1
+        result = refresh_author_monitor_for_db(
+            db_path,
+            int(author.get("id") or 0),
+            initial=False,
+            force=False,
         )
+        results.append(result)
+        if result.get("network_retryable") or result.get("profile_retryable") or result.get("status") in {"cooldown", "global-cooldown"}:
+            # One failed probe is enough for this provider. Do not walk the
+            # entire author list while disconnected or after a restriction.
+            unavailable_providers.add(source)
+        elif result.get("status") in {"success", "partial"}:
+            network_retry.pop(source, None)
     status = {
         "run_date": run_date.isoformat(),
         "finished_at": now_iso(),
@@ -9770,10 +9851,10 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
     }
     storage = Storage(db_path)
     try:
-        storage.set_setting(
-            AUTO_AUTHOR_MONITOR_STATUS_SETTING,
-            json.dumps(status, ensure_ascii=False, sort_keys=True),
-        )
+        previous = json_setting(storage, AUTO_AUTHOR_MONITOR_STATUS_SETTING, {})
+        if not results and isinstance(previous, dict) and previous.get("run_date") == run_date.isoformat():
+            status = {**previous, "last_scheduler_check_at": now_iso(), "scholar_cooldown": global_cooldown}
+        storage.set_setting(AUTO_AUTHOR_MONITOR_STATUS_SETTING, json.dumps(status, ensure_ascii=False, sort_keys=True))
     finally:
         storage.close()
     return status
@@ -9784,8 +9865,9 @@ def run_auto_author_monitor_scheduler(db_path: Path) -> None:
     while True:
         try:
             now = datetime.now(local_timezone())
-            if now.hour >= AUTO_AUTHOR_MONITOR_HOUR:
-                run_auto_author_monitor_once(db_path, now.date())
+            run_auto_author_monitor_once(
+                db_path, now.date(), retry_only=now.hour < AUTO_AUTHOR_MONITOR_HOUR, now=now,
+            )
             time.sleep(AUTO_AUTHOR_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Author Monitor scheduler error: {exc}")
@@ -9894,7 +9976,8 @@ def published_pdf_browser_fallback(
         return {
             "kind": "aaas-published-pdf",
             "publisher": "aaas",
-            "url": f"https://www.science.org/doi/pdf/{doi}?download=true",
+            "url": f"https://www.science.org/doi/{doi}",
+            "target_url": f"https://www.science.org/doi/pdf/{doi}?download=true",
             "referer": f"https://www.science.org/doi/{doi}",
             "followup": supplement,
         }
@@ -10049,6 +10132,8 @@ def paper_resources_to_api(resources: Iterable[dict[str, Any]]) -> list[dict[str
 
 
 def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]:
+    from .publication_notices import for_paper
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         return {}
@@ -10064,12 +10149,14 @@ def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]
         "default_resource_id": int((resolved or {}).get("id") or 0),
         "resolved_resource_id": int((resolved or {}).get("id") or 0),
         "files": paper_resources_to_api(resources),
+        "publication_notices": for_paper(storage,paper_id),
         "paper": paper_to_api(paper),
     }
 
 
 def paper_files_state_payloads(storage: Storage, paper_ids: Iterable[str]) -> list[dict[str, Any]]:
     affected = {str(paper_id) for paper_id in paper_ids if str(paper_id or "")}
+    affected.update(getattr(storage, "_relocated_paper_ids", set()))
     for paper_id in list(affected):
         canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
         if canonical:
@@ -10145,6 +10232,7 @@ def paper_to_api(
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
         "preprint_category": preprint_primary_category(paper, raw=raw),
         "preprint_categories": preprint_categories(paper, raw=raw),
         "citation_label": citation_label(paper),
@@ -10210,6 +10298,7 @@ def monitor_paper_to_api(
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
         "preprint_category": preprint_primary_category(paper, raw=raw),
         "preprint_categories": preprint_categories(paper, raw=raw),
         "source": paper.get("source") or "",
@@ -10279,6 +10368,7 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "authors": author_summary(paper),
         "full_authors": full_author_names(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
         "citation_label": citation_label(paper, full_lead=True),
         "google_scholar_citation_count": scholar_count,
         "citation_count": scholar_count if scholar_count is not None else fallback_count,
@@ -10454,85 +10544,98 @@ def library_file_search_snapshot(
     cleaned_query = clean_text(query)[:300]
     if not cleaned_query:
         return {"query": "", "results": [], "total": 0}
-    tokens = [token for token in library_search_normalize(cleaned_query).split() if token][:8]
-    if not tokens:
-        return {"query": cleaned_query, "results": [], "total": 0}
+    match = search_matching.scorer(cleaned_query)
+
+    scores = {}
+    paper_extras = {}
+
+    def score(blob, paper_id, doi, raw_json):
+        key = (paper_id, blob)
+        if key in scores:
+            return scores[key]
+        if paper_id not in paper_extras:
+            paper = {"paper_id": paper_id, "doi": doi, "raw_json": raw_json}
+            raw = parse_raw_json(paper)
+            authors = (authors_from_openalex(raw) or authors_from_crossref(raw)
+                       or authors_from_arxiv(raw) or authors_from_datacite(raw)
+                       or authors_from_google_scholar(raw))
+            paper_extras[paper_id] = " ".join(authors + [preprint_identifier(paper, raw=raw)])
+        scores[key] = match(f"{blob} {paper_extras[paper_id]}")
+        return scores[key]
+
+    storage.conn.create_function("gewu_search_score", 4, score)
     search_blob = """
         LOWER(
           COALESCE(library_items.display_name, '') || ' ' ||
           COALESCE(papers.title, '') || ' ' ||
+          COALESCE(papers.storage_key, '') || ' ' ||
           COALESCE(papers.original_filename, '') || ' ' ||
           COALESCE(papers.doi, '') || ' ' ||
           COALESCE(papers.journal, '') || ' ' ||
           COALESCE(papers.abstract, '') || ' ' ||
           COALESCE(papers.url, '') || ' ' ||
-          COALESCE(papers.landing_url, '')
+          COALESCE(papers.landing_url, '') || ' ' ||
+          COALESCE(papers.original_relative_path, '') || ' ' ||
+          folder_paths.path
         )
     """
-    token_clauses = " AND ".join(f"{search_blob} LIKE ?" for _ in tokens)
+    score_sql = f"gewu_search_score({search_blob}, papers.paper_id, papers.doi, papers.raw_json)"
     bounded_limit = max(1, min(500, int(limit or 400)))
-    rows = storage.conn.execute(
-        f"""
-        WITH RECURSIVE folder_paths(id, path, trashed_at) AS (
-          SELECT id, name, COALESCE(trashed_at, '')
-          FROM library_folders
-          WHERE parent_id IS NULL
-          UNION ALL
-          SELECT
-            child.id,
-            folder_paths.path || ' / ' || child.name,
-            CASE
-              WHEN folder_paths.trashed_at <> '' THEN folder_paths.trashed_at
-              ELSE COALESCE(child.trashed_at, '')
-            END
-          FROM library_folders AS child
-          JOIN folder_paths ON child.parent_id = folder_paths.id
-        )
-        SELECT
-          library_items.id,
-          library_items.folder_id,
-          library_items.paper_id,
-          library_items.display_name,
-          library_items.original_folder_id,
-          library_items.trashed_at,
-          library_items.created_at,
-          library_items.sort_order,
-          papers.title,
-          papers.journal,
-          papers.publication_date,
-          papers.doi,
-          papers.url,
-          papers.landing_url,
-          papers.source,
-          papers.raw_json,
-          papers.semantic_scholar_json,
-          papers.download_status,
-          papers.main_pdf_path,
-          papers.merged_pdf_path,
-          papers.source_path,
-          papers.original_filename,
-          papers.import_batch_id,
-          papers.import_kind,
-          papers.import_as,
-          papers.size_bytes,
-          papers.analysis_status,
-          inventory_import_batches.copy_mode AS import_copy_mode,
-          folder_paths.path AS folder_path,
-          COUNT(*) OVER() AS search_total
-        FROM library_items
-        JOIN papers ON papers.paper_id = library_items.paper_id
-        JOIN folder_paths ON folder_paths.id = library_items.folder_id
-        LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id
-        WHERE COALESCE(library_items.trashed_at, '') = ''
-          AND folder_paths.trashed_at = ''
-          AND {token_clauses}
-        ORDER BY
-          LOWER(COALESCE(NULLIF(library_items.display_name, ''), papers.title)),
-          library_items.id
-        LIMIT ?
-        """,
-        (*[f"%{token}%" for token in tokens], bounded_limit),
-    ).fetchall()
+    try:
+        rows = storage.conn.execute(
+            f"""
+            WITH RECURSIVE folder_paths(id, path, trashed_at) AS (
+              SELECT id, name, COALESCE(trashed_at, '')
+              FROM library_folders
+              WHERE parent_id IS NULL
+              UNION ALL
+              SELECT
+                child.id,
+                folder_paths.path || ' / ' || child.name,
+                CASE
+                  WHEN folder_paths.trashed_at <> '' THEN folder_paths.trashed_at
+                  ELSE COALESCE(child.trashed_at, '')
+                END
+              FROM library_folders AS child
+              JOIN folder_paths ON child.parent_id = folder_paths.id
+            )
+            SELECT
+              library_items.id,
+              library_items.folder_id,
+              library_items.paper_id,
+              library_items.display_name,
+              library_items.created_at,
+              papers.title,
+              papers.storage_key,
+              papers.journal,
+              papers.publication_date,
+              papers.doi,
+              papers.url,
+              papers.landing_url,
+              papers.source,
+              papers.main_pdf_path,
+              papers.merged_pdf_path,
+              papers.source_path,
+              papers.original_filename,
+              folder_paths.path AS folder_path,
+              {score_sql} AS search_score,
+              COUNT(*) OVER() AS search_total
+            FROM library_items
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            JOIN folder_paths ON folder_paths.id = library_items.folder_id
+            WHERE COALESCE(library_items.trashed_at, '') = ''
+              AND folder_paths.trashed_at = ''
+              AND {score_sql} > 0
+            ORDER BY
+              search_score DESC,
+              LOWER(COALESCE(NULLIF(library_items.display_name, ''), papers.title)),
+              library_items.id
+            LIMIT ?
+            """,
+            (bounded_limit,),
+        ).fetchall()
+    finally:
+        storage.conn.create_function("gewu_search_score", 4, None)
     total = int(rows[0]["search_total"] or 0) if rows else 0
 
     def search_item_to_api(row: sqlite3.Row) -> dict[str, Any]:
@@ -10543,6 +10646,7 @@ def library_file_search_snapshot(
         local_path = merged_path or main_path or source_path
         paper = {
             "paper_id": clean_text(row["paper_id"] or ""),
+            "storage_key": clean_text(row["storage_key"] or ""),
             "title": clean_text(row["title"] or ""),
             "journal": clean_text(row["journal"] or ""),
             "publication_date": clean_text(row["publication_date"] or ""),
@@ -10592,6 +10696,7 @@ def library_add_targets_snapshot(storage: Storage) -> dict[str, Any]:
     special = ensure_library_special_folders(storage)
     return {
         "root_id": 1,
+        "default_add_folder_id": default_add_destination(storage)["folder_id"],
         "unsorted_id": int(special["unsorted"].get("id") or 0),
         "recycle_id": int(special["recycle"].get("id") or 0),
         "folders": [
@@ -10629,6 +10734,8 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "source_root",
         "total_files",
         "paper_candidates_seen",
+        "processed_files",
+        "identity_conflicts",
         "created_papers",
         "updated_papers",
         "existing_papers",
@@ -10675,44 +10782,11 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def refresh_library_paper_metadata_for_identifier(
-    storage: Storage,
-    paper_id: str,
-    identifier: str,
-    *,
-    timeout: int = 12,
+    storage: Storage, paper_id: str, identifier: str, *, timeout: int = 12,
     max_retries: int = 1,
 ) -> dict[str, Any] | None:
-    cleaned = clean_text(identifier)
-    doi = normalize_publication_doi(cleaned)
-    arxiv_id = normalize_arxiv_identifier(cleaned)
-    if arxiv_id and not looks_like_doi(cleaned):
-        normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=timeout, max_retries=max_retries)
-    elif doi and looks_like_doi(doi):
-        normalized = publication_metrics_metadata_from_doi(
-            doi,
-            timeout=timeout,
-            max_retries=max_retries,
-            allow_data_repository=doi_is_likely_data_repository(doi),
-        )
-    else:
-        return None
-    existing = storage.get_paper(paper_id)
-    paper = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(existing, normalized)) if normalized else existing
-    if not paper:
-        return None
-    pubmed_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
-    if pubmed_doi and looks_like_doi(pubmed_doi):
-        paper = refresh_pubmed_if_possible(storage, paper, doi=pubmed_doi, timeout=timeout, max_retries=max_retries) or paper
-    semantic_lookup_paper = dict(paper)
-    if doi and looks_like_doi(doi):
-        semantic_lookup_paper["doi"] = doi
-    if arxiv_id:
-        raw = parse_raw_json(semantic_lookup_paper)
-        raw["arxiv_id"] = arxiv_id
-        semantic_lookup_paper["raw_json"] = json.dumps(raw, ensure_ascii=False)
-    paper = refresh_semantic_scholar_if_possible(storage, semantic_lookup_paper, timeout=timeout, max_retries=max_retries) or paper
-    paper = refresh_ads_if_possible(storage, paper, timeout=timeout, max_retries=max_retries) or paper
-    return paper
+    paper_id = storage.resolve_paper_id(paper_id)
+    return metadata_refresh.refresh(storage, paper_id, identifier=identifier, detailed=True)["paper"]
 
 
 def local_pdf_path_for_identifier_extraction(paper: dict[str, Any]) -> Path | None:
@@ -10738,9 +10812,13 @@ def extract_identifier_from_pdf_or_title(
     paper: dict[str, Any],
     *,
     title_lookup: Callable[[str], dict[str, str]] | None = None,
+    pdf_evidence: tuple[str, list[str], list[str]] | None = None,
 ) -> dict[str, str]:
-    pdf_metadata_title, page_texts = pdf_identifier_page_texts(pdf_path)
-    layout_titles = pdf_layout_title_candidates(pdf_path)
+    if pdf_evidence is None:
+        pdf_metadata_title, page_texts = pdf_identifier_page_texts(pdf_path)
+        layout_titles = pdf_layout_title_candidates(pdf_path)
+    else:
+        pdf_metadata_title, page_texts, layout_titles = pdf_evidence
     title_candidates = article_title_candidates_for_identifier(
         paper,
         pdf_metadata_title,
@@ -10787,11 +10865,11 @@ def extract_identifier_from_pdf_or_title(
     return {"kind": "", "identifier": "", "source": "", "lookup_status": "not_attempted"}
 
 
-def pdf_identifier_page_texts(pdf_path: Path, *, page_limit: int = 5) -> tuple[str, list[str]]:
+def pdf_identifier_page_texts(pdf_path: Path, *, page_limit: int = 5, reader: PdfReader | None = None) -> tuple[str, list[str]]:
     metadata_title = ""
     page_texts: list[str] = []
     try:
-        reader = PdfReader(str(pdf_path))
+        reader = reader if reader is not None else PdfReader(str(pdf_path))
         info = reader.metadata or {}
         metadata_title = clean_text(getattr(info, "title", "") or info.get("/Title", ""))
         for page in reader.pages[:max(1, int(page_limit or 3))]:
@@ -10831,10 +10909,13 @@ def article_title_candidates_for_identifier(
     return filtered
 
 
-def pdf_layout_title_candidates(pdf_path: Path, *, page_limit: int = 3) -> list[str]:
+def pdf_layout_title_candidates(pdf_path: Path, *, page_limit: int = 3, reader: PdfReader | None = None, first_page_result: dict | None = None) -> list[str]:
     scored: list[tuple[float, str]] = []
+    first_page_scored: list[tuple[float, str]] = []
+    if first_page_result is not None:
+        first_page_result["titles"] = []
     try:
-        reader = PdfReader(str(pdf_path))
+        reader = reader if reader is not None else PdfReader(str(pdf_path))
     except Exception:
         return []
     for page_index, page in enumerate(reader.pages[:max(1, int(page_limit or 1))]):
@@ -10936,15 +11017,22 @@ def pdf_layout_title_candidates(pdf_path: Path, *, page_limit: int = 3) -> list[
                     - page_index * 1.5
                 )
             scored.append((score, candidate))
-    results: list[str] = []
-    seen: set[str] = set()
-    for _score, candidate in sorted(scored, key=lambda item: item[0], reverse=True):
-        key = normalized_title_key(candidate)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        results.append(candidate)
-    return results[:6]
+            if page_index == 0:
+                first_page_scored.append((score, candidate))
+    def ranked_titles(candidates: list[tuple[float, str]]) -> list[str]:
+        results: list[str] = []
+        seen: set[str] = set()
+        for _score, candidate in sorted(candidates, key=lambda item: item[0], reverse=True):
+            key = normalized_title_key(candidate)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            results.append(candidate)
+        return results[:6]
+
+    if first_page_result is not None:
+        first_page_result["titles"] = ranked_titles(first_page_scored)
+    return ranked_titles(scored)
 
 
 def normalize_pdf_layout_title(value: str) -> str:
@@ -11292,6 +11380,8 @@ def publication_metrics_metadata_from_doi(
     timeout: int = 20,
     max_retries: int = 3,
     allow_data_repository: bool = False,
+    source_status: dict[str, str] | None = None,
+    source_lookup: Callable | None = None,
 ) -> dict[str, Any] | None:
     doi = normalize_publication_doi(doi)
     if not doi or not looks_like_doi(doi) or (doi_is_likely_data_repository(doi) and not allow_data_repository):
@@ -11299,13 +11389,17 @@ def publication_metrics_metadata_from_doi(
     crossref_count: int | None = None
     crossref_journal = ""
     crossref_raw: dict[str, Any] = {}
+    crossref = None
+    outcomes = source_status if source_status is not None else {}
+    lookup = source_lookup or (lambda name, call: call())
     try:
-        crossref = publication_metadata_from_doi(
+        crossref = lookup("Crossref", lambda: publication_metadata_from_doi(
             doi,
             timeout=timeout,
             max_retries=max_retries,
             allow_data_repository=allow_data_repository,
-        )
+        ))
+        if source_lookup is None: outcomes["Crossref"] = "found" if crossref else "not_found"
         if isinstance(crossref, dict):
             crossref_journal = normalize_openalex_journal_name(crossref.get("journal") or "")
         crossref_raw = crossref.get("raw") if isinstance(crossref, dict) else {}
@@ -11313,18 +11407,20 @@ def publication_metrics_metadata_from_doi(
             crossref_count = int_or_none(crossref_raw.get("is-referenced-by-count"))
         else:
             crossref_raw = {}
-    except Exception:
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        outcomes["Crossref"] = "not_found" if status == 404 else ("rate_limited" if status == 429 else "unavailable")
         crossref_count = None
         crossref_raw = {}
     try:
-        response = openalex_request(
+        item = lookup("OpenAlex", lambda: openalex_request(
             "GET",
             f"https://api.openalex.org/works/https://doi.org/{doi}",
             params={"mailto": "your_email@example.com"},
             timeout=timeout,
             max_retries=max_retries,
-        )
-        item = response.json()
+        ).json())
+        if source_lookup is None: outcomes["OpenAlex"] = "found" if isinstance(item, dict) and item.get("id") else "not_found"
         if isinstance(item, dict) and item.get("id"):
             source_journal = normalize_openalex_journal_name(((item.get("primary_location") or {}).get("source") or {}).get("display_name"))
             journal = crossref_journal or source_journal or "Unknown Journal"
@@ -11335,21 +11431,18 @@ def publication_metrics_metadata_from_doi(
                 if crossref_count is not None:
                     raw["is-referenced-by-count"] = crossref_count
             return normalized
-    except Exception:
-        pass
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        outcomes["OpenAlex"] = "not_found" if status == 404 else ("rate_limited" if status == 429 else "unavailable")
     if allow_data_repository:
         try:
-            datacite = publication_metadata_from_datacite_doi(doi, timeout=timeout, max_retries=max_retries)
+            datacite = lookup("DataCite", lambda: publication_metadata_from_datacite_doi(doi, timeout=timeout, max_retries=max_retries))
+            if source_lookup is None: outcomes["DataCite"] = "found" if datacite else "not_found"
             if datacite:
                 return datacite
         except Exception:
-            pass
-    return publication_metadata_from_doi(
-        doi,
-        timeout=timeout,
-        max_retries=max_retries,
-        allow_data_repository=allow_data_repository,
-    )
+            outcomes["DataCite"] = "unavailable"
+    return crossref
 
 
 def publication_metrics_metadata_from_arxiv_id(
@@ -11387,6 +11480,8 @@ def publication_metrics_metadata_from_arxiv_id(
                 if normalized_title_key(result_title) != normalized_title_key(title) and title_similarity(title, result_title) < 0.88:
                     continue
                 if openalex_item_is_likely_data_repository(item):
+                    continue
+                if normalized_id not in metadata_refresh.linked_arxiv(item):
                     continue
                 raw["openalex_id"] = clean_text(item.get("id") or "")
                 raw["id"] = clean_text(item.get("id") or "")
@@ -11600,6 +11695,7 @@ def pubmed_author_marks(pubmed: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def sync_my_publication_pubmed_author_marks(storage: Storage, *, paper_id: str, pubmed: dict[str, Any]) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     marks = pubmed_author_marks(pubmed)
     if not marks:
         return
@@ -11662,6 +11758,7 @@ def sync_my_publication_pubmed_author_marks(storage: Storage, *, paper_id: str, 
 
 
 def sync_my_publication_existing_pubmed_marks(storage: Storage, *, paper_id: str) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     if not paper:
         return
@@ -11898,6 +11995,24 @@ def best_semantic_scholar_candidate(
     arxiv_id: str = "",
     title: str = "",
 ) -> dict[str, Any] | None:
+    exact = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        ids = candidate.get("externalIds") or {}
+        candidate_doi = normalize_publication_doi(str(ids.get("DOI") or ids.get("doi") or ""))
+        candidate_arxiv = normalize_arxiv_identifier(str(ids.get("ArXiv") or ids.get("arXiv") or ids.get("ARXIV") or ""))
+        if doi and candidate_doi and doi != candidate_doi and doi_is_likely_published_version(doi):
+            continue
+        if arxiv_id and candidate_arxiv and arxiv_id != candidate_arxiv:
+            continue
+        if (doi and candidate_doi == doi) or (arxiv_id and candidate_arxiv == arxiv_id):
+            exact.append(candidate)
+    if doi or arxiv_id:
+        candidates = exact
+    else:
+        candidates = [c for c in candidates if isinstance(c, dict) and title
+                      and normalized_title_key(c.get("title") or "") == normalized_title_key(title)]
     scored = [
         (semantic_scholar_candidate_score(candidate, doi=doi, arxiv_id=arxiv_id, title=title), candidate)
         for candidate in candidates
@@ -12161,6 +12276,7 @@ def record_recovered_identifier(
     paper_id: str,
     found: dict[str, str],
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     if not paper:
         return None
@@ -12275,6 +12391,7 @@ def recover_imported_pdf_identifiers(
             log_library_import_job(
                 job_id,
                 f"Recovering identifier {index} / {total}: {pdf_path.name}",
+                paper_id=str(paper.get("paper_id") or ""),
             )
         found = extract_identifier_from_pdf_or_title(
             pdf_path,
@@ -12292,16 +12409,7 @@ def recover_imported_pdf_identifiers(
         )
         if not recorded:
             continue
-        try:
-            refreshed = refresh_library_paper_metadata_for_identifier(
-                storage,
-                str(paper.get("paper_id") or ""),
-                identifier,
-                timeout=12,
-                max_retries=1,
-            )
-        except Exception:
-            refreshed = recorded
+        refreshed = recorded  # Refresh once below, using the chosen Quick/Full mode.
         paper_id = str(paper.get("paper_id") or "")
         recovered.add(paper_id)
         source = clean_text(found.get("source") or "unknown")
@@ -12322,6 +12430,7 @@ def recover_imported_pdf_identifiers(
             log_library_import_job(
                 job_id,
                 f"Recovered {kind.upper()} via {source}: {label}",
+                paper_id=paper_id,
             )
     result["identifiers_recovered"] = len(recovered)
     result["identifier_recovery_unresolved"] = max(0, total - len(recovered))
@@ -12334,75 +12443,53 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
     mode = normalize_import_metadata_mode(mode)
     result["metadata_mode"] = mode
     if mode == "skip":
-        if job_id:
-            log_library_import_job(job_id, "Metadata refresh skipped by user selection")
-        result["doi_metadata_refreshed"] = 0
-        result["identifier_metadata_refreshed"] = 0
-        result["identifier_recovery_attempted"] = 0
-        result["identifiers_recovered"] = 0
-        result["identifier_recovery_unresolved"] = 0
-        result["identifier_recovery_sources"] = {}
-        result["identifier_recoveries"] = []
+        result.update(doi_metadata_refreshed=0, identifier_metadata_refreshed=0,
+                      identifier_recovery_attempted=0, identifiers_recovered=0,
+                      identifier_recovery_unresolved=0, identifier_recovery_sources={}, identifier_recoveries=[])
         return 0
-    candidates = [item for item in (result.get("metadata_refresh_candidates") or []) if isinstance(item, dict)]
-    recovered_paper_ids = recover_imported_pdf_identifiers(
-        storage,
-        result,
-        job_id=job_id,
-    )
-    papers = [
-        {"paper_id": item.get("paper_id"), "doi": item.get("doi"), "arxiv_id": item.get("arxiv_id")}
-        for item in candidates
-    ]
-    refreshed_count = 0
-    seen: set[str] = set()
-    eligible: list[dict[str, Any]] = []
-    for paper in papers:
-        paper_id = clean_text(paper.get("paper_id") or "")
-        doi = normalize_publication_doi(str(paper.get("doi") or ""))
-        arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or "")) or arxiv_identifier_for_paper(paper)
-        if paper_id and paper_id not in recovered_paper_ids and (looks_like_doi(doi) or arxiv_id):
-            eligible.append({"paper_id": paper_id, "doi": doi, "arxiv_id": arxiv_id})
-    total = len(eligible)
+    with metadata_refresh.metadata_network.scope(storage):
+        recover_imported_pdf_identifiers(storage, result, job_id=job_id)
+    ids = list(dict.fromkeys(str(p.get("paper_id") or "") for p in result.get("metadata_refresh_candidates", [])
+                            if isinstance(p, dict) and p.get("paper_id")))
+    refresh_job = metadata_jobs.create(storage, mode=mode, paper_ids=ids, origin="import")
+    result["metadata_job_id"] = refresh_job["job_id"]
     if job_id:
-        if total:
-            log_library_import_job(job_id, f"Refreshing Details metadata and citation metrics from DOI/arXiv for {total} imported papers")
-        else:
-            log_library_import_job(job_id, "No imported papers with DOI/arXiv ID were found for Details metadata refresh")
-    current = 0
-    for paper in eligible:
-        if job_id and library_import_cancel_requested(job_id):
-            raise ImportCancelled("Import stopped by user")
-        paper_id = clean_text(paper.get("paper_id") or "")
-        doi = normalize_publication_doi(str(paper.get("doi") or ""))
-        arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or ""))
-        if not paper_id or paper_id in seen:
-            continue
-        seen.add(paper_id)
-        current += 1
-        identifier = doi if looks_like_doi(doi) else arxiv_id
-        identifier_kind = "DOI" if looks_like_doi(doi) else "arXiv"
-        if job_id:
-            percent = max(0, min(99, round((current / total) * 100))) if total else 0
-            update_library_import_job(job_id, stage="metadata", current=current, total=total, percent=percent)
-            log_library_import_job(job_id, f"Refreshing Details metadata and metrics from {identifier_kind} {current} / {total}: {identifier}")
-        stored_paper = storage.get_paper(paper_id)
-        before = dict(stored_paper or {})
-        if looks_like_doi(doi):
-            refreshed = refresh_paper_metadata_from_doi_if_possible(storage, stored_paper, doi=doi, timeout=12, max_retries=1)
-        else:
-            refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, stored_paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
-        if mode == "full":
-            refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-            refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-        if refreshed and refreshed != before:
-            refreshed_count += 1
-            if job_id:
-                label = clean_text(refreshed.get("title") or identifier)
-                log_library_import_job(job_id, f"Refreshed {identifier_kind} metadata: {label}")
-    result["doi_metadata_refreshed"] = refreshed_count
-    result["identifier_metadata_refreshed"] = refreshed_count
-    return refreshed_count
+        update_library_import_job(job_id, metadata_job_id=refresh_job["job_id"])
+        if library_import_cancel_requested(job_id):
+            metadata_jobs.control(storage, refresh_job["job_id"], "stop")
+    last_progress = None
+    def progress(job):
+        nonlocal last_progress
+        if not job_id:
+            return
+        if library_import_cancel_requested(job_id):
+            metadata_jobs.control(storage, job["job_id"], "stop")
+        update_library_import_job(job_id, stage="stopping" if library_import_cancel_requested(job_id) else "metadata",
+                                  current=job["current"], total=job["total"], percent=min(99, job["percent"]))
+        if job["logs"] and job["current"] != last_progress:
+            entry = next((entry for entry in reversed(job["logs"]) if entry.get("paper_id")), job["logs"][-1])
+            log_library_import_job(job_id, entry["message"], level=entry.get("level", "info"), paper_id=entry.get("paper_id"))
+        last_progress = job["current"]
+    metadata_jobs.run_job(storage, refresh_job["job_id"], progress=progress)
+    job = metadata_jobs.get(storage, refresh_job["job_id"])
+    # A batch worker may have claimed this import job. Keep the import attached
+    # until its metadata checkpoint is final, including a requested stop.
+    while job["status"] in {"queued", "running", "pausing", "stopping"}:
+        progress(job)
+        time.sleep(.2)
+        job = metadata_jobs.get(storage, refresh_job["job_id"])
+    progress(job)
+    counts = job["counts"]
+    result.update(doi_metadata_refreshed=job["changed_count"], identifier_metadata_refreshed=job["changed_count"], metadata_counts=counts)
+    if job_id:
+        update_library_import_job(job_id, current=job["current"], total=job["total"], percent=job["percent"])
+    if job["status"] == "stopped" or (job_id and library_import_cancel_requested(job_id)):
+        raise ImportCancelled("Import stopped. Completed files and metadata are kept; the remaining queue has ended.")
+    if job["status"] == "paused":
+        raise ImportCancelled("Import metadata paused. Continue it in Refresh tasks.")
+    if job["status"] == "failed":
+        raise RuntimeError(job.get("error") or "Metadata refresh stopped. Continue it in Refresh tasks.")
+    return job["changed_count"]
 
 
 def library_metadata_refresh_candidates(storage: Storage) -> list[dict[str, Any]]:
@@ -12482,6 +12569,7 @@ def identifier_recovery_recently_attempted(
     *,
     skip_days: int,
 ) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if skip_days <= 0:
         return False
     cutoff = (datetime.now().astimezone() - timedelta(days=skip_days)).isoformat(timespec="seconds")
@@ -12511,28 +12599,12 @@ def identifier_recovery_recently_attempted(
 
 
 def metadata_refresh_recently_completed(storage: Storage, paper_id: str, mode: str, *, skip_days: int) -> bool:
-    if skip_days <= 0:
-        return False
-    cutoff = (datetime.now().astimezone() - timedelta(days=skip_days)).isoformat(timespec="seconds")
-    modes = ("full",) if mode == "full" else ("quick", "full")
-    placeholders = ", ".join("?" for _ in modes)
-    row = storage.conn.execute(
-        f"""
-        SELECT 1
-        FROM paper_metadata_refreshes
-        WHERE paper_id = ?
-          AND status = 'completed'
-          AND mode IN ({placeholders})
-          AND COALESCE(finished_at, started_at) >= ?
-        ORDER BY COALESCE(finished_at, started_at) DESC
-        LIMIT 1
-        """,
-        (paper_id, *modes, cutoff),
-    ).fetchone()
-    return row is not None
+    paper_id = storage.resolve_paper_id(paper_id)
+    return metadata_refresh.recently_completed(storage, paper_id, mode, skip_days)
 
 
 def record_metadata_refresh_start(storage: Storage, *, paper_id: str, mode: str, source_summary: str) -> int:
+    paper_id = storage.resolve_paper_id(paper_id)
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     cursor = storage.conn.execute(
         """
@@ -12558,96 +12630,19 @@ def record_metadata_refresh_finish(storage: Storage, refresh_id: int, *, status:
 
 
 def refresh_single_paper_metadata_for_mode(storage: Storage, paper: dict[str, Any], *, mode: str) -> dict[str, Any] | None:
-    mode = normalize_metadata_refresh_mode(mode)
-    doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or "")) or arxiv_identifier_for_paper(paper)
-    if looks_like_doi(doi):
-        refreshed = refresh_paper_metadata_from_doi_if_possible(storage, paper, doi=doi, timeout=12, max_retries=1)
-    elif arxiv_id:
-        refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
-    else:
-        refreshed = paper
-    if mode == "full":
-        refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-        refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-    return refreshed
+    return metadata_refresh.refresh(storage, str(paper["paper_id"]),
+                                    mode=normalize_metadata_refresh_mode(mode), origin="batch")["paper"]
 
 
 def run_library_metadata_refresh_job(*, job_id: str, db_path: Path, metadata_mode: str = "full", skip_days: int = 3) -> None:
-    metadata_mode = normalize_metadata_refresh_mode(metadata_mode)
+    """Compatibility entry for callers that created an in-memory Loader job."""
     storage = Storage(db_path)
-    refreshed_count = 0
-    skipped_recent = 0
-    failed_count = 0
     try:
-        candidates = library_metadata_refresh_candidates(storage)
-        total = len(candidates)
-        log_library_import_job(job_id, f"Refreshing all Library metadata in {metadata_mode} mode")
-        log_library_import_job(job_id, f"Skipping papers refreshed in the last {skip_days} day{'s' if skip_days != 1 else ''}")
-        update_library_import_job(job_id, status="running", stage="metadata", total=total, current=0, percent=0)
-        for index, paper in enumerate(candidates, start=1):
-            if library_import_cancel_requested(job_id):
-                raise ImportCancelled("Metadata refresh stopped by user")
-            paper_id = clean_text(paper.get("paper_id") or "")
-            doi = normalize_publication_doi(str(paper.get("doi") or ""))
-            arxiv_id = arxiv_identifier_for_paper(paper)
-            identifier = doi if looks_like_doi(doi) else arxiv_id
-            percent = max(0, min(99, round((index / total) * 100))) if total else 100
-            update_library_import_job(job_id, current=index, total=total, percent=percent, stage="metadata")
-            if metadata_refresh_recently_completed(storage, paper_id, metadata_mode, skip_days=skip_days):
-                skipped_recent += 1
-                log_library_import_job(job_id, f"Skipped recent metadata {index} / {total}: {identifier or paper_id}")
-                continue
-            log_library_import_job(job_id, f"Refreshing metadata {index} / {total}: {identifier or paper_id}")
-            refresh_id = record_metadata_refresh_start(storage, paper_id=paper_id, mode=metadata_mode, source_summary=identifier or paper_id)
-            before = dict(storage.get_paper(paper_id) or paper)
-            try:
-                refreshed = refresh_single_paper_metadata_for_mode(storage, before, mode=metadata_mode)
-                record_metadata_refresh_finish(storage, refresh_id, status="completed")
-                if refreshed and refreshed != before:
-                    refreshed_count += 1
-                    log_library_import_job(job_id, f"Refreshed metadata: {clean_text(refreshed.get('title') or identifier or paper_id)}")
-            except Exception as exc:
-                failed_count += 1
-                record_metadata_refresh_finish(storage, refresh_id, status="failed", error=str(exc))
-                log_library_import_job(job_id, f"Metadata refresh failed for {identifier or paper_id}: {exc}", level="warn")
-        result = {
-            "job_type": "metadata_refresh",
-            "metadata_mode": metadata_mode,
-            "total_candidates": total,
-            "metadata_refreshed": refreshed_count,
-            "skipped_recent": skipped_recent,
-            "failed": failed_count,
-            "skip_days": skip_days,
-            "errors": [],
-        }
-        log_library_import_job(job_id, f"Done: {refreshed_count} refreshed, {skipped_recent} skipped recent, {failed_count} failed")
-        update_library_import_job(
-            job_id,
-            status="completed",
-            stage="complete",
-            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-            percent=100,
-            result=result,
-        )
-    except ImportCancelled as exc:
-        log_library_import_job(job_id, str(exc) or "Metadata refresh stopped by user", level="warn")
-        update_library_import_job(
-            job_id,
-            status="cancelled",
-            stage="cancelled",
-            error=str(exc),
-            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-        )
-    except Exception as exc:
-        log_library_import_job(job_id, f"Metadata refresh failed: {exc}", level="error")
-        update_library_import_job(
-            job_id,
-            status="failed",
-            stage="failed",
-            error=str(exc),
-            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-        )
+        job = metadata_jobs.create(storage, mode=normalize_metadata_refresh_mode(metadata_mode), skip_days=skip_days, job_id=job_id)
+        metadata_jobs.run_job(storage, job["job_id"])
+        snapshot = metadata_jobs.get(storage, job["job_id"]) or {}
+        snapshot.pop("job_id", None)
+        update_library_import_job(job_id, **snapshot)
     finally:
         storage.close()
 
@@ -12729,6 +12724,7 @@ def run_library_identifier_recovery_job(
             log_library_import_job(
                 job_id,
                 f"Finding identifier {index} / {total}: {label}",
+                paper_id=paper_id,
             )
             refresh_id = record_metadata_refresh_start(
                 storage,
@@ -12762,6 +12758,7 @@ def run_library_identifier_recovery_job(
                         job_id,
                         f"No confident identifier found: {label}",
                         level="warn",
+                        paper_id=paper_id,
                     )
                 else:
                     recorded = record_recovered_identifier(
@@ -12798,6 +12795,7 @@ def run_library_identifier_recovery_job(
                     log_library_import_job(
                         job_id,
                         f"Recovered {kind.upper()} via {source}: {clean_text(refreshed.get('title') or identifier)}",
+                        paper_id=paper_id,
                     )
             except Exception as exc:
                 failed_count += 1
@@ -12813,6 +12811,7 @@ def run_library_identifier_recovery_job(
                     job_id,
                     f"Identifier recovery failed for {label}: {exc}",
                     level="warn",
+                    paper_id=paper_id,
                 )
             if used_title_lookup:
                 time.sleep(0.75)
@@ -14519,7 +14518,19 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "avatar_override_path": clean_text(row.get("avatar_override_path") or ""),
         "sort_order": int(row.get("sort_order") or 0),
         "status": clean_text(row.get("status") or "idle"),
-        "message": clean_text(row.get("message") or ""),
+        "message": (
+            "Google Scholar publication list unavailable; saved papers retained"
+            if row.get("status") == "error" and author_profile_retry.profile_failure(row.get("message"))
+            else
+            "Google Scholar temporarily unavailable"
+            if author_profile_retry.retryable(row) and source_type == "google_scholar"
+            else "Publication source temporarily unavailable"
+            if author_profile_retry.retryable(row)
+            else clean_text(row.get("message") or "")
+        ),
+        "network_retryable": row.get("status") == "error" and author_profile_retry.network_failure(row.get("message")),
+        "profile_retryable": row.get("status") == "error" and author_profile_retry.profile_failure(row.get("message")),
+        "error_detail": clean_text(row.get("message") or "") if row.get("status") == "error" else "",
         "paper_count": int(row.get("paper_count") or 0),
         "unread_count": int(row.get("unread_count") or 0),
         "last_checked_at": clean_text(row.get("last_checked_at") or ""),
@@ -14579,6 +14590,9 @@ def start_google_scholar_global_cooldown(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     current = now or datetime.now(local_timezone())
+    existing = google_scholar_global_cooldown(storage, now=current)
+    if existing.get("active"):
+        return existing
     until = current + timedelta(seconds=GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SECONDS)
     payload = {
         "until": until.isoformat(timespec="seconds"),
@@ -14600,7 +14614,9 @@ def start_google_scholar_global_cooldown_for_db(db_path: Path, *, message: str =
         storage.close()
 
 
-def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> dict[str, Any]:
+def author_monitor_snapshot(
+    storage: Storage, *, author_monitor_id: int = 0, include_metadata_work: bool = True
+) -> dict[str, Any]:
     storage.remove_author_monitor_papers_by_journal_names(
         OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
     )
@@ -14609,6 +14625,15 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
         author_monitor_id = int(authors[0]["id"]) if authors else 0
     if author_monitor_id and not any(int(item["id"]) == int(author_monitor_id) for item in authors):
         author_monitor_id = 0
+    if storage.author_monitor_card_cache_status().get("ready"):
+        cards = storage.list_author_monitor_cached_cards(author_monitor_id)
+        return {
+            "authors": authors, "papers": annotate_papers_with_library_status(storage, cards),
+            "selectedAuthorId": author_monitor_id, "paperScopeAuthorId": author_monitor_id,
+            "unreadCount": sum(bool(card.get("author_unread")) for card in cards),
+            "checkedAt": now_iso(), "scholarCooldown": google_scholar_global_cooldown(storage),
+            **({"metadataWork": author_metadata_work.snapshot(storage)} if include_metadata_work else {}),
+        }
     # Paper lists are local SQLite data, so load only the selected author here.
     # The client keeps a small LRU cache for fast switching; this avoids parsing
     # and transferring every monitored paper when Author Monitor first opens.
@@ -14636,13 +14661,16 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
         "papers": paper_payloads,
         "selectedAuthorId": int(author_monitor_id),
         "paperScopeAuthorId": int(author_monitor_id),
+        **({"metadataWork": author_metadata_work.snapshot(storage)} if include_metadata_work else {}),
         "unreadCount": sum(1 for paper in paper_payloads if paper.get("author_unread")),
         "checkedAt": now_iso(),
         "scholarCooldown": google_scholar_global_cooldown(storage),
     }
 
 
-def author_monitor_index_snapshot(storage: Storage) -> dict[str, Any]:
+def author_monitor_index_snapshot(
+    storage: Storage, *, include_metadata_work: bool = True
+) -> dict[str, Any]:
     """Return the complete compact card index when its SQLite cache is current."""
     storage.remove_author_monitor_papers_by_journal_names(
         OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
@@ -14659,6 +14687,7 @@ def author_monitor_index_snapshot(storage: Storage) -> dict[str, Any]:
         "scholarCooldown": google_scholar_global_cooldown(storage),
         "indexReady": bool(status.get("ready")),
         "indexTotal": int(status.get("total_count") or 0),
+        **({"metadataWork": author_metadata_work.snapshot(storage)} if include_metadata_work else {}),
         "indexReadyCount": int(status.get("ready_count") or 0),
         "indexPendingCount": int(status.get("pending_count") or 0),
     }
@@ -14679,6 +14708,9 @@ def scholar_candidate_key(candidate: dict[str, Any], paper: dict[str, Any]) -> s
         or paper.get("url")
         or ""
     )
+    stable = paper_identity.scholar_identity(url)
+    if stable:
+        return "https://scholar.google.com/citations?citation_for_view=" + quote(stable, safe=":")
     if url:
         return url
     return "|".join(
@@ -14691,37 +14723,20 @@ def scholar_candidate_key(candidate: dict[str, Any], paper: dict[str, Any]) -> s
 
 
 def existing_paper_for_author_monitor(storage: Storage, paper: dict[str, Any]) -> dict[str, Any] | None:
-    paper_id = clean_text(paper.get("paper_id") or "")
-    if paper_id:
-        existing = storage.get_paper(paper_id)
-        if existing:
-            return existing
-    doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    if doi:
-        row = storage.conn.execute(
-            "SELECT * FROM papers WHERE lower(doi) = lower(?) ORDER BY source_count DESC LIMIT 1",
-            (doi,),
-        ).fetchone()
-        if row:
-            return dict(row)
-    title = normalize_publication_title(paper.get("title") or "")
+    matches = paper_identity.find(storage, paper)
+    if matches:
+        # The storage writer rechecks under its SQLite write transaction.
+        return matches[0]
+    title = paper_identity.title_key(paper.get("title"))
     if not title:
         return None
     year = clean_text(paper.get("publication_date") or "")[:4]
-    rows = storage.conn.execute(
-        """
-        SELECT * FROM papers
-        WHERE lower(title) = lower(?)
-        ORDER BY CASE WHEN doi IS NOT NULL AND doi != '' THEN 0 ELSE 1 END,
-                 source_count DESC
-        LIMIT 8
-        """,
-        (title,),
-    ).fetchall()
+    # Retain the existing exact-title/year fallback after stable identifiers.
+    rows = storage.conn.execute("SELECT * FROM papers WHERE lower(title)=lower(?)", (normalize_publication_title(paper.get("title")),))
     for row in rows:
         existing = dict(row)
-        existing_year = clean_text(existing.get("publication_date") or "")[:4]
-        if not year or not existing_year or year == existing_year:
+        existing_year = str(existing.get("publication_date") or "")[:4]
+        if (not year or not existing_year or year == existing_year) and paper_identity.compatible(storage, existing, paper):
             return existing
     return None
 
@@ -14730,7 +14745,10 @@ def save_google_scholar_publication_observation(
     storage: Storage,
     paper_id: str,
     candidate: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
     current = storage.get_paper(paper_id) if paper_id else None
     candidate_raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
@@ -14743,14 +14761,17 @@ def save_google_scholar_publication_observation(
         "publication_url": clean_text(observation.get("publication_url") or ""),
         "checked_at": clean_text(observation.get("checked_at") or now_iso()),
     }
-    return storage.update_paper_raw_json(paper_id, raw) or current
+    return storage.update_paper_raw_json(paper_id, raw, commit=commit) or current
 
 
 def save_openalex_author_monitor_observation(
     storage: Storage,
     paper_id: str,
     candidate: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
     current = storage.get_paper(paper_id) if paper_id else None
     candidate_raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
@@ -14762,7 +14783,7 @@ def save_openalex_author_monitor_observation(
         "cited_by_count": int_or_none(candidate_raw.get("cited_by_count")),
         "checked_at": now_iso(),
     }
-    return storage.update_paper_raw_json(paper_id, raw) or current
+    return storage.update_paper_raw_json(paper_id, raw, commit=commit) or current
 
 
 def semantic_scholar_author_candidate_raw(
@@ -14781,7 +14802,10 @@ def save_semantic_scholar_author_monitor_observation(
     storage: Storage,
     paper_id: str,
     candidate: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
     current = storage.get_paper(paper_id) if paper_id else None
     semantic = semantic_scholar_author_candidate_raw(candidate)
@@ -14793,8 +14817,47 @@ def save_semantic_scholar_author_monitor_observation(
         "citation_count": int_or_none(semantic.get("citationCount")),
         "checked_at": now_iso(),
     }
-    storage.update_paper_raw_json(paper_id, raw)
-    return storage.update_semantic_scholar_enrichment(paper_id, semantic) or current
+    updated = storage.update_paper_raw_json(paper_id, raw, commit=commit)
+    paper_id = updated["paper_id"] if updated else paper_id
+    return storage.update_semantic_scholar_enrichment(paper_id, semantic, commit=commit) or current
+
+
+def save_author_monitor_candidate(
+    storage: Storage, author_monitor_id: int, candidate: dict[str, Any],
+    normalized: dict[str, Any], *, is_scholar: bool, provider: str, unread: bool,
+) -> bool:
+    """Commit one accepted publication, or leave all its prior state intact."""
+    with paper_identity.transaction(storage):
+        existing = existing_paper_for_author_monitor(storage, normalized)
+        if existing:
+            reasons = paper_identity.review_reasons(storage, existing, normalized)
+            if reasons:
+                raise paper_identity.IdentityReviewRequired(existing, normalized, reasons)
+            paper_id = existing['paper_id']
+            save_observation = (
+                save_google_scholar_publication_observation if is_scholar else
+                save_openalex_author_monitor_observation if provider == 'OpenAlex' else
+                save_semantic_scholar_author_monitor_observation
+            )
+            updated = save_observation(storage, paper_id, candidate, commit=False)
+            normalized['paper_id'] = updated['paper_id'] if updated else paper_id
+        if not storage.upsert_paper(normalized, commit=False):
+            matches = paper_identity.find(storage, normalized)
+            existing = matches[0] if matches else (existing or normalized)
+            reasons = paper_identity.review_reasons(storage, existing, normalized)
+            raise paper_identity.IdentityReviewRequired(
+                existing, normalized, reasons or ['canonical_identifier_conflict'])
+        paper_id = normalized['paper_id']
+        if not existing and provider == 'Semantic Scholar':
+            semantic = semantic_scholar_author_candidate_raw(candidate)
+            if semantic:
+                storage.update_semantic_scholar_enrichment(paper_id, semantic, commit=False)
+        return storage.add_author_monitor_paper(
+            author_monitor_id=author_monitor_id, paper_id=paper_id,
+            scholar_key=scholar_candidate_key(candidate, normalized),
+            scholar_title=clean_text(normalized.get('title') or ''),
+            unread=unread, commit=False,
+        )
 
 
 def author_monitor_cooldown_active(monitor: dict[str, Any], now: datetime | None = None) -> bool:
@@ -14811,6 +14874,7 @@ def author_monitor_cooldown_active(monitor: dict[str, Any], now: datetime | None
     return current < until.astimezone(current.tzinfo)
 
 
+@scholar_access.for_database
 def refresh_author_monitor_for_db(
     db_path: Path,
     author_monitor_id: int,
@@ -15045,6 +15109,7 @@ def refresh_author_monitor_for_db(
                     ),
                 }
             added = 0
+            identity_reviews = []
             for candidate in candidates:
                 if openalex_author_work_is_excluded(candidate):
                     continue
@@ -15052,48 +15117,16 @@ def refresh_author_monitor_for_db(
                     normalized = paper_from_publication_candidate(candidate)
                 except Exception:
                     continue
-                existing = existing_paper_for_author_monitor(storage, normalized)
-                if existing:
-                    conflict_reasons = storage.paper_identity_conflict_reasons(existing, normalized)
-                    if conflict_reasons:
-                        storage.record_paper_identity_conflict(existing, normalized, conflict_reasons)
-                        continue
-                    paper_id = clean_text(existing.get("paper_id") or "")
-                    if is_scholar:
-                        save_google_scholar_publication_observation(
-                            storage, paper_id, candidate
-                        )
-                    elif active_metadata_provider == "OpenAlex":
-                        save_openalex_author_monitor_observation(
-                            storage, paper_id, candidate
-                        )
-                    else:
-                        save_semantic_scholar_author_monitor_observation(
-                            storage, paper_id, candidate
-                        )
-                else:
-                    if not storage.upsert_paper(normalized):
-                        continue
-                    paper_id = clean_text(normalized.get("paper_id") or "")
-                    if (
-                        active_metadata_provider == "Semantic Scholar"
-                        and paper_id
-                    ):
-                        semantic = semantic_scholar_author_candidate_raw(candidate)
-                        if semantic:
-                            storage.update_semantic_scholar_enrichment(
-                                paper_id,
-                                semantic,
-                            )
-                if not paper_id:
+                try:
+                    inserted = save_author_monitor_candidate(
+                        storage, author_monitor_id, candidate, normalized,
+                        is_scholar=is_scholar, provider=active_metadata_provider,
+                        unread=not baseline,
+                    )
+                except paper_identity.IdentityReviewRequired as exc:
+                    storage.record_paper_identity_conflict(exc.existing, exc.incoming, exc.reasons)
+                    identity_reviews.append(str(exc))
                     continue
-                inserted = storage.add_author_monitor_paper(
-                    author_monitor_id=author_monitor_id,
-                    paper_id=paper_id,
-                    scholar_key=scholar_candidate_key(candidate, normalized),
-                    scholar_title=clean_text(normalized.get("title") or ""),
-                    unread=not baseline,
-                )
                 if inserted:
                     added += 1
             success_at = now_iso()
@@ -15115,19 +15148,32 @@ def refresh_author_monitor_for_db(
                 message = f"{added} new publication{'s' if added != 1 else ''} found." if added else "No new publications."
             if provider_fallback_note:
                 message = f"{message} {provider_fallback_note}"
+            status = "partial" if identity_reviews else "success"
+            if identity_reviews:
+                message = (
+                    f"Refresh completed; {len(identity_reviews)} publication(s) need identity review. "
+                    f"{added} new publication(s) added. {identity_reviews[0]}"
+                )
+                if len(identity_reviews) > 1:
+                    message += f" {len(identity_reviews) - 1} additional review(s) recorded."
+                if provider_fallback_note:
+                    message += f" {provider_fallback_note}"
             storage.update_author_monitor(
                 author_monitor_id,
                 profile=refreshed_profile,
-                status="success",
+                status=status,
                 message=message,
                 last_checked_at=success_at,
                 last_success_at=success_at,
                 cooldown_until="",
             )
+            author_profile_retry.succeeded(storage, monitor)
             return {
                 "author_id": author_monitor_id,
-                "status": "success",
+                "status": status,
                 "added": added,
+                "identity_review_count": len(identity_reviews),
+                "identity_reviews": identity_reviews,
                 "seen": len(candidates),
                 "baseline": baseline,
                 "full_metadata": full_metadata,
@@ -15163,17 +15209,25 @@ def refresh_author_monitor_for_db(
             }
         except Exception as exc:
             message = clean_text(str(exc)) or "Author refresh failed"
+            network_error = author_profile_retry.network_failure(exc)
+            profile_error = author_profile_retry.profile_failure(exc)
+            if network_error and not author_profile_retry.network_failure(message):
+                message = f"Network connection interrupted: {message}"
             storage.update_author_monitor(
                 author_monitor_id,
                 status="error",
                 message=message,
                 last_checked_at=now_iso(),
             )
+            if network_error or profile_error:
+                author_profile_retry.failed(storage, monitor, datetime.now(local_timezone()), profile_error=profile_error)
             return {
                 "author_id": author_monitor_id,
                 "status": "error",
                 "added": 0,
                 "message": message,
+                "network_retryable": network_error,
+                "profile_retryable": profile_error,
             }
     finally:
         storage.close()
@@ -15349,6 +15403,7 @@ def compact_nature_reference(paper: dict[str, Any]) -> dict[str, str]:
         "year": publication_year_from_raw(paper, raw),
         "doi": clean_text(paper.get("doi") or ""),
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
     }
 
 
@@ -15846,6 +15901,7 @@ def google_scholar_request_with_spacing(
 ) -> Any:
     global GOOGLE_SCHOLAR_LAST_REQUEST_AT
     with GOOGLE_SCHOLAR_REQUEST_LOCK:
+        scholar_access.check()
         if GOOGLE_SCHOLAR_LAST_REQUEST_AT > 0:
             target_interval = random.uniform(
                 GOOGLE_SCHOLAR_REQUEST_INTERVAL_MIN_SECONDS,
@@ -15854,10 +15910,43 @@ def google_scholar_request_with_spacing(
             elapsed = time.monotonic() - GOOGLE_SCHOLAR_LAST_REQUEST_AT
             if elapsed < target_interval:
                 time.sleep(target_interval - elapsed)
+        scholar_access.check()
         try:
-            return request_with_retries(method, url, **kwargs)
+            # No retry inside this critical section may bypass a new cooldown.
+            kwargs["max_retries"] = 1
+            response = request_with_retries(method, url, **kwargs)
+            if getattr(response, 'status_code', 200) in {403, 429} or is_google_scholar_block_page(response.text, response.url):
+                reason = google_scholar_restriction_reason(response=response)
+                raise GoogleScholarBlockedError(f"{google_scholar_block_message()} Detection: {reason}.")
+            return response
+        except Exception as exc:
+            if isinstance(exc, GoogleScholarBlockedError) or is_google_scholar_block_error(exc):
+                # Keep the observed trigger, not response bodies, query strings
+                # or arbitrary exception text. Previously every restriction was
+                # persisted as the same generic message, hiding its cause.
+                message = (str(exc) if isinstance(exc, GoogleScholarBlockedError) else
+                           f"{google_scholar_block_message()} Detection: {google_scholar_restriction_reason(error=exc)}.")
+                scholar_access.blocked(message)
+                raise GoogleScholarBlockedError(message) from exc
+            raise
         finally:
             GOOGLE_SCHOLAR_LAST_REQUEST_AT = time.monotonic()
+
+
+def google_scholar_restriction_reason(*, response: Any = None, error: Exception | None = None) -> str:
+    if response is None and error is not None:
+        response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if status in {403, 429}:
+        return f"HTTP {status}"
+    if error is not None:
+        # request_with_retries raises a plain RuntimeError for a final 429.
+        text = str(error).lower()
+        for code in (403, 429):
+            if f"http {code}" in text or f"{code} client error" in text:
+                return f"HTTP {code}"
+        return "access-denied error"
+    return "verification or unusual-traffic page"
 
 
 def google_scholar_author_row_to_profile(row: Any) -> dict[str, Any]:
@@ -15945,21 +16034,29 @@ def fetch_google_scholar_profile_payload(
                 raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
             raise
         html = response.text
-        if is_google_scholar_block_page(html, response.url):
+        if getattr(response, 'status_code', 200) in {403, 429} or is_google_scholar_block_page(html, response.url):
             raise GoogleScholarBlockedError(google_scholar_block_message())
         soup = BeautifulSoup(html, "html.parser")
         if start == 0:
             profile.update(google_scholar_profile_page_metadata(soup, response.url, user_id))
-        rows = soup.select("tr.gsc_a_tr")
+        rows = soup.select(".gsc_a_tr")
         if not rows:
-            if start == 0:
-                raise RuntimeError("No publication rows were found on this Scholar profile")
-            break
+            # Only an explicit empty list is a valid empty response. A login,
+            # consent or changed page must not be reported as a successful check.
+            if soup.select_one("#gsc_a_b #gsc_a_nn") and (start or profile.get("name")):
+                break
+            raise author_profile_retry.ProfileResponseError(
+                author_profile_retry.PROFILE_ERROR +
+                ". The site returned an unexpected page or requires browser access. "
+                "Saved publications are unchanged; automatic checks will retry later."
+            )
         before = len(candidates)
+        parsed_rows = 0
         for row in rows:
             candidate = google_scholar_row_to_publication(row)
             if not candidate:
                 continue
+            parsed_rows += 1
             paper = candidate["paper"]
             key = "|".join(
                 [
@@ -15974,7 +16071,11 @@ def fetch_google_scholar_profile_payload(
             candidates.append(candidate)
             if len(candidates) >= limit:
                 break
-        if len(candidates) >= limit or len(rows) < page_size or len(candidates) == before:
+        if not parsed_rows or len(candidates) == before:
+            raise author_profile_retry.ProfileResponseError(
+                author_profile_retry.PROFILE_ERROR + ". The publication list was incomplete or unreadable."
+            )
+        if len(candidates) >= limit or len(rows) < page_size:
             break
     return {"profile": profile, "candidates": candidates}
 
@@ -16044,18 +16145,24 @@ def is_google_scholar_block_error(error: Exception) -> bool:
         or "sorry/index" in text
         or "google.com/sorry" in text
         or "403 client error" in text
+        or "429 client error" in text
+        or "http 429" in text
+        or "http 403" in text
         or "forbidden" in text
     )
 
 
 def is_google_scholar_block_page(html: str, url: str = "") -> bool:
-    text = f"{url}\n{html[:5000]}".lower()
-    return (
-        "google.com/sorry" in text
-        or "/sorry/index" in text
-        or "unusual traffic" in text
-        or "recaptcha" in text
-    )
+    address = url.lower()
+    if "google.com/sorry" in address or "/sorry/index" in address:
+        return True
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.select_one('.g-recaptcha, #recaptcha, form[action*="/sorry/"], iframe[src*="recaptcha"], script[src*="recaptcha"]'):
+        return True
+    # Scholar's HTML can have more than 5 KB of scripts before its error text.
+    # Publication titles containing these words are not access restrictions.
+    return not soup.select_one('.gsc_a_at') and any(marker in soup.get_text(' ', strip=True).lower()
+        for marker in ('unusual traffic', 'not a robot', 'automated queries', 'recaptcha'))
 
 
 def google_scholar_block_message() -> str:
@@ -16075,6 +16182,9 @@ def resolve_google_scholar_candidate_to_identifier(candidate: dict[str, Any]) ->
 
 def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[str, Any] | None:
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
+    if paper_identity.work_kind(paper, candidate.get("raw") or paper.get("raw") or {}) == "dataset":
+        # A dataset's similar title is not a request for the associated article.
+        return None
     title = clean_text(paper.get("title") or "")
     year = clean_text(paper.get("publication_date") or "")
     if not title:
@@ -16127,6 +16237,9 @@ def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[s
 def resolve_google_scholar_candidate_to_arxiv(candidate: dict[str, Any]) -> dict[str, Any] | None:
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
     raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+    if paper_identity.work_kind(paper, candidate.get("raw") or paper.get("raw") or {}) == "dataset":
+        # A dataset's similar title is not a request for the associated article.
+        return None
     title = clean_text(paper.get("title") or "")
     year = clean_text(paper.get("publication_date") or raw.get("year") or "")
     direct_candidates = [
@@ -16369,19 +16482,8 @@ def normalize_publication_doi(value: str) -> str:
 
 
 def normalize_arxiv_identifier(value: str) -> str:
-    text = clean_text(value)
-    if not text:
-        return ""
-    text = unquote(text).strip().strip("<>")
-    text = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf|html)/", "", text, flags=re.I)
-    text = re.sub(r"\.pdf(?:[?#].*)?$", "", text, flags=re.I)
-    text = re.sub(r"^arxiv\s*:\s*", "", text, flags=re.I)
-    text = text.strip().strip(".,;")
-    old_style = re.search(r"\b([a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?\b", text, flags=re.I)
-    if old_style:
-        return strip_arxiv_version(old_style.group(1)).lower()
-    new_style = re.search(r"\b(\d{4}\.\d{4,5})(?:v\d+)?\b", text, flags=re.I)
-    return strip_arxiv_version(new_style.group(1)).lower() if new_style else ""
+    from .text import normalize_arxiv_identifier as normalize
+    return normalize(value)
 
 
 def looks_like_arxiv_identifier(value: str) -> bool:
@@ -16440,10 +16542,13 @@ def arxiv_identifier_from_raw_values(value: Any, *, depth: int = 0) -> str:
                 identifier = arxiv_identifier_from_raw_values(value.get(key), depth=depth + 1)
                 if identifier:
                     return identifier
-        for item in value.values():
-            identifier = arxiv_identifier_from_raw_values(item, depth=depth + 1)
-            if identifier:
-                return identifier
+        # Only identity-bearing containers are candidates. A reference, abstract
+        # or conflict/history message mentioning arXiv is not this paper's ID.
+        for key in ("ArXiv", "arXiv", "ARXIV", "identifier", "preprint", "citation_versions", "ads", "locations", "primary_location", "best_oa_location"):
+            if key in value:
+                identifier = arxiv_identifier_from_raw_values(value[key], depth=depth + 1)
+                if identifier:
+                    return identifier
     if isinstance(value, list):
         for item in value:
             identifier = arxiv_identifier_from_raw_values(item, depth=depth + 1)
@@ -17908,14 +18013,14 @@ def clear_publication_export_format(export_format: str) -> None:
         for path in PUBLICATION_EXPORT_DIR.glob(pattern):
             if export_format == "tex" and path.name.endswith("_pdf.tex"):
                 continue
-            if path.is_file() or path.is_symlink():
+            if path.is_file() or finder_alias.is_alias(path):
                 path.unlink(missing_ok=True)
 
 
 def clear_publication_export_dir() -> None:
     PUBLICATION_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     for path in PUBLICATION_EXPORT_DIR.glob("publication_list_*"):
-        if path.is_file() or path.is_symlink():
+        if path.is_file() or finder_alias.is_alias(path):
             path.unlink(missing_ok=True)
 
 
@@ -17947,7 +18052,7 @@ def copy_publication_export_to_desktop(path: Path) -> Path:
     desktop = Path.home() / "Desktop"
     desktop.mkdir(parents=True, exist_ok=True)
     for old_path in desktop.glob("publication_list_*_overleaf.zip"):
-        if old_path.is_file() or old_path.is_symlink():
+        if old_path.is_file() or finder_alias.is_alias(old_path):
             old_path.unlink(missing_ok=True)
     target = desktop / path.name
     shutil.copy2(path, target)
@@ -18868,6 +18973,7 @@ def update_manual_preprint_identifier(
     paper_id: str,
     identifier: str,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -18876,10 +18982,23 @@ def update_manual_preprint_identifier(
     if cleaned and not normalized:
         raise ValueError("Enter a valid arXiv identifier or arXiv URL")
     raw = parse_raw_json(paper)
+    previous = arxiv_identifier_for_paper(paper)
+    if normalized == previous:
+        return paper
     raw["manual_preprint_identifier_override"] = True
     raw["manual_preprint_identifier"] = normalized
-    raw["manual_preprint_identifier_updated_at"] = now_iso()
-    updated = storage.update_paper_raw_json(str(paper_id), raw)
+    raw["manual_preprint_identifier_updated_at"] = datetime.now().astimezone().isoformat(timespec="microseconds")
+    from . import identifier_correction, paper_identity
+    identifier_correction.mark(raw, 'arxiv', normalized, previous, raw['manual_preprint_identifier_updated_at'])
+    # An edit changes this object; matching an existing ID must not merge objects
+    # implicitly before the user can inspect the corrected information.
+    with paper_identity.transaction(storage):
+        payload = {**paper, 'raw': raw}
+        if normalized and any(p['paper_id'] != paper_id and ('arxiv', normalized) in paper_identity.identifiers(storage, p)
+                              for p in paper_identity.find(storage, payload)):
+            raise ValueError('This arXiv ID is already registered to another Gewu Key. Existing papers were not changed.')
+        updated = storage._update_paper_raw_json_unresolved(str(paper_id), raw)
+        paper_identity.register(storage, updated)
     if not updated:
         raise KeyError(str(paper_id))
     return updated
@@ -18916,6 +19035,7 @@ def download_arxiv_preprint_versions(
     *,
     include_history: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -19458,6 +19578,7 @@ def create_author_monitor_enrichment_job(
     force: bool = False,
     identifiers_only: bool = False,
     max_papers: int = 0,
+    automatic: bool = False,
 ) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -19469,6 +19590,7 @@ def create_author_monitor_enrichment_job(
             "force": bool(force),
             "identifiers_only": bool(identifiers_only),
             "max_papers": max(0, int(max_papers or 0)),
+            "automatic": bool(automatic),
             "status": "queued",
             "stage": "queued",
             "started_at": now,
@@ -19605,13 +19727,17 @@ def record_author_monitor_enrichment_attempt(
     *,
     status: str,
     message: str = "",
+    automatic: bool = False,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     current = storage.get_paper(paper_id) or paper
     raw = parse_raw_json(current)
+    attempts = author_metadata_work.attempt_count(current, sys.modules[__name__])
     raw["author_monitor_enrichment"] = {
         "status": status,
         "message": clean_text(message),
         "attempted_at": now_iso(),
+        "automatic_attempts": attempts + int(automatic),
     }
     return storage.update_paper_raw_json(paper_id, raw)
 
@@ -19625,6 +19751,8 @@ def run_author_monitor_enrichment_job(
     force: bool = False,
     identifiers_only: bool = False,
     max_papers: int = 0,
+    paper_ids: list[str] | None = None,
+    time_budget_seconds: float = 0,
 ) -> None:
     storage = Storage(db_path)
     matched = 0
@@ -19633,13 +19761,15 @@ def run_author_monitor_enrichment_job(
     skipped = 0
     errors: list[str] = []
     try:
-        rows = storage.list_author_monitor_papers(int(author_monitor_id or 0))
-        selected_paper_id = clean_text(paper_id)
+        rows = ([paper for pid in paper_ids if (paper := storage.get_paper(pid))]
+                if paper_ids is not None else storage.list_author_monitor_papers(int(author_monitor_id or 0)))
+        selected_paper_id = storage.resolve_paper_id(clean_text(paper_id))
         if selected_paper_id:
             rows = [
                 paper for paper in rows
                 if clean_text(paper.get("paper_id") or "") == selected_paper_id
             ]
+        automatic = bool((get_author_monitor_enrichment_job(job_id) or {}).get("automatic"))
         pending = [
             paper for paper in rows
             if (
@@ -19648,6 +19778,7 @@ def run_author_monitor_enrichment_job(
                 else author_monitor_paper_needs_enrichment(paper)
             )
             and (force or not author_monitor_enrichment_recently_attempted(paper))
+            and (not automatic or author_metadata_work.attempt_count(paper, sys.modules[__name__]) < author_metadata_work.MAX_ATTEMPTS)
         ]
         if int(max_papers or 0) > 0:
             pending = pending[: int(max_papers)]
@@ -19691,15 +19822,23 @@ def run_author_monitor_enrichment_job(
             skipped=skipped,
         )
         index = 0
+        started = time.monotonic()
         while True:
+            if index and time_budget_seconds and time.monotonic() - started >= time_budget_seconds:
+                break
             promote_priority_requests()
             if not work_queue:
                 break
             paper = work_queue.pop(0)
-            paper_id = clean_text(paper.get("paper_id") or "")
+            paper_id = storage.resolve_paper_id(clean_text(paper.get("paper_id") or ""))
+            processed_ids = {storage.resolve_paper_id(pid) for pid in processed_ids}
             if not paper_id or paper_id in processed_ids:
                 continue
+            paper = storage.get_paper(paper_id) or paper
             processed_ids.add(paper_id)
+            if automatic and not author_monitor_paper_needs_enrichment(paper):
+                skipped += 1
+                continue  # A concurrent explicit refresh already completed it.
             index += 1
             title = clean_text(paper.get("title") or paper_id or "Untitled paper")
             update_author_monitor_enrichment_job(
@@ -19746,6 +19885,7 @@ def run_author_monitor_enrichment_job(
                         updated,
                         status="complete",
                         message="Identifier metadata refreshed",
+                        automatic=automatic,
                     )
                 else:
                     unresolved += 1
@@ -19755,6 +19895,7 @@ def run_author_monitor_enrichment_job(
                         paper,
                         status="unresolved",
                         message="No confident DOI or arXiv match",
+                        automatic=automatic,
                     )
             except Exception as exc:
                 unresolved += 1
@@ -19766,6 +19907,7 @@ def run_author_monitor_enrichment_job(
                     paper,
                     status="error",
                     message=str(exc),
+                    automatic=automatic,
                 )
             update_author_monitor_enrichment_job(
                 job_id,
@@ -20079,7 +20221,7 @@ def update_library_import_job(job_id: str, **updates: Any) -> None:
         job.update(updates)
 
 
-def request_stop_library_import_job(job_id: str) -> dict[str, Any] | None:
+def request_stop_library_import_job(job_id: str, *, storage: Storage | None = None) -> dict[str, Any] | None:
     with LIBRARY_IMPORT_JOBS_LOCK:
         job = LIBRARY_IMPORT_JOBS.get(job_id)
         if not job:
@@ -20090,6 +20232,11 @@ def request_stop_library_import_job(job_id: str) -> dict[str, Any] | None:
             job["stage"] = "stopping"
         snapshot = dict(job)
         snapshot["logs"] = list(job.get("logs") or [])[-300:]
+    # Stop the durable child as well, including during an in-flight lookup.
+    # Otherwise Stop Import leaves an orphaned paused Refresh Info task.
+    refresh_id = snapshot.get("metadata_job_id")
+    if storage is not None and refresh_id and snapshot.get("cancel_requested"):
+        metadata_jobs.control(storage, refresh_id, "stop")
     label = {
         "metadata_refresh": "metadata refresh",
         "identifier_recovery": "identifier recovery",
@@ -20104,14 +20251,20 @@ def library_import_cancel_requested(job_id: str) -> bool:
         return bool(job and job.get("cancel_requested"))
 
 
-def log_library_import_job(job_id: str, message: str, *, level: str = "info") -> None:
+def log_library_import_job(job_id: str, message: str, *, level: str = "info", paper_id: str | None = None,
+                           library_item_id: int | None = None) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     with LIBRARY_IMPORT_JOBS_LOCK:
         job = LIBRARY_IMPORT_JOBS.get(job_id)
         if not job:
             return
         logs = job.setdefault("logs", [])
-        logs.append({"time": stamp, "level": level, "message": message})
+        entry = {"time": stamp, "level": level, "message": message}
+        if paper_id:
+            entry["paper_id"] = str(paper_id)
+            if library_item_id:
+                entry["library_item_id"] = int(library_item_id)
+        logs.append(entry)
         if len(logs) > 20000:
             del logs[:-20000]
 
@@ -20139,7 +20292,7 @@ def library_import_progress_callback(job_id: str):
             updates["scan_dirs"] = int(event.get("directories_scanned") or 0)
         update_library_import_job(job_id, **updates)
         if message:
-            log_library_import_job(job_id, message)
+            log_library_import_job(job_id, message, paper_id=event.get("paper_id"), library_item_id=event.get("library_item_id"))
 
     return progress
 
@@ -20411,6 +20564,7 @@ def run_library_import_job(
     source_paths = source_paths or [folder_path]
     metadata_mode = normalize_import_metadata_mode(metadata_mode)
     import_prefix = "finder-drop" if preserve_top_level else "folder"
+    result = None
     inventory_path = WORKSPACE_ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
     report_path = WORKSPACE_ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
     progress = library_import_progress_callback(job_id)
@@ -20536,11 +20690,15 @@ def run_library_import_job(
             status="failed" if summary.get("errors") else "completed",
             stage="complete",
             finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-            percent=100,
+            percent=(min(100, round(100 * int(summary.get("processed_files") or 0) / max(1, int(summary.get("total_files") or 0)))) if summary.get("errors") else 100),
             result=summary,
         )
     except ImportCancelled as exc:
         log_library_import_job(job_id, str(exc) or "Import stopped by user", level="warn")
+        # Metadata may have been stopped after the files were fully imported.
+        # Keep that result available in Details; Stop never deletes the batch.
+        if result is not None:
+            update_library_import_job(job_id, result=summarize_import_result(result))
         update_library_import_job(
             job_id,
             status="cancelled",
@@ -20718,18 +20876,55 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
             (batch_id,),
         ).fetchall()
     ]
+    removed_resources = [dict(row) for row in storage.conn.execute(
+        "SELECT * FROM resources WHERE import_batch_id = ?", (batch_id,))]
     storage.conn.execute("DELETE FROM resources WHERE import_batch_id = ?", (batch_id,))
-    storage.conn.execute("DELETE FROM papers WHERE import_batch_id = ?", (batch_id,))
+    # A file explicitly reassigned after import is no longer owned by this batch.
+    # Preserve its destination paper, including destinations created by the batch.
+    paper_count = storage.conn.execute(
+        """DELETE FROM papers WHERE import_batch_id = ? AND NOT EXISTS
+           (SELECT 1 FROM resources WHERE resources.paper_id = papers.paper_id)""",
+        (batch_id,),
+    ).rowcount
+    storage.conn.execute("UPDATE papers SET import_batch_id = NULL WHERE import_batch_id = ?", (batch_id,))
+    from .file_reassignment import _repair_source_pointers
+    for resource in removed_resources:
+        surviving_paper = storage.get_paper(resource.get("paper_id"))
+        if surviving_paper:
+            _repair_source_pointers(storage, surviving_paper, resource)
     storage.conn.execute("DELETE FROM inventory_import_batches WHERE id = ?", (batch_id,))
     deleted_folders = cleanup_empty_import_folders(storage, started_at)
     storage.conn.commit()
+
+    # Reassigned files no longer belong to the import batch. Never trash a surviving
+    # file, or an import directory that still contains one of those files.
+    protected_paths = set()
+    for row in storage.conn.execute("""SELECT stored_path, source_path FROM resources
+        UNION ALL SELECT main_pdf_path, merged_pdf_path FROM papers
+        UNION ALL SELECT source_path, analysis_path FROM papers"""):
+        for value in row:
+            if not value:
+                continue
+            try:
+                path = Path(value).expanduser().resolve()
+                protected_paths.update([str(path), *(str(parent) for parent in path.parents)])
+            except (OSError, RuntimeError, ValueError):
+                continue
+
+    def trash_unreferenced_import_path(value, root):
+        try:
+            if value and str(Path(value).expanduser().resolve()) in protected_paths:
+                return False
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return delete_import_path(value, root)
 
     deleted_paths: list[str] = []
     copy_target = str(result.get("copy_target_root") or "") or str(DEFAULT_LIBRARY_IMPORT_DIR / batch_id)
     deletable_roots = [DEFAULT_LIBRARY_DIR, DEFAULT_SPACES_DIR, DEFAULT_MY_PUBLICATIONS_DIR, DEFAULT_LIBRARY_IMPORT_DIR]
     for path_value in resource_paths:
         for root in deletable_roots:
-            if delete_import_path(path_value, root):
+            if trash_unreferenced_import_path(path_value, root):
                 deleted_paths.append(path_value)
                 break
     try:
@@ -20739,7 +20934,7 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
     protected_copy_roots = {str(root.resolve()) for root in deletable_roots}
     if copy_target_path and str(copy_target_path) not in protected_copy_roots:
         for root in deletable_roots:
-            if delete_import_path(str(copy_target_path), root):
+            if trash_unreferenced_import_path(str(copy_target_path), root):
                 deleted_paths.append(str(copy_target_path))
                 break
     cleanup_local_copy_empty_parents(deleted_paths)
@@ -21045,9 +21240,20 @@ def configured_journal_entry(name: str, raw: dict[str, Any] | None = None) -> di
     )
 
 
+def journal_uses_text_label(name: str) -> bool:
+    key = clean_journal_name(name).casefold()
+    # APS pages expose publisher/campaign artwork rather than a dependable
+    # journal wordmark. Keep their names readable even if an old logo is cached.
+    return (
+        key in {ARXIV_JOURNAL_NAME.casefold(), "physical review", "prl", "prx", "rmp", "reviews of modern physics"}
+        or key.startswith("physical review ")
+        or key.startswith("prx ")
+    )
+
+
 def local_journal_logo_url(name: str) -> str:
     cleaned = clean_journal_name(name)
-    if not cleaned or cleaned.casefold() == ARXIV_JOURNAL_NAME.casefold():
+    if not cleaned or journal_uses_text_label(cleaned):
         return ""
     return f"/api/journal-logo-image?name={quote(cleaned)}"
 
@@ -21114,6 +21320,8 @@ def journal_logo_file_type(content: bytes, content_type: str = "", source_url: s
 
 
 def direct_journal_logo_source(name: str, configured: dict[str, Any] | None = None) -> str:
+    if journal_uses_text_label(name):
+        return ""
     journal = dict(configured or {})
     configured_url = clean_text(journal.get("logo_url") or "")
     if configured_url and not is_icon_logo_candidate(configured_url, configured_url):
@@ -21136,7 +21344,7 @@ def cache_journal_logo(
     configured: dict[str, Any] | None = None,
 ) -> Path | None:
     cleaned = clean_journal_name(name)
-    if not cleaned or cleaned.casefold() == ARXIV_JOURNAL_NAME.casefold():
+    if not cleaned or journal_uses_text_label(cleaned):
         return None
     cache_key = journal_logo_cache_key(db_path, cleaned)
     existing = cached_journal_logo_path(db_path, cleaned)
@@ -21225,7 +21433,7 @@ def resolve_journal_metadata(name: str) -> dict[str, Any]:
 
 
 def resolve_journal_logo_url(name: str, homepage_url: str = "") -> str:
-    if name.lower().strip() == ARXIV_JOURNAL_NAME.lower():
+    if journal_uses_text_label(name):
         return ""
     known = KNOWN_JOURNAL_LOGOS.get(name.lower().strip())
     if known:
@@ -21406,10 +21614,21 @@ def existing_path_or_empty(path: str) -> str:
     return path if requested.exists() else ""
 
 
-def finder_safe_name(value: str, fallback: str = "Untitled") -> str:
+def finder_safe_name(value: str, fallback: str = "Untitled", *, preserve_extension: bool = False) -> str:
     clean = " ".join(str(value or "").strip().split()) or fallback
     clean = re.sub(r"[/:\0]+", "-", clean)
     clean = clean.strip(" .")
+    if preserve_extension:
+        # File attachment names must retain their type after truncation. Folder
+        # names keep the existing policy. Leave room for collision/temp suffixes
+        # under the filesystem's 255-byte component limit, including Unicode.
+        suffix = Path(clean).suffix
+        if len(suffix) >= 120 or len(suffix.encode("utf-8")) >= 220:
+            suffix = ""
+        stem = clean[:-len(suffix)] if suffix else clean
+        stem = stem[:120 - len(suffix)]
+        stem = stem.encode("utf-8")[:220 - len(suffix.encode("utf-8"))].decode("utf-8", errors="ignore")
+        return desktop_files.safe_filename((stem.rstrip(" .") or "File") + suffix)
     return desktop_files.safe_filename(clean[:120] or fallback)
 
 
@@ -21478,6 +21697,7 @@ def associated_scope_for_path(path: Path) -> tuple[str, Path] | None:
 
 
 def associated_work_dir_for_paper(storage: Storage, paper_id: str) -> Path:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -21498,7 +21718,7 @@ def associated_work_dir_for_paper(storage: Storage, paper_id: str) -> Path:
             current /= part
             if current.name.endswith(marker):
                 return current
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     scope = associated_scope_for_path(canonical) if canonical else None
     if scope:
         scope_name, relative = scope
@@ -21513,11 +21733,12 @@ def associated_work_dir_for_paper(storage: Storage, paper_id: str) -> Path:
         else:
             mirrored_parent = ASSOCIATED_FILES_ROOT / "Library"
         title_stem = clean_text(paper.get("title") or "Paper")
-    folder_name = finder_safe_name(f"{title_stem} [{storage_key}]", f"Paper [{storage_key}]")
+    folder_name = bundle_name(finder_safe_name(title_stem, 'Paper'), storage_key)
     return mirrored_parent / folder_name
 
 
 def existing_associated_work_dir(storage: Storage, paper_id: str) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id)) or {}
     storage_key = clean_text(paper.get("storage_key") or "") or storage.storage_key_for_paper_id(str(paper_id))
     marker = f"[{storage_key}]"
@@ -21542,6 +21763,7 @@ def relocate_associated_work_dir(
     paper_id: str,
     canonical: Path,
 ) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     source = existing_associated_work_dir(storage, str(paper_id))
     scope = associated_scope_for_path(canonical)
     if not source or not source.exists() or not scope:
@@ -21553,34 +21775,32 @@ def relocate_associated_work_dir(
         ASSOCIATED_FILES_ROOT
         / scope_name
         / relative.parent
-        / finder_safe_name(f"{canonical.stem} [{storage_key}]", f"Paper [{storage_key}]")
+        / bundle_name(finder_safe_name(canonical.stem, 'Paper'), storage_key)
     )
     if source.resolve() == destination.resolve():
         return source
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists() or destination.is_symlink():
+    if destination.exists() or finder_alias.is_alias(destination):
         destination = unique_path_in_dir(destination)
     old_source = source
+    path_moves: dict[Path, tuple[Path, list[str]]] = {}
+    for resource in storage.list_paper_resources(str(paper_id), ensure_primary=False):
+        value = storage.resource_local_path(resource)
+        if not value:
+            continue
+        old_file = Path(value).expanduser().resolve()
+        try:
+            relative_file = old_file.relative_to(old_source.resolve())
+        except ValueError:
+            continue
+        owners = paper_ids_referencing_pdf_path(storage, old_file, include_resources=True)
+        path_moves[old_file] = (destination / relative_file, list(dict.fromkeys([str(paper_id), *owners])))
     shutil.move(str(source), str(destination))
     try:
         storage.conn.execute("BEGIN IMMEDIATE")
-        rows = storage.conn.execute(
-            "SELECT id, stored_path FROM resources WHERE paper_id = ?",
-            (str(paper_id),),
-        ).fetchall()
-        timestamp = now_iso()
-        for row in rows:
-            stored_path = clean_text(row["stored_path"] or "")
-            if not stored_path:
-                continue
-            try:
-                relative_resource = Path(stored_path).expanduser().resolve().relative_to(old_source.resolve())
-            except (OSError, ValueError):
-                continue
-            storage.conn.execute(
-                "UPDATE resources SET stored_path = ?, updated_at = ? WHERE id = ?",
-                (str(destination / relative_resource), timestamp, int(row["id"])),
-            )
+        for old_file, (new_file, owners) in path_moves.items():
+            for owner_id in owners:
+                update_paper_file_path_references(storage, owner_id, old_file, new_file, commit=False)
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
@@ -21683,6 +21903,7 @@ def update_paper_resource_role(
     file_source: str = "",
     source_detail: str | None = None,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
@@ -21811,6 +22032,7 @@ def update_paper_resource_role(
 
 
 def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     if sys.platform == "win32":
         from .windows_recycle import resource_removal
         with resource_removal(storage, paper_id, resource_id):
@@ -21828,7 +22050,8 @@ def _delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) ->
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
         raise KeyError(int(resource_id))
-    if int(paper.get("primary_resource_id") or 0) == int(resource_id):
+    if (int(paper.get("primary_resource_id") or 0) == int(resource_id)
+            or int(parse_raw_json(paper).get("file_layout", {}).get("default_resource_id") or 0) == int(resource_id)):
         raise ValueError("The current default file cannot be deleted. Select another version first.")
 
     stored_text = clean_text(resource.get("stored_path") or "")
@@ -21879,6 +22102,7 @@ def _delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) ->
         raise
     if managed_file and stored_path and not shared_file:
         cleanup_local_copy_empty_parents([str(stored_path)])
+    sync_associated_aliases(storage, str(paper_id))
     return {
         "resource_id": int(resource_id),
         "name": clean_text(resource.get("display_name") or "") or (stored_path.name if stored_path else "Attached File"),
@@ -21909,6 +22133,7 @@ def refresh_paper_resource_fingerprints(
     commit: bool = True,
 ) -> list[dict[str, Any]]:
     """Refresh exact and annotation-insensitive fingerprints for one work on demand."""
+    paper_id = storage.resolve_paper_id(paper_id)
 
     storage.ensure_primary_pdf_resource(str(paper_id), commit=commit)
     resources = storage.list_paper_resources(str(paper_id), ensure_primary=False)
@@ -21964,6 +22189,7 @@ def snapshot_primary_resource_before_download(
     *,
     force: bool,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not force:
         return None
     paper = storage.get_paper(str(paper_id))
@@ -22004,12 +22230,15 @@ def cleanup_download_resource_snapshot(snapshot: dict[str, Any] | None) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def downloaded_version_role(paper: dict[str, Any], source_url: str = "") -> str:
+def downloaded_version_role(paper: dict[str, Any], source_url: str = "", *, pdf_path: Path | None = None) -> str:
     resolved_url = clean_text(source_url or paper.get("pdf_url") or "")
     host = urlparse(resolved_url).netloc.casefold()
     if host == "arxiv.org" or host.endswith(".arxiv.org"):
         return "preprint"
     if is_nature_reference_pdf_url(resolved_url):
+        return "accepted_manuscript"
+    if (pdf_path and normalize_doi(paper.get("doi") or "").startswith("10.1126/")
+            and is_science_first_release_pdf(pdf_path)):
         return "accepted_manuscript"
     if resolved_url and clean_text(paper.get("doi") or ""):
         return "version_of_record"
@@ -22058,6 +22287,7 @@ def register_downloaded_paper_resource(
     result: dict[str, Any],
     snapshot: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     status = clean_text(result.get("status") or "").lower()
     if status not in {"success", "partial", "skipped"}:
         return None
@@ -22102,7 +22332,7 @@ def register_downloaded_paper_resource(
         storage.conn.commit()
         return storage.get_paper_resource(int(primary.get("id") or 0))
     download_source_url = clean_text(result.get("main_pdf_url") or paper.get("pdf_url") or "")
-    new_version_role = downloaded_version_role(paper, download_source_url)
+    new_version_role = downloaded_version_role(paper, download_source_url, pdf_path=canonical)
     new_version_label = downloaded_version_label(new_version_role)
     new_file_type = normalize_paper_file_type(new_version_role)
     new_file_source, new_source_detail = downloaded_file_source(download_source_url)
@@ -22329,6 +22559,7 @@ def register_downloaded_paper_resource(
     return storage.get_paper_resource(created_id)
 
 
+@serialize_paper_file_writes
 def attach_file_to_paper(
     storage: Storage,
     *,
@@ -22347,6 +22578,7 @@ def attach_file_to_paper(
     refresh_existing: bool = True,
     mime_type: str = "",
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -22362,21 +22594,22 @@ def attach_file_to_paper(
         version = "other"
     elif role != "publication_version":
         version = ""
-    safe_name = finder_safe_name(Path(filename or "Attached File").name, "Attached File")
+    safe_name = finder_safe_name(Path(filename or "Attached File").name, "Attached File", preserve_extension=True)
     suffix = Path(safe_name).suffix.lower()
     resolved_type = normalize_paper_file_type(
         file_type
         or legacy_paper_file_type(role, version, display_name=safe_name)
     )
+    from .publication_notices import title_kind, KINDS
+    if suffix == '.pdf': resolved_type=title_kind(Path(safe_name).stem) or resolved_type
+    if resolved_type in KINDS: role,version,version_label=legacy_role_projection(resolved_type)
     if suffix == ".pdf" and not is_valid_pdf_bytes(content):
         raise ValueError("The selected file is not a valid PDF")
     digest = hashlib.sha256(content).hexdigest()
     if refresh_existing:
         refresh_paper_resource_fingerprints(storage, str(paper_id))
-    duplicate = storage.conn.execute(
-        "SELECT id FROM resources WHERE paper_id = ? AND sha256 = ? ORDER BY id ASC LIMIT 1",
-        (str(paper_id), digest),
-    ).fetchone()
+    from .resource_dedup import find_content
+    duplicate = find_content(storage, str(paper_id), digest, len(content))
     if duplicate:
         resource = storage.get_paper_resource(int(duplicate["id"])) or {}
         resource["duplicate"] = True
@@ -22384,10 +22617,12 @@ def attach_file_to_paper(
     work_dir = associated_work_dir_for_paper(storage, str(paper_id))
     target_dir = work_dir / associated_resource_subdir(role)
     target_dir.mkdir(parents=True, exist_ok=True)
-    target = unique_path_in_dir(target_dir / safe_name)
-    temporary = target.with_name(
-        f".{target.stem}-{uuid.uuid4().hex[:8]}.upload{target.suffix}"
-    )
+    disk_name = safe_name
+    if sys.platform == "win32":
+        budget = max(16, 240 - len(str(target_dir)) - len(suffix))
+        disk_name = Path(safe_name).stem[:budget].rstrip(" .") + suffix
+    target = unique_path_in_dir(target_dir / disk_name)
+    temporary = target.with_name(f".upload-{uuid.uuid4().hex[:8]}{target.suffix}")
     try:
         temporary.write_bytes(content)
         fingerprint = fingerprint_file(temporary)
@@ -22422,6 +22657,14 @@ def attach_file_to_paper(
         temporary.unlink(missing_ok=True)
         target.unlink(missing_ok=True)
         raise
+    # MCP analysis writes remain append-only; they must not trigger relocation
+    # of other files. Ordinary App attachment writes reconcile the work.
+    if added_via not in {"ai_analysis", "browser_capture"}:
+        from .file_layout import reconcile_after_write
+        reconcile_after_write(storage, str(paper_id))
+        resource = storage.get_paper_resource(int(resource["id"])) or resource
+    elif added_via == "ai_analysis":
+        sync_associated_aliases(storage, str(paper_id))
     resource["duplicate"] = False
     return resource
 
@@ -22432,157 +22675,11 @@ def convert_library_item_to_paper_attachment(
     source_item_id: int,
     target_paper_id: str,
 ) -> dict[str, Any]:
-    """Turn one standalone Library work into managed files of another work."""
-    source_item = storage.get_library_item(int(source_item_id))
-    target_paper = storage.get_paper(str(target_paper_id))
-    if not source_item or not target_paper:
-        raise KeyError(int(source_item_id))
-    source_paper_id = clean_text(source_item.get("paper_id") or "")
-    if not source_paper_id or source_paper_id == str(target_paper_id):
-        raise ValueError("A paper cannot be attached to itself")
-    source_paper = storage.get_paper(source_paper_id)
-    if not source_paper:
-        raise KeyError(source_paper_id)
-
-    library_rows = storage.conn.execute(
-        "SELECT id FROM library_items WHERE paper_id = ? ORDER BY id ASC",
-        (source_paper_id,),
-    ).fetchall()
-    if len(library_rows) != 1:
-        raise ValueError("This work has other Library locations. Remove those copies before converting it to an attachment.")
-    if storage.conn.execute(
-        "SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1",
-        (source_paper_id,),
-    ).fetchone():
-        raise ValueError("This work is also in My Publications and cannot be converted to an attachment.")
-
-    destination_dir = associated_work_dir_for_paper(storage, str(target_paper_id)) / associated_resource_subdir("other")
-    managed_roots = [
-        LIBRARY_LOCAL_COPY_ROOT.absolute(),
-        SPACES_LOCAL_COPY_ROOT.absolute(),
-        MY_PUBLICATIONS_LOCAL_COPY_ROOT.absolute(),
-        ASSOCIATED_FILES_ROOT.absolute(),
-    ]
-
-    def belongs_to_managed_tree(path: Path) -> bool:
-        absolute = path.absolute()
-        for root in managed_roots:
-            try:
-                absolute.relative_to(root)
-                return True
-            except ValueError:
-                continue
-        return False
-
-    operations: list[dict[str, Any]] = []
-    try:
-        storage.conn.execute("BEGIN IMMEDIATE")
-        resources = refresh_paper_resource_fingerprints(
-            storage,
-            source_paper_id,
-            commit=False,
-        )
-        if not resources:
-            raise ValueError("The Library item has no managed file to attach")
-        source_entries: list[tuple[dict[str, Any], Path]] = []
-        seen_sources: set[str] = set()
-        for resource in resources:
-            stored_text = clean_text(resource.get("stored_path") or "")
-            if not stored_text:
-                raise ValueError("Every file in this work must have a managed local copy before it can be converted")
-            source = Path(stored_text).expanduser().absolute()
-            if not source.is_file():
-                raise ValueError(f"Managed file was not found: {source.name}")
-            source_key = str(source)
-            if source_key in seen_sources:
-                raise ValueError("This work contains duplicate local file records and cannot be converted safely")
-            seen_sources.add(source_key)
-            source_entries.append((resource, source))
-
-        destination_dir.mkdir(parents=True, exist_ok=True)
-        for resource, source in source_entries:
-            display_name = clean_text(resource.get("display_name") or resource.get("original_filename") or source.name)
-            destination = unique_path_in_dir(
-                destination_dir / finder_safe_name(Path(display_name).name or source.name, source.name)
-            )
-            managed_source = belongs_to_managed_tree(source)
-            mode = (
-                "move"
-                if managed_source and not source.is_symlink()
-                else ("copy_symlink" if managed_source and source.is_symlink() else "copy_external")
-            )
-            operation = {
-                "resource_id": int(resource.get("id") or 0),
-                "source": source,
-                "destination": destination,
-                "mode": mode,
-            }
-            operations.append(operation)
-            if managed_source and not source.is_symlink():
-                shutil.move(str(source), str(destination))
-            else:
-                shutil.copy2(str(source.resolve()), str(destination))
-
-        timestamp = now_iso()
-        for operation in operations:
-            destination = Path(operation["destination"])
-            storage.conn.execute(
-                """
-                UPDATE resources
-                SET paper_id = ?, stored_path = ?, display_name = ?,
-                    storage_mode = 'managed', added_via = 'library_drag_attachment',
-                    missing_status = '', updated_at = ?
-                WHERE id = ? AND paper_id = ?
-                """,
-                (
-                    str(target_paper_id),
-                    str(destination),
-                    destination.name,
-                    timestamp,
-                    int(operation["resource_id"]),
-                    source_paper_id,
-                ),
-            )
-        storage.conn.execute("DELETE FROM library_items WHERE id = ?", (int(source_item_id),))
-        storage.conn.execute("DELETE FROM papers WHERE paper_id = ?", (source_paper_id,))
-        storage.conn.commit()
-    except Exception:
-        storage.conn.rollback()
-        for operation in reversed(operations):
-            source = Path(operation["source"])
-            destination = Path(operation["destination"])
-            if operation["mode"] == "move" and destination.exists() and not source.exists():
-                source.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(destination), str(source))
-            elif destination.exists():
-                destination.unlink()
-        cleanup_empty_parents(
-            [
-                *[str(operation["destination"]) for operation in operations],
-                str(destination_dir / ".cleanup"),
-            ],
-            ASSOCIATED_FILES_ROOT.absolute(),
-        )
-        raise
-
-    removed_paths: list[str] = []
-    for operation in operations:
-        source = Path(operation["source"])
-        if operation["mode"] == "copy_symlink" and source.is_symlink():
-            source.unlink()
-            removed_paths.append(str(source))
-        elif operation["mode"] == "move":
-            removed_paths.append(str(source))
-    cleanup_local_copy_empty_parents(removed_paths)
-    return {
-        "source_item_id": int(source_item_id),
-        "source_paper_id": source_paper_id,
-        "target_paper_id": str(target_paper_id),
-        "attached_count": len(operations),
-        "files": [str(operation["destination"]) for operation in operations],
-    }
+    from .file_reassignment import attach_library_item
+    return attach_library_item(storage, int(source_item_id), str(target_paper_id))
 
 
+@serialize_paper_file_writes
 def attach_downloaded_publisher_pdf_to_paper(
     storage: Storage,
     *,
@@ -22591,6 +22688,7 @@ def attach_downloaded_publisher_pdf_to_paper(
     source_path: Path,
 ) -> tuple[Path, dict[str, Any]]:
     """Register a browser-downloaded publisher PDF without replacing history."""
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -22602,13 +22700,24 @@ def attach_downloaded_publisher_pdf_to_paper(
 
     publisher_kind = clean_text(context.get("publisher_download_kind") or "")
     source_url = clean_text(
-        context.get("publisher_download_target_url")
+        context.get("publisher_download_final_url")
+        or context.get("publisher_download_target_url")
         or context.get("publisher_download_referer")
         or paper.get("pdf_url")
         or ""
     )
+    original_name = Path(clean_text(context.get("publisher_download_filename") or "") or source.name).name
+    is_science = publisher_kind == "aaas-published-pdf" or normalize_doi(paper.get("doi") or "").startswith("10.1126/")
+    if is_science:
+        rejection = science_main_pdf_rejection(source, url=source_url, filename=original_name)
+        if rejection:
+            raise ValueError(f"{rejection}. The main article was not saved; check article access with Open Website.")
+    # A native staging name is never a durable Paper Files title. Use the
+    # publisher's name, or the existing metadata naming preference as fallback.
+    if re.match(r"^(?:daiqo-published|gewu-publisher)-", original_name, re.I) or not original_name.lower().endswith(".pdf"):
+        original_name = pdf_rename_filename_for_paper(paper, pdf_rename_template(storage), Path("paper.pdf"))
     classification_text = " ".join(
-        [publisher_kind, source.name, source_url, clean_text(context.get("publisher_download_referer") or "")]
+        [publisher_kind, original_name, source_url, clean_text(context.get("publisher_download_referer") or "")]
     ).casefold()
     if re.search(r"\b(correction|erratum|corrigendum)\b", classification_text):
         publisher_file_type = "correction_notice"
@@ -22616,6 +22725,7 @@ def attach_downloaded_publisher_pdf_to_paper(
         is_nature_reference_pdf_url(source_url)
         or "first release" in classification_text
         or "first_release" in classification_text
+        or (is_science and is_science_first_release_pdf(source))
     ):
         publisher_file_type = "accepted_manuscript"
     else:
@@ -22625,7 +22735,7 @@ def attach_downloaded_publisher_pdf_to_paper(
     resource = attach_file_to_paper(
         storage,
         paper_id=str(paper_id),
-        filename=source.name,
+        filename=original_name,
         content=source.read_bytes(),
         file_role=projected_role,
         version_role=projected_version,
@@ -22643,7 +22753,10 @@ def attach_downloaded_publisher_pdf_to_paper(
         storage.conn.execute(
             """
             UPDATE resources
-            SET file_role = ?, version_role = ?, version_label = ?, version_number = NULL,
+            SET file_role = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_role ELSE ? END,
+                version_role = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN version_role ELSE ? END,
+                version_label = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN version_label ELSE ? END,
+                version_number = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN version_number ELSE NULL END,
                 file_type = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_type ELSE ? END,
                 file_source = 'publisher', source_detail = COALESCE(NULLIF(?, ''), source_detail),
                 source_url = COALESCE(NULLIF(?, ''), source_url), updated_at = ?
@@ -22687,8 +22800,27 @@ def attach_downloaded_publisher_pdf_to_paper(
 
     refreshed = storage.get_paper(str(paper_id)) or paper
     is_primary = int(refreshed.get("primary_resource_id") or 0) == resource_id
+    if is_primary:
+        # Old native downloads also persisted their temporary UUID name in
+        # Library placements. Repair those names before a later supplement or
+        # alias sync can rename the valid publisher PDF back to its staging name.
+        # A custom placement name or a manually preferred other version wins.
+        placements = storage.conn.execute(
+            "SELECT id, display_name FROM library_items WHERE paper_id = ? AND trashed_at IS NULL",
+            (str(paper_id),),
+        ).fetchall()
+        for placement in placements:
+            if re.fullmatch(
+                r"(?:daiqo-published|gewu-publisher)-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:\.pdf)?",
+                clean_text(placement["display_name"] or ""), re.I,
+            ):
+                rename_library_item_and_sync_files(
+                    storage, item_id=int(placement["id"]),
+                    name=library_item_display_name_for_synced_filename(dict(placement), original_name),
+                )
+        resource = storage.get_paper_resource(resource_id) or resource
     message = (
-        "published Science main PDF saved; supplementary PDF pending"
+        "Science main PDF saved; supplementary PDF pending"
         if publisher_kind == "aaas-published-pdf"
         else "publisher PDF downloaded and saved as a paper file"
     )
@@ -22740,6 +22872,7 @@ def should_promote_new_paper_version(
     paper_id: str,
     resource: dict[str, Any],
 ) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id)) or {}
     if int(paper.get("preferred_resource_id") or 0):
         return False
@@ -22757,15 +22890,18 @@ def should_promote_new_paper_version(
 
 def synchronize_default_pdf_location(storage: Storage, paper_id: str) -> dict[str, Any] | None:
     """Keep the resolved PDF Default and managed primary path in agreement."""
+    paper_id = storage.resolve_paper_id(paper_id)
     resolved = storage.resolve_default_paper_resource(str(paper_id))
-    if not resolved or not storage.resource_is_pdf(resolved):
+    if not resolved:
         return resolved
-    return promote_paper_resource(
-        storage, str(paper_id), int(resolved["id"]), allow_any_pdf=True,
-    )
+    if storage.resource_is_pdf(resolved):
+        promote_paper_resource(storage, str(paper_id), int(resolved["id"]), allow_any_pdf=True)
+    sync_all_pdf_aliases_for_paper(storage, str(paper_id), preserve_canonical_name=True)
+    return storage.get_paper_resource(int(resolved["id"]))
 
 
 def set_preferred_paper_file(storage: Storage, paper_id: str, resource_id: int | None) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     previous = storage.get_paper(str(paper_id)) or {}
     storage.set_preferred_paper_resource(str(paper_id), resource_id)
     try:
@@ -22780,6 +22916,7 @@ def set_preferred_paper_file(storage: Storage, paper_id: str, resource_id: int |
 
 
 def paper_resource_path_is_shared(storage: Storage, path: Path, paper_id: str, resource_id: int) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if any(other != str(paper_id) for other in paper_ids_referencing_pdf_path(storage, path)):
         return True
     values = {str(path), str(path.expanduser().resolve())}
@@ -22790,7 +22927,7 @@ def paper_resource_path_is_shared(storage: Storage, path: Path, paper_id: str, r
             values.add(f"/private{value}")
     for value in values:
         if storage.conn.execute(
-            "SELECT 1 FROM resources WHERE id != ? AND (stored_path = ? OR source_path = ?) LIMIT 1",
+            "SELECT 1 FROM resources WHERE id != ? AND (stored_path = ? OR (COALESCE(stored_path, '') = '' AND source_path = ?)) LIMIT 1",
             (int(resource_id), value, value),
         ).fetchone():
             return True
@@ -22805,6 +22942,7 @@ def promote_paper_resource(
     manual_preferred: bool = False,
     allow_any_pdf: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     candidate = storage.get_paper_resource(int(resource_id))
     if not paper or not candidate or str(candidate.get("paper_id") or "") != str(paper_id):
@@ -22867,7 +23005,7 @@ def promote_paper_resource(
             else:
                 shutil.copy2(current_path, archived_path)
         if candidate_path != target_path:
-            if target_path.exists() or target_path.is_symlink():
+            if target_path.exists() or finder_alias.is_alias(target_path):
                 target_path = unique_path_in_dir(target_path)
             if candidate_private:
                 shutil.move(str(candidate_path), str(target_path))
@@ -22970,9 +23108,16 @@ def promote_paper_resource(
 
 
 def active_local_pdf_dirs_for_paper(storage: Storage, paper_id: str) -> list[Path]:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not paper_id:
         return []
-    recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
+    # Directory lookup is also used inside file-move transactions. It must
+    # never create a special folder and commit the caller's pending changes.
+    recycle = storage.conn.execute(
+        "SELECT id FROM library_folders WHERE parent_id=1 AND name=? COLLATE NOCASE",
+        (LIBRARY_RECYCLE_FOLDER_NAME,),
+    ).fetchone()
+    recycle_id = int(recycle["id"]) if recycle else 0
     rows = storage.conn.execute(
         """
         SELECT id, folder_id, trashed_at
@@ -23004,10 +23149,11 @@ def active_local_pdf_dirs_for_paper(storage: Storage, paper_id: str) -> list[Pat
 
 
 def preferred_local_pdf_dir_for_paper(storage: Storage, paper_id: str) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     directories = active_local_pdf_dirs_for_paper(storage, paper_id)
     if not directories:
         return None
-    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    canonical = canonical_file_path_for_paper(storage.get_paper(paper_id))
     if canonical:
         canonical_parent = canonical.parent.resolve()
         for directory in directories:
@@ -23048,6 +23194,7 @@ def paper_pdf_paths(paper: dict[str, Any] | None) -> list[Path]:
 
 
 def pdf_path_referenced_by_other_paper(storage: Storage, path: Path, paper_id: str) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     requested = path.expanduser().resolve()
     rows = storage.conn.execute(
         """
@@ -23088,7 +23235,7 @@ def pdf_path_referenced_by_other_paper(storage: Storage, path: Path, paper_id: s
     return False
 
 
-def paper_ids_referencing_pdf_path(storage: Storage, path: Path) -> list[str]:
+def paper_ids_referencing_pdf_path(storage: Storage, path: Path, *, include_resources: bool = False) -> list[str]:
     requested = path.expanduser().resolve()
     values = {
         str(path),
@@ -23115,6 +23262,20 @@ def paper_ids_referencing_pdf_path(storage: Storage, path: Path) -> list[str]:
         """,
         [*values, *values, *values],
     ).fetchall()
+    if include_resources:
+        slots = ",".join("?" for _ in values)
+        rows += storage.conn.execute(
+            f"SELECT paper_id FROM resources WHERE stored_path IN ({slots}) OR source_path IN ({slots})",
+            [*values, *values],
+        ).fetchall()
+        rows += storage.conn.execute(
+            f"SELECT paper_id FROM papers WHERE analysis_path IN ({slots})", values,
+        ).fetchall()
+        rows += storage.conn.execute(
+            f"""SELECT DISTINCT papers.paper_id FROM papers,
+                json_each(CASE WHEN json_valid(supplement_pdf_paths) THEN supplement_pdf_paths ELSE '[]' END) AS paths
+                WHERE paths.value IN ({slots})""", values,
+        ).fetchall()
     return sorted(
         dict.fromkeys(str(row["paper_id"] or "") for row in rows if row["paper_id"])
     )
@@ -23127,6 +23288,7 @@ def retire_replaced_managed_pdf_paths(
     old_paths: list[Path],
     new_path: Path,
 ) -> tuple[list[str], list[str]]:
+    paper_id = storage.resolve_paper_id(paper_id)
     managed_roots = allowed_pdf_roots()
     replacement = new_path.expanduser().resolve()
     trashed: list[str] = []
@@ -23163,6 +23325,7 @@ def attach_manual_pdf_to_paper(
     source_path: Path | None = None,
     preserve_filename: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -23248,6 +23411,107 @@ def attach_manual_pdf_to_paper(
     return target_path, updated
 
 
+def attach_science_supplement_to_paper(
+    storage: Storage, *, paper_id: str, context: dict[str, Any], supplement_path: Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Merge into the downloaded Science version, retaining any manual Default."""
+    paper = storage.get_paper(paper_id)
+    requested_id = int(context.get("publisher_main_resource_id") or 0)
+    resource = storage.get_paper_resource(requested_id) if requested_id else None
+    if requested_id and (not resource or resource.get("paper_id") != paper_id
+                         or resource.get("file_type") not in {"published_version", "accepted_manuscript"}):
+        raise ValueError("The downloaded Science main paper file is no longer available")
+    path_text = storage.resource_local_path(resource) if resource else ""
+    main_path = Path(path_text).expanduser().resolve() if path_text else canonical_pdf_path_for_paper(paper)
+    if not main_path or not is_valid_pdf_file(main_path):
+        raise ValueError("The main PDF must be downloaded before its supplementary PDF")
+    rejection = science_main_pdf_rejection(main_path)
+    if rejection:
+        raise ValueError("The saved PDF contains supplementary material without the Science main article. Refresh the main PDF before merging supplements.")
+    is_canonical = main_path == canonical_pdf_path_for_paper(paper)
+    if not resource:
+        resource = next((item for item in storage.list_paper_resources(paper_id, ensure_primary=False)
+                         if storage.resource_local_path(item)
+                         and Path(storage.resource_local_path(item)).expanduser().resolve() == main_path), None)
+    can_replace = (is_allowed_file(main_path, allowed_pdf_roots())
+                   and not pdf_path_referenced_by_other_paper(storage, main_path, paper_id)
+                   and (not resource or resource.get("storage_mode") != "linked"))
+    if can_replace:
+        target = main_path
+    else:
+        target_dir = local_copy_dir_for_download_context(storage, context) or (DEFAULT_PDF_DIR / paper_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = unique_path_in_dir(target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_merged.pdf")
+    working = target.with_name(f".{target.stem}-supplement-{uuid.uuid4().hex}.pdf")
+    backup = working.with_suffix(".original")
+    published = False
+    committed = False
+    try:
+        if not merge_science_pdfs(main_path, [supplement_path], working):
+            return main_path, paper
+        fingerprint = fingerprint_file(working)
+        page_count = len(PdfReader(str(working)).pages)
+        if can_replace:
+            shutil.copy2(main_path, backup)
+        storage.conn.execute("SAVEPOINT science_supplement")
+        try:
+            if not resource:
+                resource = storage.ensure_primary_pdf_resource(paper_id, commit=False)
+            if not resource:
+                raise ValueError("The Science main paper file could not be registered")
+            working.replace(target)
+            published = True
+            storage.conn.execute(
+                """UPDATE resources SET stored_path = ?, storage_mode = 'managed',
+                    display_name = ?, sha256 = ?, content_sha256 = ?, size_bytes = ?,
+                    page_count = ?, modified_at = ?, annotation_count = ?,
+                    is_annotated = CASE WHEN COALESCE(annotation_override, 0) = 1 THEN is_annotated ELSE ? END,
+                    annotation_state = CASE WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state ELSE ? END,
+                    missing_status = '', updated_at = ? WHERE id = ? AND paper_id = ?""",
+                (str(target), resource.get("display_name") if target == main_path else target.name,
+                 fingerprint.sha256, fingerprint.content_sha256, fingerprint.size_bytes, page_count,
+                 fingerprint.modified_at, fingerprint.annotation_count, int(fingerprint.is_annotated),
+                 "annotated" if fingerprint.is_annotated else "unannotated", now_iso(), resource["id"], paper_id),
+            )
+            storage.conn.execute(
+                """UPDATE papers SET download_status = 'success', download_message = ?, downloaded_at = ?,
+                    main_pdf_path = COALESCE(?, main_pdf_path), merged_pdf_path = COALESCE(?, merged_pdf_path),
+                    supplement_pdf_paths = CASE WHEN ? THEN '[]' ELSE supplement_pdf_paths END
+                    WHERE paper_id = ?""",
+                ("downloaded and merged Science supplementary PDF; temporary PDF removed", now_iso(),
+                 str(target) if is_canonical else None, str(target) if is_canonical else None,
+                 is_canonical, paper_id),
+            )
+            storage.conn.execute("RELEASE science_supplement")
+            storage.conn.commit()
+            committed = True
+        except Exception:
+            try:
+                storage.conn.execute("ROLLBACK TO science_supplement")
+                storage.conn.execute("RELEASE science_supplement")
+            except sqlite3.Error:
+                storage.conn.rollback()
+            if published:
+                if can_replace:
+                    backup.replace(main_path)
+                else:
+                    target.unlink(missing_ok=True)
+                published = False
+            raise
+    finally:
+        working.unlink(missing_ok=True)
+        # If restoring bytes itself fails, retain the recovery copy.
+        if not published or committed:
+            backup.unlink(missing_ok=True)
+    if is_canonical:
+        try:
+            sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=main_path if target != main_path else None)
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Science PDF saved; shortcut sync incomplete for %s", paper_id)
+    return target, storage.get_paper(paper_id)
+
+
+@serialize_paper_file_writes
 def attach_publisher_supplement_pdf_to_paper(
     storage: Storage,
     *,
@@ -23255,11 +23519,13 @@ def attach_publisher_supplement_pdf_to_paper(
     context: dict[str, Any],
     source_path: Path,
 ) -> tuple[Path, dict[str, Any]]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
+    is_science = clean_text(context.get("publisher_download_kind") or "") == "aaas-supplement-pdf"
     main_path = canonical_pdf_path_for_paper(paper)
-    if not main_path:
+    if not main_path and not is_science:
         raise ValueError("The main PDF must be downloaded before its supplementary PDF")
     source_supplement_path = source_path.expanduser().resolve()
     if not source_supplement_path.exists() or not source_supplement_path.is_file():
@@ -23279,6 +23545,15 @@ def attach_publisher_supplement_pdf_to_paper(
             raise
     else:
         raise ValueError("Publisher supplement must be a valid PDF, DOC, or DOCX file")
+
+    if is_science:
+        try:
+            return attach_science_supplement_to_paper(
+                storage, paper_id=str(paper_id), context=context, supplement_path=supplement_path,
+            )
+        finally:
+            if converted_path:
+                converted_path.unlink(missing_ok=True)
 
     main_is_shared = pdf_path_referenced_by_other_paper(storage, main_path, str(paper_id))
     can_replace_in_place = is_allowed_file(main_path, allowed_pdf_roots()) and not main_is_shared
@@ -23341,15 +23616,26 @@ def canonical_pdf_path_for_paper(paper: dict[str, Any] | None) -> Path | None:
     return None
 
 
+def canonical_file_path_for_paper(paper: dict[str, Any] | None) -> Path | None:
+    pdf = canonical_pdf_path_for_paper(paper)
+    if pdf:
+        return pdf
+    layout = parse_raw_json(paper).get("file_layout", {})
+    raw = layout.get("canonical_path") if isinstance(layout, dict) else ""
+    if raw and Path(raw).is_file():
+        return Path(raw).resolve()
+    return None
+
+
 def unique_path_in_dir(path: Path) -> Path:
-    if not path.exists() and not path.is_symlink():
+    if not path.exists() and not finder_alias.is_alias(path):
         return path
     parent = path.parent
     stem = path.stem
     suffix = path.suffix
     for index in range(2, 1000):
         candidate = parent / f"{stem} {index}{suffix}"
-        if not candidate.exists() and not candidate.is_symlink():
+        if not candidate.exists() and not finder_alias.is_alias(candidate):
             return candidate
     raise FileExistsError(str(path))
 
@@ -23540,7 +23826,7 @@ def library_folder_export_relative_paths(folders: list[dict[str, Any]], root_fol
 def library_item_real_file_for_export(paper: dict[str, Any] | None) -> Path | None:
     if not paper:
         return None
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if canonical:
         return canonical
     raw = parse_raw_json(paper)
@@ -23586,6 +23872,7 @@ def paper_pdf_basename(paper: dict[str, Any], canonical_path: Path | None = None
 
 
 def update_paper_pdf_paths(storage: Storage, paper_id: str, path: Path, *, message: str = "local PDF moved") -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     storage.update_download_status(
         paper_id,
         status="success",
@@ -23596,14 +23883,17 @@ def update_paper_pdf_paths(storage: Storage, paper_id: str, path: Path, *, messa
     )
 
 
-def update_paper_file_path_references(storage: Storage, paper_id: str, old_path: Path, new_path: Path) -> None:
+def update_paper_file_path_references(
+    storage: Storage, paper_id: str, old_path: Path, new_path: Path, *, commit: bool = True,
+) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     if not paper:
         return
     old_value = str(old_path)
     new_value = str(new_path)
     updates: dict[str, str] = {}
-    for key in ("main_pdf_path", "merged_pdf_path", "source_path"):
+    for key in ("main_pdf_path", "merged_pdf_path", "source_path", "analysis_path"):
         raw_value = str(paper.get(key) or "")
         try:
             matches_old = bool(raw_value) and Path(raw_value).expanduser().resolve() == old_path.expanduser().resolve()
@@ -23611,6 +23901,17 @@ def update_paper_file_path_references(storage: Storage, paper_id: str, old_path:
             matches_old = raw_value == old_value
         if matches_old:
             updates[key] = new_value
+    supplements = paper.get("supplement_pdf_paths") or "[]"
+    if isinstance(supplements, str):
+        try:
+            supplements = json.loads(supplements)
+        except (TypeError, ValueError):
+            supplements = []
+    if isinstance(supplements, list):
+        remapped = [new_value if value and Path(value).expanduser().resolve() == old_path.expanduser().resolve()
+                    else value for value in supplements]
+        if remapped != supplements:
+            updates["supplement_pdf_paths"] = json.dumps(remapped, ensure_ascii=False)
     raw = parse_raw_json(paper)
     imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
     stored_path = clean_text(imported.get("stored_path") or "")
@@ -23622,12 +23923,47 @@ def update_paper_file_path_references(storage: Storage, paper_id: str, old_path:
         imported["stored_path"] = new_value
         raw["import"] = imported
         updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
-    if not updates:
+    layout = raw.get("file_layout", {})
+    if isinstance(layout, dict) and layout.get("canonical_path") == old_value:
+        layout["canonical_path"] = new_value
+        updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
+    # Update the file registration in the same transaction, including the case
+    # where only a resource still refers to the old name. Source provenance for
+    # managed copies remains unchanged; linked files use source_path directly.
+    resource_updates = []
+    for resource in storage.conn.execute(
+        "SELECT id, stored_path, source_path, display_name FROM resources WHERE paper_id = ?", (paper_id,),
+    ):
+        field = "stored_path" if resource["stored_path"] else "source_path"
+        value = str(resource[field] or "")
+        try:
+            matches = bool(value) and Path(value).expanduser().resolve() == old_path.expanduser().resolve()
+        except OSError:
+            matches = value == old_value
+        if matches:
+            display = resource["display_name"] or ""
+            if not display or display == old_path.name:
+                display = new_path.name
+            resource_updates.append((int(resource["id"]), field, display))
+    if not updates and not resource_updates:
         return
-    assignments = ", ".join(f"{key} = ?" for key in updates)
-    params = list(updates.values()) + [paper_id]
-    storage.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", params)
-    storage.conn.commit()
+    storage.conn.execute("SAVEPOINT gewu_file_path_update")
+    try:
+        if updates:
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            storage.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", list(updates.values()) + [paper_id])
+        for resource_id, field, display in resource_updates:
+            storage.conn.execute(
+                f"UPDATE resources SET {field} = ?, display_name = ?, missing_status = ?, updated_at = ? WHERE id = ? AND paper_id = ?",
+                (new_value, display, "" if new_path.is_file() else "missing", now_iso(), resource_id, paper_id),
+            )
+        storage.conn.execute("RELEASE gewu_file_path_update")
+        if commit:
+            storage.conn.commit()
+    except Exception:
+        storage.conn.execute("ROLLBACK TO gewu_file_path_update")
+        storage.conn.execute("RELEASE gewu_file_path_update")
+        raise
 
 
 def rename_library_item_pdf_from_metadata(storage: Storage, item_id: int) -> dict[str, Any]:
@@ -23837,11 +24173,9 @@ def remove_symlinks_to(target: Path, roots: list[Path]) -> list[str]:
     for root in roots:
         if not root.exists():
             continue
-        for candidate in root.rglob("*"):
-            if not desktop_files.is_placement(candidate):
-                continue
+        for candidate in finder_alias.iter_aliases(root):
             try:
-                if desktop_files.resolve_placement(candidate) == target_resolved:
+                if finder_alias.points_to(candidate, target_resolved):
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
@@ -23859,10 +24193,10 @@ def remove_direct_symlinks_to(target: Path, folders: list[Path]) -> list[str]:
         if not folder.exists() or not folder.is_dir():
             continue
         for candidate in folder.iterdir():
-            if not desktop_files.is_placement(candidate):
+            if not finder_alias.is_alias(candidate):
                 continue
             try:
-                if desktop_files.resolve_placement(candidate) == target_resolved:
+                if finder_alias.points_to(candidate, target_resolved):
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
@@ -23875,6 +24209,8 @@ def library_item_pdf_filename(
     paper: dict[str, Any],
     canonical_path: Path | None = None,
 ) -> str:
+    if canonical_path and canonical_path.suffix.lower() != ".pdf":
+        return library_item_export_filename(item, canonical_path)
     display_name = clean_text(item.get("display_name") or "")
     if not display_name:
         if canonical_path:
@@ -23903,7 +24239,7 @@ def library_item_local_pdf_path(
     paper: dict[str, Any] | None = None,
 ) -> Path | None:
     paper = paper or storage.get_paper(str(item.get("paper_id") or ""))
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not canonical:
         return None
     target_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
@@ -23927,10 +24263,10 @@ def library_item_local_pdf_path(
     ):
         return canonical
     for candidate in target_dir.iterdir():
-        if not desktop_files.is_placement(candidate):
+        if not finder_alias.is_alias(candidate):
             continue
         try:
-            if desktop_files.resolve_placement(candidate) == canonical:
+            if finder_alias.resolve(candidate) == canonical:
                 return candidate
         except OSError:
             continue
@@ -23945,24 +24281,17 @@ def create_pdf_alias(
     canonical = canonical_path.expanduser().resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
     desired_name = finder_safe_name(filename or canonical.name, canonical.name)
-    if not desired_name.lower().endswith(".pdf"):
-        desired_name = f"{desired_name}.pdf"
+    suffix = canonical.suffix
+    if suffix and not desired_name.lower().endswith(suffix.lower()):
+        desired_name = f"{desired_name}{suffix}"
     desired_path = target_dir / desired_name
     if sys.platform == "win32":
         return desktop_files.create_placement(canonical, desired_path)
     if canonical.parent.resolve() == target_dir.resolve() and desired_path == canonical:
         return canonical
-    if target_dir.exists():
-        for candidate in target_dir.iterdir():
-            if candidate.is_symlink():
-                try:
-                    if candidate.name == desired_name and candidate.resolve() == canonical:
-                        return candidate
-                except OSError:
-                    continue
-    alias_path = unique_path_in_dir(desired_path)
-    os.symlink(str(canonical), str(alias_path))
-    return alias_path
+    if finder_alias.points_to(desired_path, canonical):
+        return finder_alias.ensure(canonical, desired_path)
+    return finder_alias.create(canonical, unique_path_in_dir(desired_path))
 
 
 def sync_alias_for_library_item(
@@ -23978,6 +24307,7 @@ def sync_alias_for_library_item(
     normal copy or alias-only move does not change the canonical PDF and must
     not rescan every placement of the paper.
     """
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = str(paper_id or "")
     folder_id = int(folder_id or 0)
     if not paper_id or not folder_id:
@@ -23995,23 +24325,37 @@ def sync_alias_for_library_item(
         ).fetchone()
         item = dict(row) if row else None
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    if paper and not canonical_file_path_for_paper(paper):
+        normalize_files(storage, paper_id)
+        paper = storage.get_paper(paper_id)
+    canonical = canonical_file_path_for_paper(paper)
     if not item or not paper or not canonical:
         return None
+    old_target = rescue_active_original(storage, paper_id)
+    if old_target:
+        sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target)
+        paper = storage.get_paper(paper_id)
+        canonical = canonical_file_path_for_paper(paper)
     target_dir = local_copy_dir_for_library_folder(storage, folder_id).resolve()
     alias = create_pdf_alias(
         canonical,
         target_dir,
         library_item_pdf_filename(item, paper, canonical),
     )
+    sync_associated_aliases(storage, paper_id)
     return alias or library_item_local_pdf_path(storage, item, paper)
 
 
 def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
-    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    paper_id = storage.resolve_paper_id(paper_id)
+    old_target = rescue_active_original(storage, paper_id)
+    sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target, preserve_canonical_name=True)
+    canonical = canonical_file_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return None
-    return create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT, canonical.name)
+    alias = create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT, canonical.name)
+    sync_associated_aliases(storage, paper_id)
+    return alias
 
 
 def sync_all_pdf_aliases_for_paper(
@@ -24021,8 +24365,17 @@ def sync_all_pdf_aliases_for_paper(
     old_target: Path | None = None,
     preserve_canonical_name: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
+    normalized = normalize_files(storage, paper_id)
+    if normalized.get("old_target") and not old_target:
+        old_target = normalized["old_target"]
+    rescued_target = rescue_active_original(storage, paper_id)
+    if rescued_target:
+        if old_target:
+            remove_symlinks_to(old_target, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
+        old_target = rescued_target
     paper = storage.get_paper(str(paper_id))
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not paper or not canonical:
         return {"paper_id": str(paper_id), "canonical_renamed": False, "aliases_updated": 0}
     shared_paper_ids = paper_ids_referencing_pdf_path(storage, canonical)
@@ -24095,21 +24448,29 @@ def sync_all_pdf_aliases_for_paper(
         desired_name = library_item_pdf_filename(naming_owner, owner_paper, canonical)
         target_path = canonical.with_name(desired_name)
         if target_path != canonical:
-            if target_path.is_symlink():
+            if finder_alias.is_alias(target_path):
                 try:
-                    if target_path.resolve() == canonical:
+                    if finder_alias.resolve(target_path) == canonical:
                         target_path.unlink()
                 except OSError:
                     pass
             target_path = unique_path_in_dir(target_path)
-            canonical.rename(target_path)
-            for referenced_paper_id in shared_paper_ids or [str(paper_id)]:
-                update_paper_file_path_references(
-                    storage,
-                    referenced_paper_id,
-                    canonical,
-                    target_path,
-                )
+            storage.conn.execute("SAVEPOINT gewu_pdf_rename")
+            renamed = False
+            try:
+                canonical.rename(target_path)
+                renamed = True
+                for referenced_paper_id in shared_paper_ids or [str(paper_id)]:
+                    update_paper_file_path_references(
+                        storage, referenced_paper_id, canonical, target_path, commit=False,
+                    )
+                storage.conn.execute("RELEASE gewu_pdf_rename")
+            except Exception:
+                storage.conn.execute("ROLLBACK TO gewu_pdf_rename")
+                storage.conn.execute("RELEASE gewu_pdf_rename")
+                if renamed and target_path.exists() and not canonical.exists():
+                    target_path.rename(canonical)
+                raise
             canonical = target_path.resolve()
             canonical_renamed = True
             removed.extend(remove_direct_symlinks_to(old_canonical, alias_dirs))
@@ -24159,10 +24520,10 @@ def sync_all_pdf_aliases_for_paper(
         before = None
         if MY_PUBLICATIONS_LOCAL_COPY_ROOT.exists():
             for candidate in MY_PUBLICATIONS_LOCAL_COPY_ROOT.iterdir():
-                if not desktop_files.is_placement(candidate):
+                if not finder_alias.is_alias(candidate):
                     continue
                 try:
-                    if desktop_files.resolve_placement(candidate) == canonical:
+                    if finder_alias.resolve(candidate) == canonical:
                         before = candidate
                         break
                 except OSError:
@@ -24211,6 +24572,9 @@ def sync_all_pdf_aliases_for_paper(
             except OSError:
                 continue
     cleanup_local_copy_empty_parents(removed)
+    for referenced_paper_id in shared_paper_ids:
+        sync_associated_aliases(storage, referenced_paper_id)
+        finish_aliases(storage, referenced_paper_id)
     return {
         "paper_id": str(paper_id),
         "canonical_renamed": canonical_renamed,
@@ -24270,7 +24634,7 @@ def reconcile_all_library_pdf_names(storage: Storage) -> dict[str, Any]:
     for row in rows:
         paper_id = str(row["paper_id"] or "")
         result["papers_checked"] += 1
-        if not canonical_pdf_path_for_paper(storage.get_paper(paper_id)):
+        if not canonical_file_path_for_paper(storage.get_paper(paper_id)):
             continue
         result["papers_with_files"] += 1
         try:
@@ -24316,7 +24680,7 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
             continue
         paper = dict(paper_row)
         papers[paper_id] = paper
-        canonical = canonical_pdf_path_for_paper(paper)
+        canonical = canonical_file_path_for_paper(paper)
         if canonical:
             canonical_paper_ids.setdefault(str(canonical), []).append(paper_id)
     canonical_owner_ids = {
@@ -24329,7 +24693,7 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
         item = dict(row)
         paper_id = str(item.get("paper_id") or "")
         paper = papers.get(paper_id)
-        canonical = canonical_pdf_path_for_paper(paper)
+        canonical = canonical_file_path_for_paper(paper)
         result["items_checked"] += 1
         if not paper or not canonical:
             continue
@@ -24373,7 +24737,8 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
 
 
 def remove_pdf_aliases_for_paper_in_folders(storage: Storage, paper_id: str, folder_ids: list[int]) -> list[str]:
-    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    paper_id = storage.resolve_paper_id(paper_id)
+    canonical = canonical_file_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return []
     folders = [local_copy_dir_for_library_folder(storage, int(folder_id or 0)) for folder_id in dict.fromkeys(folder_ids)]
@@ -24389,6 +24754,7 @@ def remove_pdf_aliases_for_paths_in_folders(storage: Storage, paths: list[str], 
 
 
 def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, target_dir: Path) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
@@ -24397,14 +24763,11 @@ def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, tar
         canonical.relative_to(DEFAULT_PDF_DIR.resolve())
     except ValueError:
         return False
-    target_dir.mkdir(parents=True, exist_ok=True)
-    removed = remove_direct_symlinks_to(canonical, [target_dir])
-    cleanup_local_copy_empty_parents(removed)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
     old_path = canonical
-    shutil.move(str(canonical), str(target_path))
-    update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved into local Library storage")
+    target_path = move_original(storage, paper_id, canonical, target_dir,
+                                filename=paper_pdf_basename(paper, canonical))
+    if target_path == old_path:
+        return False
     cleanup_empty_parents([str(old_path)], DEFAULT_PDF_DIR.resolve())
     sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
     return True
@@ -24416,22 +24779,34 @@ def reconcile_paper_pdf_storage(
     *,
     target_dir: Path | None = None,
 ) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
+    original = storage.get_paper(paper_id) or {}
+    old_placements = [str(original.get(key) or "") for key in ("main_pdf_path", "merged_pdf_path") if original.get(key) and finder_alias.is_alias(Path(original[key]))]
+    for value in old_placements:
+        real = desktop_files.resolve_placement(Path(value))
+        if real.is_file():
+            update_paper_file_path_references(storage, paper_id, Path(value), real)
+    old_target = rescue_active_original(storage, paper_id)
+    if old_target:
+        sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_target)
     target = target_dir or preferred_local_pdf_dir_for_paper(storage, paper_id)
     if not target:
-        return False
-    changed = move_monitor_pdf_into_context_if_needed(storage, paper_id, target)
+        return bool(old_target)
+    changed = move_monitor_pdf_into_context_if_needed(storage, paper_id, target) or bool(old_target)
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not paper or not canonical:
         return changed
     if canonical.parent.resolve() != target.expanduser().resolve():
         return changed
     canonical_value = str(canonical)
     stored_paths = [str(paper.get(key) or "") for key in ("main_pdf_path", "merged_pdf_path")]
-    if any(path and str(Path(path).expanduser().absolute()) != canonical_value for path in stored_paths):
-        update_paper_pdf_paths(storage, paper_id, canonical, message="PDF path normalized to local Library storage")
-        changed = True
+    for path in stored_paths:
+        if path and str(Path(path).expanduser().absolute()) != canonical_value and Path(path).expanduser().resolve() == canonical:
+            update_paper_file_path_references(storage, paper_id, Path(path), canonical)
+            changed = True
     sync_all_pdf_aliases_for_paper(storage, paper_id)
+    cleanup_local_copy_empty_parents([path for path in old_placements if not Path(path).exists()])
     return changed
 
 
@@ -24443,7 +24818,7 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
     """
     paper_id = str(item.get("paper_id") or "")
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     if not paper or not canonical:
         return False
     source_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
@@ -24451,13 +24826,12 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
     if source_dir == target_dir:
         return False
     if is_path_inside_dir(canonical, source_dir) and canonical.parent == source_dir:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        remove_direct_symlinks_to(canonical, [target_dir])
-        target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
         old_path = canonical
+        target_path = move_original(
+            storage, paper_id, canonical, target_dir,
+            filename=paper_pdf_basename(paper, canonical), exclude_item_id=int(item.get("id") or 0),
+        )
         if old_path != target_path:
-            shutil.move(str(old_path), str(target_path))
-            update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library shortcut")
             remove_symlinks_to(old_path, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
             cleanup_local_copy_empty_parents([str(old_path)])
             return True
@@ -24530,7 +24904,7 @@ def folder_tree_pdf_move_plan(storage: Storage, folder_id: int) -> list[dict[str
         if paper_id not in papers:
             papers[paper_id] = storage.get_paper(paper_id)
         paper = papers[paper_id]
-        canonical = canonical_pdf_path_for_paper(paper)
+        canonical = canonical_file_path_for_paper(paper)
         if not paper or not canonical:
             continue
         item_folder_id = int(item.get("folder_id") or 1)
@@ -24580,11 +24954,9 @@ def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]
         target_dir = target_dirs[item_folder_id]
         old_path = entry.get("old_path")
         if isinstance(old_path, Path) and old_path.exists():
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = unique_path_in_dir(target_dir / finder_safe_name(str(entry.get("basename") or old_path.name), old_path.name))
+            target_path = move_original(storage, paper_id, old_path, target_dir,
+                                        filename=str(entry.get("basename") or old_path.name))
             if old_path != target_path:
-                shutil.move(str(old_path), str(target_path))
-                update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library folder")
                 canonical_moves.setdefault(str(old_path.resolve()), (paper_id, old_path))
                 canonical_moved_paper_ids.add(paper_id)
                 removed_paths.append(str(old_path))
@@ -24618,22 +24990,9 @@ def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]
 
 
 def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_id: int) -> Path | None:
-    rows = storage.conn.execute(
-        """
-        SELECT folder_id
-        FROM library_items
-        WHERE paper_id = ?
-        ORDER BY id ASC
-        """,
-        (str(paper_id),),
-    ).fetchall()
-    for row in rows:
-        folder_id = int(row["folder_id"] or 0)
-        if folder_id and not library_folder_is_within(storage, folder_id, recycle_folder_id):
-            return local_copy_dir_for_library_folder(storage, folder_id)
-    if storage.conn.execute("SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1", (str(paper_id),)).fetchone():
-        return MY_PUBLICATIONS_LOCAL_COPY_ROOT
-    return None
+    paper_id = storage.resolve_paper_id(paper_id)
+    directories = active_directories(storage, [paper_id])
+    return directories[0] if directories else None
 
 
 def first_outside_reference_item(
@@ -24643,6 +25002,8 @@ def first_outside_reference_item(
     *,
     exclude_item_id: int = 0,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
+    active_ids = {folder["id"] for folder in active_folders(storage)}
     rows = storage.conn.execute(
         """
         SELECT *
@@ -24656,26 +25017,23 @@ def first_outside_reference_item(
     for row in rows:
         item = dict(row)
         folder_id = int(item.get("folder_id") or 0)
-        if folder_id and not library_folder_is_within(storage, folder_id, recycle_folder_id):
+        if folder_id in active_ids and not item.get("trashed_at"):
             return item
     return None
 
 
 def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
+    canonical = canonical_file_path_for_paper(paper)
     target_dir = first_outside_reference_dir(storage, paper_id, recycle_folder_id)
     if not paper or not canonical or not target_dir:
         return
     if canonical.parent.resolve() == target_dir.resolve():
         sync_all_pdf_aliases_for_paper(storage, paper_id)
         return
-    target_dir.mkdir(parents=True, exist_ok=True)
-    remove_direct_symlinks_to(canonical, [target_dir])
-    target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
     old_path = canonical
-    shutil.move(str(old_path), str(target_path))
-    update_paper_pdf_paths(storage, paper_id, target_path, message="PDF kept with remaining Library reference")
+    move_original(storage, paper_id, canonical, target_dir, filename=paper_pdf_basename(paper, canonical))
     sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
     cleanup_local_copy_empty_parents([str(old_path)])
 
@@ -24696,6 +25054,7 @@ def library_folder_is_within(storage: Storage, folder_id: int, ancestor_id: int)
 
 
 def paper_has_reference_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not paper_id:
         return False
     if paper_has_my_publication_reference(storage, paper_id):
@@ -24708,6 +25067,7 @@ def paper_has_reference_outside_recycle(storage: Storage, paper_id: str, recycle
 
 
 def paper_has_my_publication_reference(storage: Storage, paper_id: str) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not paper_id:
         return False
     return bool(
@@ -24888,6 +25248,12 @@ def library_file_paths_for_delete(storage: Storage, paper: dict[str, Any]) -> li
             path = daiqo_copy_path(str(row["stored_path"] or ""))
             if path:
                 paths.append(path)
+    # Folder aliases are files in Finder, never the attachment directory they
+    # point at. Include only this work's managed projections in final cleanup.
+    for value in parse_raw_json(paper).get("file_layout", {}).get("associated_aliases", []):
+        path = Path(value).expanduser().absolute()
+        if path.is_relative_to(ASSOCIATED_FILES_ROOT.resolve()) and finder_alias.is_alias(path):
+            paths.append(path)
     unique: list[Path] = []
     seen: set[str] = set()
     for path in paths:
@@ -24946,7 +25312,7 @@ def library_recycle_orphan_paths(storage: Storage, recycle_folder_id: int) -> li
             referenced.add(str(path))
     orphans: list[Path] = []
     for candidate in recycle_root.rglob("*"):
-        if not candidate.is_file() and not candidate.is_symlink():
+        if not candidate.is_file() and not finder_alias.is_alias(candidate):
             continue
         try:
             resolved = candidate.expanduser().resolve()
@@ -25084,8 +25450,10 @@ def delete_allowed_files(paths: list[str], roots: list[Path]) -> list[str]:
 
 
 def move_path_to_macos_trash(path: Path) -> Path:
-    requested = path.expanduser().resolve()
-    if not requested.exists():
+    # Move the link itself, even when its target no longer exists.
+    requested = path.expanduser().absolute()
+    requested = requested.parent.resolve() / requested.name
+    if not os.path.lexists(requested):
         raise FileNotFoundError(str(requested))
     if sys.platform == "win32":
         from .windows_recycle import recycle_resource_path
@@ -25096,32 +25464,23 @@ def move_path_to_macos_trash(path: Path) -> Path:
         target = unique_trash_path(trash_dir / requested.name)
         shutil.move(str(requested), str(target))
         return target
+    helper = ROOT / "Gewu Insight.app" / "Contents" / "MacOS" / "Gewu Insight"
     result = subprocess.run(
-        ["/usr/bin/osascript", "-l", "JavaScript", "-e", MACOS_TRASH_JXA, str(requested)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=30,
+        [str(helper), "--trash-item", str(requested)], check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30,
     )
-    if result.returncode != 0:
-        # JXA can expose NSFileManager's successful BOOL result as a falsey value.
-        # The Trash move itself is synchronous, so disappearance of the source is
-        # the authoritative success signal and must not require a second delete.
-        if not requested.exists():
-            return requested
-        detail = clean_text(result.stderr or result.stdout) or "macOS refused the Trash operation"
-        message = f"Could not move {requested.name} to macOS Trash. The source file is still present. {detail}"
-        lowered = detail.lower()
-        if "permission" in lowered or "not authorized" in lowered or "operation not permitted" in lowered:
-            raise PermissionError(message)
-        raise MacOSTrashError(message)
     destination = str(result.stdout or "").strip()
-    return Path(destination).expanduser() if destination else requested
+    if result.returncode == 0 and destination and not os.path.lexists(requested):
+        return Path(destination).expanduser()
+    detail = clean_text(result.stderr or "") or "macOS did not confirm the Trash operation"
+    message = f"Could not move {requested.name} to macOS Trash. {detail}"
+    if any(word in detail.lower() for word in ("permission", "not authorized", "operation not permitted")):
+        raise PermissionError(message)
+    raise MacOSTrashError(message)
 
 
 def unique_trash_path(target: Path) -> Path:
-    if not target.exists():
+    if not os.path.lexists(target):
         return target
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     stem = target.stem
@@ -25129,7 +25488,7 @@ def unique_trash_path(target: Path) -> Path:
     parent = target.parent
     for index in range(1, 1000):
         candidate = parent / f"{stem} {timestamp}-{index}{suffix}"
-        if not candidate.exists():
+        if not os.path.lexists(candidate):
             return candidate
     raise FileExistsError(str(target))
 
@@ -25229,6 +25588,21 @@ def file_type_icon_glyph(kind: str, accent: str) -> str:
 
 
 MARKDOWN_PREVIEW_MAX_BYTES = 256 * 1024
+
+
+def markdown_preview_etag(stat: os.stat_result) -> str:
+    # ctime/inode also detect same-length replacements with a preserved mtime.
+    return 'W/"md1-' + '-'.join(format(value, "x") for value in (
+        stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+    )) + '"'
+
+
+def markdown_preview_file_etag(path: Path) -> str:
+    tag = markdown_preview_etag(path.stat())
+    if sys.platform == "win32":
+        with path.open("rb") as source:
+            tag = tag[:-1] + "-" + hashlib.sha256(source.read(MARKDOWN_PREVIEW_MAX_BYTES + 1)).hexdigest() + '"'
+    return tag
 
 
 def markdown_preview_payload(path: Path) -> dict[str, Any]:
@@ -26753,7 +27127,10 @@ INDEX_HTML = """<!doctype html>
       padding: 0;
       background: #fff;
     }
-    .library-file-preview.markdown { display: block; place-items: initial; padding: 24px 30px 40px; box-sizing: border-box; }
+    .library-quicklook.markdown-preview .library-quicklook-body { grid-template-columns: minmax(0, 1fr); }
+    .library-quicklook.markdown-preview .library-quicklook-thumbs { display: none; }
+    .library-quicklook.markdown-preview .library-quicklook-pages { display: block; overflow-x: hidden; }
+    .library-file-preview.markdown { display: block; place-items: initial; min-width: 0; max-width: 100%; padding: 24px clamp(12px, 3vw, 30px) 40px; box-sizing: border-box; }
     .library-markdown-document { width: 100%; min-width: 0; max-width: 850px; margin: 0 auto; color: #253344; line-height: 1.65; font-size: 15px; overflow-wrap: anywhere; }
     .library-markdown-document > :first-child { margin-top: 0; }
     .library-markdown-document h1, .library-markdown-document h2, .library-markdown-document h3,
@@ -26765,14 +27142,31 @@ INDEX_HTML = """<!doctype html>
     .library-markdown-document ul, .library-markdown-document ol { padding-left: 1.8em; }
     .library-markdown-document blockquote { margin: 1em 0; padding: .1em 1em; border-left: 3px solid #94abc4; color: #566579; background: #f5f7fa; }
     .library-markdown-document code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef2f6; padding: .12em .3em; border-radius: 3px; }
-    .library-markdown-document pre { white-space: pre; overflow: auto; padding: 14px; background: #f3f5f8; border-radius: 6px; }
+    .library-markdown-document pre { white-space: pre; overflow: auto; max-width: 100%; box-sizing: border-box; padding: 14px; background: #f3f5f8; border-radius: 6px; }
     .library-markdown-document pre code { padding: 0; background: none; }
-    .library-markdown-document table { display: block; width: max-content; max-width: 100%; overflow: auto; border-collapse: collapse; margin: 1em 0; }
-    .library-markdown-document th, .library-markdown-document td { padding: 7px 12px; border: 1px solid #dce2e9; }
+    .library-markdown-table { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; margin: 1em 0; }
+    .library-markdown-document table { display: table; width: max-content; min-width: 100%; border-collapse: collapse; margin: 0; }
+    .library-markdown-document th, .library-markdown-document td { padding: 7px 12px; border: 1px solid #dce2e9; white-space: normal; }
     .library-markdown-document th { background: #f1f5f9; }
     .library-markdown-document a[data-markdown-url] { color: #245e87; cursor: pointer; text-decoration: underline; }
     .library-markdown-document img { max-width: 100%; height: auto; }
     .library-markdown-document hr { border: 0; border-top: 1px solid #dce2e9; margin: 1.4em 0; }
+    .library-markdown-math-inline { display: inline-block; max-width: 100%; vertical-align: middle; overflow-x: auto; overflow-y: hidden; }
+    .library-markdown-math-block { max-width: 100%; margin: 1em 0; padding: .25em 0; overflow-x: auto; overscroll-behavior-x: contain; }
+    .library-markdown-document math { font-size: 1.08em; white-space: nowrap; overflow-wrap: normal; }
+    .library-markdown-math-block math { width: max-content; min-width: 100%; margin: 0; }
+    .library-markdown-math-error code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .library-markdown-properties { min-width: 0; margin: 0 0 16px; padding: 10px 14px; border: 1px solid #dce2e9; border-radius: 8px; background: #f8fafc; font-size: 13px; }
+    .library-markdown-properties summary { cursor: pointer; color: #536579; font-weight: 600; }
+    .library-markdown-properties-grid { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr); gap: 7px 16px; margin: 12px 0 0; }
+    .library-markdown-properties-grid dt { min-width: 0; color: #687587; overflow-wrap: anywhere; }
+    .library-markdown-properties-grid dd { min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .library-markdown-properties-grid dd > dl { margin-top: 0; grid-template-columns: minmax(0, 1fr); }
+    .library-markdown-document ul.library-markdown-property-list { display: flex; flex-wrap: wrap; gap: 4px 7px; list-style: none; padding: 0; margin: 0; }
+    .library-markdown-property-list > li { min-width: 0; max-width: 100%; padding: 1px 6px; border-radius: 4px; background: #e9eff5; }
+    .library-markdown-property-empty { color: #8b96a4; }
+    .library-markdown-document pre.library-markdown-properties-source { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 0; }
+    @media (max-width: 620px) { .library-markdown-properties-grid { grid-template-columns: minmax(0, 1fr); gap: 3px; } .library-markdown-properties-grid dd { margin-bottom: 8px; } }
     .library-markdown-truncated { color: #667085; font-style: italic; }
     .library-file-preview-text {
       min-height: 100%;
@@ -27904,85 +28298,6 @@ INDEX_HTML = """<!doctype html>
       text-transform: uppercase;
       white-space: nowrap;
     }
-    .workspace-tools {
-      display: flex;
-      align-items: center;
-      gap: 8px 10px;
-      padding: 8px 16px 9px;
-      border-bottom: 1px solid var(--line);
-      margin: 0;
-      flex-wrap: nowrap;
-      grid-column: 1 / -1;
-      background: transparent;
-      min-width: 0;
-    }
-    .workspace-tool-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-      flex: 0 1 auto;
-    }
-    .workspace-tools input.search {
-      min-height: 28px;
-      border: 0;
-      border-radius: 7px;
-      padding: 0 8px;
-      background: transparent;
-      box-shadow: inset 0 0 0 1px rgba(216, 216, 220, 0.78);
-      color: var(--ink);
-      font-size: 12px;
-      transition: background 0.16s ease, box-shadow 0.16s ease;
-    }
-    .workspace-tools input.search:focus {
-      outline: 0;
-      background: transparent;
-      box-shadow: inset 0 0 0 1px #1f4f7a;
-    }
-    #workspaceNameInput {
-      width: 200px;
-      max-width: min(200px, 24vw);
-    }
-    #workspaceDoiInput {
-      width: 250px;
-      max-width: min(250px, 28vw);
-    }
-    .workspace-tools .smallbtn {
-      min-height: 28px;
-      border: 0;
-      border-radius: 7px;
-      background: rgba(31, 79, 122, 0.12);
-      color: #1f2328;
-      padding: 0 9px;
-      font-size: 12px;
-      font-weight: 650;
-      line-height: 1;
-      white-space: nowrap;
-      box-shadow: none;
-    }
-    .workspace-tools .smallbtn:hover {
-      background: rgba(31, 79, 122, 0.20);
-      color: #1f2328;
-      box-shadow: none;
-    }
-    .workspace-tools .workspace-move-library-button {
-      margin-left: auto;
-      flex: 0 0 auto;
-      background: rgba(31, 79, 122, 0.12);
-      color: #1f2328;
-    }
-    .workspace-tools .workspace-move-library-button:hover {
-      background: rgba(31, 79, 122, 0.20);
-      color: #1f2328;
-    }
-    .workspace-tools #workspaceAddDoiButton {
-      background: rgba(31, 79, 122, 0.12);
-      color: #1f2328;
-    }
-    .workspace-tools #workspaceAddDoiButton:hover {
-      background: rgba(31, 79, 122, 0.20);
-      color: #1f2328;
-    }
     .library-tab.drag-over {
       border-color: var(--accent);
       box-shadow: inset 0 0 0 1px var(--accent);
@@ -28515,21 +28830,47 @@ INDEX_HTML = """<!doctype html>
       border-color: rgba(255, 255, 255, 0.42);
       background: rgba(255, 255, 255, 0.12);
     }
-    .my-publications-row.dragging td {
-      opacity: 0.68;
-      background: #ffffff;
-      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
-      transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
+    .my-publications-row.dragging { opacity: 0.48; }
+    /* Author / publication sorting feedback never participates in list layout. */
+    .list-reorder-drag-image {
+      position: fixed;
+      z-index: 10100;
+      pointer-events: none;
+      box-sizing: border-box;
+      max-width: calc(100vw - 24px);
+      padding: 8px 12px;
+      border: 1px solid rgba(52, 120, 237, 0.3);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.92);
+      color: #253348;
+      box-shadow: 0 5px 18px rgba(25, 44, 73, 0.17);
+      font: 500 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
     }
-    .my-publications-row.drag-over-before td {
-      transform: translateY(24px);
-      box-shadow: 0 -20px 0 rgba(31, 79, 122, 0.14), inset 0 3px 0 var(--accent);
-      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    .list-reorder-drag-image > div {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .my-publications-row.drag-over-after td {
-      transform: translateY(-24px);
-      box-shadow: 0 20px 0 rgba(31, 79, 122, 0.14), inset 0 -3px 0 var(--accent);
-      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    .list-reorder-drag-image > div + div { color: #667085; font-size: 12px; font-weight: 400; }
+    .list-reorder-marker {
+      position: fixed;
+      z-index: 10101;
+      pointer-events: none;
+      height: 2px;
+      border-radius: 1px;
+      background: #3478ed;
+    }
+    .list-reorder-marker::before {
+      content: "";
+      position: absolute;
+      box-sizing: border-box;
+      width: 8px;
+      height: 8px;
+      left: -4px;
+      top: -3px;
+      border: 2px solid #3478ed;
+      border-radius: 50%;
+      background: #fff;
     }
     .my-publications-title-cell {
       display: flex;
@@ -29184,6 +29525,10 @@ INDEX_HTML = """<!doctype html>
     .loader-line.done { color: #ccfbf1; border-left-color: #14b8a6; background: rgba(20, 184, 166, 0.12); }
     .loader-line.error { color: #fecaca; border-left-color: #ef4444; background: rgba(239, 68, 68, 0.12); }
     .loader-line.warn { color: #fde68a; border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+    .loader-line[data-paper-id] { cursor: pointer; }
+    .loader-line[data-paper-id]:hover { box-shadow: inset 0 0 0 1px #64748b; }
+    .loader-line[data-paper-id]:hover .loader-message { text-decoration: underline; text-underline-offset: 3px; }
+    .loader-line[data-paper-id]:focus-visible { outline: 2px solid #93c5fd; outline-offset: -2px; }
     .loader-badge {
       display: inline-flex;
       justify-content: center;
@@ -29339,12 +29684,12 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       height: 100%;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       overflow: hidden;
     }
     .library-main-area > .library-columns,
     .library-main-area > .library-search-results {
-      grid-row: 2;
+      grid-row: 1;
     }
     .library-shell > .library-pane {
       margin-left: 0;
@@ -29589,14 +29934,49 @@ INDEX_HTML = """<!doctype html>
       position: relative;
     }
     .library-column > .library-pane-header { display: none; }
+    .library-shell.has-navigation-header { grid-template-rows: auto minmax(0, 1fr) 26px; }
+    .library-shell.has-navigation-header > .library-tab-rail { grid-column: 1; grid-row: 1 / 3; }
+    .library-shell.has-navigation-header > .library-main-area { grid-row: 2; }
+    .library-shell.has-navigation-header > .library-detail-divider { grid-row: 1 / 3; }
+    .library-shell.has-navigation-header > .library-pane { grid-column: 4; grid-row: 1 / 3; }
+    .library-shell.has-navigation-header > .library-path-bar { grid-row: 3; }
+    .library-shell > .library-navigation-header {
+      grid-column: 2;
+      grid-row: 1;
+      min-height: 38px;
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--line);
+      align-items: center;
+      gap: 10px;
+      display: flex;
+      color: var(--ink);
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 13px;
+    }
+    .library-navigation-header .library-table-folder-title { flex: 1; }
+    .library-navigation-menu {
+      flex: 0 0 auto;
+      border: 0;
+      border-radius: 4px;
+      padding: 0 5px;
+      min-width: 24px;
+      height: 24px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .library-navigation-menu:hover { color: var(--accent-strong); background: #eef3f8; }
     .library-column:last-child { border-right: 0; }
     .library-columns.table-view .library-column.path-column {
       flex-basis: min(210px, var(--library-column-width, 210px));
       min-width: 170px;
     }
     .library-column.table-column {
-      flex: 1 0 660px;
-      min-width: 520px;
+      flex: 1 0 820px;
+      min-width: 820px;
     }
     .library-column-resizer {
       position: absolute;
@@ -30035,6 +30415,7 @@ INDEX_HTML = """<!doctype html>
       grid-template-rows: auto auto minmax(0, 1fr);
       background: #fff;
     }
+    .library-table.navigation-root-table { grid-template-rows: auto minmax(0, 1fr); }
     .library-table-head {
       min-width: 0;
       min-height: 38px;
@@ -30062,7 +30443,7 @@ INDEX_HTML = """<!doctype html>
     .library-table-header-row {
       min-height: 30px;
       display: grid;
-      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr);
+      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr) 138px;
       gap: 10px;
       align-items: center;
       padding: 0 12px;
@@ -30072,14 +30453,31 @@ INDEX_HTML = """<!doctype html>
       font-weight: 750;
       text-transform: uppercase;
     }
+    .library-table-sort {
+      width: 100%;
+      min-height: 30px;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      font: inherit;
+      text-transform: inherit;
+      cursor: pointer;
+    }
+    .library-table-sort:hover, .library-table-sort.active { color: var(--accent-strong); }
+    .library-table-sort:focus-visible, .library-navigation-menu:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
     .library-table-body {
       padding: 4px 8px;
       overflow: auto;
     }
     .library-table-row {
-      min-width: 640px;
+      min-width: 0;
       height: 34px;
-      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr);
+      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr) 138px;
       gap: 10px;
       padding: 2px 4px;
       border-radius: 5px;
@@ -30106,7 +30504,8 @@ INDEX_HTML = """<!doctype html>
       color: #475467;
       font-size: 12px;
     }
-    .library-table-cell.year {
+    .library-table-cell.year,
+    .library-table-cell.time-added {
       color: #344054;
       font-variant-numeric: tabular-nums;
     }
@@ -30273,12 +30672,41 @@ INDEX_HTML = """<!doctype html>
       user-select: text;
     }
     .library-path-parts {
-      min-width: 0;
+      min-width: min(100px, 15vw);
       display: inline-flex;
       align-items: center;
       gap: 6px;
       overflow: hidden;
       flex: 1 1 auto;
+    }
+    .library-activity-list {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 65%;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .library-activity-list::-webkit-scrollbar { display: none; }
+    .library-activity-list:empty { display: none; }
+    .library-activity-list > .library-activity-status {
+      flex: 1 1 240px;
+      min-width: 120px;
+      max-width: 320px;
+      box-sizing: border-box;
+      justify-content: flex-start;
+    }
+    .library-activity-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-activity-list > .library-activity-status:focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: -1px;
     }
     .library-activity-status {
       max-width: min(360px, 42vw);
@@ -30302,6 +30730,17 @@ INDEX_HTML = """<!doctype html>
     .library-activity-status:empty {
       display: none;
     }
+    .library-import-status-action {
+      flex: 0 0 auto;
+      border: 0;
+      padding: 2px 3px;
+      background: transparent;
+      color: var(--accent-strong);
+      font: inherit;
+      cursor: pointer;
+    }
+    .library-import-status-action[hidden] { display: none; }
+    .library-import-status-action:hover { text-decoration: underline; }
     .library-activity-status.live {
       color: var(--accent-strong);
       font-weight: 700;
@@ -30335,6 +30774,10 @@ INDEX_HTML = """<!doctype html>
       color: #b42318;
       background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,235,231,0.82) 20%, rgba(255,239,236,0.98) 50%, rgba(255,235,231,0.82) 80%, rgba(255,255,255,0) 100%);
       border-color: rgba(180, 35, 24, 0.12);
+    }
+    .library-activity-status.refresh-complete,
+    .publication-search-status.refresh-complete {
+      color: #1a7f37;
     }
     .library-path-item {
       min-width: 0;
@@ -30810,6 +31253,39 @@ INDEX_HTML = """<!doctype html>
     }
     .paper-files-add-controls .action { min-height: 25px; padding: 3px 8px; font-size: 10px; }
     .paper-files-body { display: grid; gap: 0; padding: 4px 7px 6px; }
+    .paper-files-notice {
+      min-width: 0;
+      margin: 0 0 7px;
+      border: 1px solid #dfe5ec;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.78);
+      color: #536173;
+      padding: 7px 8px;
+      font-size: 10.5px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .paper-files-notice > summary {
+      color: #294b6d;
+      font-size: 10.5px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .paper-files-notice > summary:focus-visible {
+      outline: 2px solid rgba(61, 118, 174, 0.5);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+    .paper-files-notice-date {
+      color: #7b8491;
+      font-size: 9px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .paper-files-notice-content { display: grid; gap: 6px; padding-top: 7px; }
+    .paper-files-notice-content > p { margin: 0; }
+    .paper-files-notice-content > a { color: #294b6d; font-size: 10px; }
+    .paper-files-notice-hint { color: #7b8491; font-size: 9px; }
     .paper-files-panel.is-collapsed .paper-files-head { border-bottom: 0; }
     .paper-files-panel.is-collapsed .paper-files-add-controls,
     .paper-files-panel.is-collapsed .paper-files-body { display: none; }
@@ -31475,6 +31951,22 @@ INDEX_HTML = """<!doctype html>
     .library-detail-status { margin-top: 8px; min-height: 18px; color: var(--muted); }
     .library-detail-status.ok { color: #137333; }
     .library-detail-status.err { color: #b42318; }
+    .metadata-refresh-tooltip {
+      position: fixed;
+      z-index: 500;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1px solid #cbd2db;
+      border-radius: 8px;
+      background: #fff;
+      color: #394555;
+      box-shadow: 0 5px 18px rgba(0, 0, 0, 0.16);
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      overflow-y: auto;
+    }
+    .metadata-refresh-tooltip > div + div { margin-top: 6px; }
     .library-confirm-backdrop {
       position: fixed;
       inset: 0;
@@ -31768,8 +32260,6 @@ INDEX_HTML = """<!doctype html>
     .author-monitor-author[draggable="true"] { cursor: grab; }
     .author-monitor-author[draggable="true"]:active { cursor: grabbing; }
     .author-monitor-author.dragging { opacity: 0.48; }
-    .author-monitor-author.drag-over-before { box-shadow: inset 0 3px 0 var(--accent); }
-    .author-monitor-author.drag-over-after { box-shadow: inset 0 -3px 0 var(--accent); }
     .author-monitor-avatar {
       width: 38px;
       height: 38px;
@@ -33130,6 +33620,7 @@ INDEX_HTML = """<!doctype html>
     .app.loader-window-mode #pdfRenameSettingsBackdrop,
     .app.loader-window-mode #quickLookSettingsBackdrop,
     .app.loader-window-mode #websiteLinkSettingsBackdrop,
+    .app.loader-window-mode #libraryDestinationSettingsBackdrop,
     .app.loader-window-mode #fontSizeSettingsBackdrop {
       display: none !important;
     }
@@ -34877,6 +35368,19 @@ INDEX_HTML = """<!doctype html>
       flex: 0 0 auto;
       white-space: nowrap;
     }
+    .library-detail > .actions.paper-detail-actions {
+      flex-direction: column;
+      align-items: flex-start;
+      flex-wrap: nowrap;
+    }
+    .paper-detail-action-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
+    }
+    .paper-detail-action-row:empty { display: none; }
+    .paper-detail-action-row .action[aria-busy="true"] { opacity: 0.6; }
     .library-detail .library-detail-doi > .action {
       height: 22px;
       min-height: 22px;
@@ -35227,7 +35731,7 @@ INDEX_HTML = """<!doctype html>
         <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="citationSettingsTitle">
           <div class="settings-modal-head">
             <div>
-              <h2 id="citationSettingsTitle">Open Source Settings</h2>
+              <h2 id="citationSettingsTitle">Literature Data Source</h2>
               <p>Manage sources for discovery, metadata, citations, and version matching.</p>
             </div>
             <button class="settings-modal-close" id="closeCitationSettings" type="button" title="Close settings">×</button>
@@ -35383,8 +35887,8 @@ INDEX_HTML = """<!doctype html>
                 <label class="quick-look-mode-option">
                   <input type="radio" name="quick-look-mode" value="hybrid">
                   <span class="quick-look-mode-copy">
-                    <strong>Gewu Insight for PDFs, macOS for other files</strong>
-                    <span>Uses the built-in PDF reader and macOS Quick Look for presentations, media, images, and other formats.</span>
+                    <strong>Gewu Insight for PDFs and Markdown, macOS for other files</strong>
+                    <span>Uses the built-in PDF reader and rendered Markdown preview, and macOS Quick Look for other formats.</span>
                   </span>
                 </label>
                 <label class="quick-look-mode-option">
@@ -35403,6 +35907,29 @@ INDEX_HTML = """<!doctype html>
                 </span>
               </div>
               <div class="citation-settings-status" id="quickLookSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="settings-backdrop" id="libraryDestinationSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="libraryDestinationSettingsTitle">
+          <div class="settings-modal-head">
+            <div><h2 id="libraryDestinationSettingsTitle">Add to Library</h2><p>Choose the default folder for newly added papers.</p></div>
+            <button class="settings-modal-close" id="closeLibraryDestinationSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Default Folder</strong></div>
+              <p id="libraryDestinationPath" style="overflow-wrap:anywhere">Library / unsorted</p>
+              <button class="smallbtn" id="chooseLibraryDestination" type="button" aria-expanded="false">Choose Folder</button>
+              <div class="library-add-menu" data-role="library-add-menu" aria-hidden="true"></div>
+              <p class="field-settings-note">Used by Journal, Subject and Author Monitor, and by Save to Gewu when the paper has no existing Library or Space location.</p>
+              <p class="field-settings-note">Save to Gewu keeps an existing paper in its current location. A folder you select while adding a paper takes priority. If the default folder is unavailable, new papers go to Library / unsorted.</p>
+              <div class="field-settings-note"><span class="field-settings-actions">
+                <button class="smallbtn" id="resetLibraryDestinationSettings" type="button">Restore Default</button>
+                <button class="smallbtn" id="saveLibraryDestinationSettings" type="button">Save</button>
+              </span></div>
+              <div class="citation-settings-status" id="libraryDestinationSettingsStatus" role="status"></div>
             </div>
           </div>
         </section>
@@ -35654,6 +36181,10 @@ INDEX_HTML = """<!doctype html>
       websiteLinkBrowser: "builtin",
       browserCaptureDetailsExpanded: false,
       websiteLinkSettingsBusy: false,
+      libraryDefaultAddFolderId: 0,
+      libraryDestinationDraftId: 0,
+      libraryDestinationSettingsBusy: false,
+      libraryDestinationSettingsLoaded: false,
       fontSizeScale: 100,
       fontSizeSettingsLoaded: false,
       fontSizeSettingsPromise: null,
@@ -35704,6 +36235,7 @@ INDEX_HTML = """<!doctype html>
       libraryLoadingPromise: null,
       libraryRefreshPromise: null,
       libraryPaperDetailRequests: {},
+      libraryPathRevision: 0,
       aiAccessEnabled: false,
       paperFilesByPaperId: {},
       paperFileRequests: {},
@@ -35734,9 +36266,8 @@ INDEX_HTML = """<!doctype html>
       libraryNavigationFocusRevision: 0,
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
-      workspaceStatus: "",
-      workspaceAddPaperBusy: false,
       libraryInlineAddFolderId: 0,
+      libraryInlineAddContext: null,
       libraryInlineAddQuery: "",
       libraryInlineAddBusy: false,
       libraryInlineAddError: "",
@@ -35751,9 +36282,14 @@ INDEX_HTML = """<!doctype html>
       libraryImportBusy: false,
       libraryImportBackground: false,
       libraryImportLastResult: null,
+      metadataRefreshScopeId: null, metadataRefreshScopeLabel: "", metadataRefreshJobs: [],
       libraryImportJobId: "",
       libraryImportJob: null,
       libraryImportPoller: null,
+      libraryImportInFlight: false,
+      libraryImportPollFailures: 0,
+      libraryImportNextPollAt: 0,
+      libraryImportNotice: null,
       libraryImportReadyRefreshDone: false,
       libraryImportMissingIndex: 0,
       libraryImportMissingDoiIndex: 0,
@@ -35790,9 +36326,12 @@ INDEX_HTML = """<!doctype html>
       libraryContentView: initialLibraryContentView(),
       libraryClipboard: null,
       librarySortMode: initialLibrarySortMode(),
+      libraryTableSort: initialLibraryTableSort(),
       libraryActivityText: "",
       libraryActivityLive: false,
       libraryActivityTimer: 0,
+      libraryActivities: [],
+      libraryActivitySequence: 0,
       libraryDragPayload: null,
       libraryRevealColumnFolderId: 0,
       libraryRevealColumnDirection: "",
@@ -35889,8 +36428,7 @@ INDEX_HTML = """<!doctype html>
       authorMonitorImportPoller: 0,
       authorMonitorEnrichmentJobId: "",
       authorMonitorEnrichmentPoller: 0,
-      authorMonitorEnrichmentStarted: false,
-      authorMonitorEnrichmentScheduled: false,
+      authorMonitorMetadataWork: {},
       authorMonitorEnrichmentPendingRequest: null,
       authorMonitorIdentifierRequests: new Set(),
       authorMonitorLoadedAt: 0,
@@ -35914,6 +36452,7 @@ INDEX_HTML = """<!doctype html>
       reportCache: {},
       reportCacheOrder: [],
       monitorPaperDomCache: {report: null, theme: null},
+      monitorPaperOperations: new Map(),
       monitorReturnViewports: {report: null, theme: null},
       monthCacheKey: "",
       monthLoaded: false,
@@ -36396,7 +36935,7 @@ INDEX_HTML = """<!doctype html>
       const mode = normalizeQuickLookMode(state.quickLookMode);
       if (mode === "native_all") return true;
       if (mode !== "hybrid") return false;
-      return !libraryPaperIsPdfLike(paper);
+      return !libraryPaperIsPdfLike(paper) && libraryFilePreviewKind(paper) !== "markdown";
     }
 
     function desiredQuickLookKind(paper) {
@@ -37047,12 +37586,12 @@ INDEX_HTML = """<!doctype html>
       window.requestAnimationFrame(() => surface.focus({preventScroll: true}));
     }
 
-    function openLibraryLoader() {
-      if (!IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
+    function openLibraryLoader(options = {}) {
+      if (!options.currentJob && !IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
         window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type: "open"});
         return;
       }
-      loadPendingLibraryImportDraft();
+      if (!options.currentJob) loadPendingLibraryImportDraft();
       state.libraryLoaderOpen = true;
       renderLibraryLoader();
       focusDialogSurface($("libraryLoaderBackdrop"));
@@ -37077,6 +37616,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyMyPublications(data) {
+      applyPaperFilesPayloads(data.paper_files);
       if (data.work) state.myPublicationWork = data.work;
       if (Array.isArray(data.publications)) {
         state.myPublications = data.publications;
@@ -37299,14 +37839,17 @@ INDEX_HTML = """<!doctype html>
       if (!id) return Promise.resolve(null);
       if (libraryFolderLoaded(id) && !options.force) return Promise.resolve(null);
       if (state.libraryFolderLoadPromises[id] && !options.force) return state.libraryFolderLoadPromises[id];
+      const pathRevision = state.libraryPathRevision;
       state.libraryFolderLoadPromises[id] = fetch(`/api/library/folder?folder_id=${encodeURIComponent(id)}`)
         .then(async (res) => {
           const data = await res.json();
+          if (pathRevision !== state.libraryPathRevision) return;
           if (!res.ok) throw new Error(data.error || "Could not load Library folder");
           applyLibraryFolderChildren(data);
           return data;
         })
         .finally(() => {
+          if (pathRevision !== state.libraryPathRevision) return;
           delete state.libraryFolderLoadPromises[id];
         });
       return state.libraryFolderLoadPromises[id];
@@ -37629,12 +38172,64 @@ INDEX_HTML = """<!doctype html>
     function setLibrarySortMode(mode) {
       const nextMode = normalizeLibrarySortMode(mode);
       state.librarySortMode = nextMode;
+      state.libraryTableSort = null;
+      try { window.localStorage?.removeItem("gewu-library-table-sort"); } catch (_) {}
       try {
         window.localStorage?.setItem(LIBRARY_SORT_STORAGE_KEY, nextMode);
       } catch (_) {
       }
       updateLibraryActivityStatus(`Sorted by ${librarySortLabel(nextMode)}.`, {live: false});
       renderLibrary();
+    }
+
+    function initialLibraryTableSort() {
+      try {
+        return normalizeLibraryTableSort(JSON.parse(window.localStorage?.getItem("gewu-library-table-sort") || "null"));
+      } catch (_) { return null; }
+    }
+
+    function normalizeLibraryTableSort(value) {
+      if (!["title", "authors", "year", "journal", "added"].includes(value?.key)) return null;
+      return {key: value.key, direction: value.direction === "desc" ? "desc" : "asc"};
+    }
+
+    function setLibraryTableSort(key) {
+      const current = normalizeLibraryTableSort(state.libraryTableSort);
+      const next = normalizeLibraryTableSort({key, direction: current?.key === key && current.direction === "asc" ? "desc" : "asc"});
+      if (!next) return;
+      state.libraryTableSort = next;
+      try { window.localStorage?.setItem("gewu-library-table-sort", JSON.stringify(next)); } catch (_) {}
+      renderLibrary();
+      document.querySelector(`[data-library-table-sort="${key}"]`)?.focus({preventScroll: true});
+    }
+
+    function libraryTableSortValue(entry, key) {
+      if (key === "added") {
+        const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
+        return libraryAddedTimeMs(data);
+      }
+      if (entry.type === "folder") return libraryEntrySortName(entry);
+      const item = libraryItemById(entry.id) || {};
+      const paper = item.paper || {};
+      const name = item.display_name || libraryPaperDisplayName(paper);
+      if (key === "authors") return libraryPaperAuthorsText(paper, item, name);
+      if (key === "year") return libraryPaperYearText(paper, item, name);
+      if (key === "journal") return libraryPaperJournalText(paper);
+      return libraryPaperTableTitle(item, paper, name);
+    }
+
+    function libraryAddedTimeMs(entry) {
+      // Use the saved placement/folder time, never publication or refresh dates.
+      const ms = Date.parse(entry?.created_at || "");
+      return Number.isFinite(ms) ? ms : null;
+    }
+
+    function libraryAddedTimeText(entry) {
+      const ms = libraryAddedTimeMs(entry);
+      if (ms === null) return "—";
+      const date = new Date(ms);
+      const pad = value => String(value).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
     }
 
     function initialLibraryContentView() {
@@ -37690,6 +38285,20 @@ INDEX_HTML = """<!doctype html>
       if (a.type === "folder" && b.type === "folder") {
         const specialDelta = libraryFolderSpecialRank(libraryFolderById(a.id)) - libraryFolderSpecialRank(libraryFolderById(b.id));
         if (specialDelta) return specialDelta;
+      }
+      const tableSort = libraryTableViewActive() ? normalizeLibraryTableSort(state.libraryTableSort) : null;
+      if (tableSort) {
+        const key = a.type === "folder" && tableSort.key !== "added" ? "title" : tableSort.key;
+        const left = String(libraryTableSortValue(a, key) ?? "").trim();
+        const right = String(libraryTableSortValue(b, key) ?? "").trim();
+        // Unknown metadata stays below known values in both directions.
+        if (!left !== !right) return left ? -1 : 1;
+        const delta = ["year", "added"].includes(key) ? Number(left) - Number(right)
+          : left.localeCompare(right, undefined, {numeric: true, sensitivity: "base"});
+        const descending = tableSort.direction === "desc" && (a.type !== "folder" || ["title", "added"].includes(tableSort.key));
+        if (delta) return descending ? -delta : delta;
+        return String(libraryTableSortValue(a, "title")).localeCompare(String(libraryTableSortValue(b, "title")), undefined, {numeric: true, sensitivity: "base"})
+          || Number(a.id || 0) - Number(b.id || 0);
       }
       if (normalizeLibrarySortMode(state.librarySortMode) === "modified") {
         const modifiedDelta = libraryEntryModifiedMs(b) - libraryEntryModifiedMs(a);
@@ -37790,24 +38399,31 @@ INDEX_HTML = """<!doctype html>
     }
 
     function librarySearchMatches(haystack, query) {
+      return librarySearchScore(haystack, query) > 0;
+    }
+
+    function librarySearchScore(haystack, query) {
+      query = String(query || "").slice(0, 300);
       const normalizedHaystack = librarySearchNormalize(haystack);
       const normalizedQuery = librarySearchNormalize(query);
-      if (!normalizedQuery) return true;
-      if (normalizedHaystack.includes(normalizedQuery)) return true;
+      if (!normalizedQuery) return 3;
+      if (normalizedHaystack.includes(normalizedQuery)) return 3;
       const compactQuery = libraryDoiSearchKey(query);
-      if (compactQuery && libraryDoiSearchKey(haystack).includes(compactQuery)) return true;
+      if (compactQuery && libraryDoiSearchKey(haystack).includes(compactQuery)) return 3;
       const queryTokens = librarySearchTokens(normalizedQuery).filter((token) => token.length > 1);
-      if (!queryTokens.length) return normalizedHaystack.includes(normalizedQuery);
+      if (!queryTokens.length) return normalizedHaystack.includes(normalizedQuery) ? 3 : 0;
       const haystackTokens = librarySearchTokens(normalizedHaystack);
-      if (!haystackTokens.length) return false;
+      if (!haystackTokens.length) return 0;
       const longQueryTokens = queryTokens.filter((token) => token.length >= 4);
       const haystackTokenSet = new Set(haystackTokens.flatMap((token) => librarySearchTokenVariants(token)));
       let matched = 0;
+      let direct = 0;
       queryTokens.forEach((token) => {
+        if (librarySearchTokenVariants(token).some(v => normalizedHaystack.includes(v) || haystackTokenSet.has(v))) direct += 1;
         if (librarySearchTokenMatches(token, haystackTokens, haystackTokenSet, normalizedHaystack, longQueryTokens.length)) matched += 1;
       });
       const required = queryTokens.length <= 2 ? queryTokens.length : Math.max(2, Math.ceil(queryTokens.length * 0.66));
-      return matched >= required;
+      return direct >= required ? 2 : (matched >= required ? 1 : 0);
     }
 
     function librarySearchNormalize(value) {
@@ -37815,7 +38431,7 @@ INDEX_HTML = """<!doctype html>
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
         .replace(/\s+/g, " ")
         .trim();
     }
@@ -37937,8 +38553,10 @@ INDEX_HTML = """<!doctype html>
         .forEach((item) => {
           const folderPath = libraryGlobalFolderPath(item.folder_id);
           const haystack = `${libraryItemSearchHaystack(item)} ${folderPath}`;
-          if (librarySearchMatches(haystack, query)) {
+          const score = librarySearchScore(haystack, query);
+          if (score > 0) {
             results.push({
+              score,
               type: "item",
               id: Number(item.id),
               parentFolderId: Number(item.folder_id),
@@ -37947,6 +38565,8 @@ INDEX_HTML = """<!doctype html>
           }
         });
       results.sort((a, b) => {
+        const scoreDelta = b.score - a.score;
+        if (scoreDelta) return scoreDelta;
         const left = libraryItemById(a.id)?.display_name || libraryItemById(a.id)?.paper?.title || "";
         const right = libraryItemById(b.id)?.display_name || libraryItemById(b.id)?.paper?.title || "";
         return String(left).localeCompare(String(right)) || Number(a.id) - Number(b.id);
@@ -37969,7 +38589,7 @@ INDEX_HTML = """<!doctype html>
         resetRemoteLibrarySearch();
         return Promise.resolve();
       }
-      if (state.libraryRemoteSearchQuery === normalized || state.libraryRemoteSearchLoadingQuery === normalized) {
+      if (state.libraryRemoteSearchQuery === normalized || state.libraryRemoteSearchLoadingQuery) {
         return Promise.resolve();
       }
       const sequence = Number(state.libraryRemoteSearchSequence || 0) + 1;
@@ -38023,6 +38643,11 @@ INDEX_HTML = """<!doctype html>
               && librarySearchNormalize(state.query) === normalized) {
             renderLibrary();
             updateLibrarySearchTools();
+          } else if (state.mode === "library" && currentSurfaceSearchScope() === "library"
+              && librarySearchNormalize(state.query)) {
+            // One whole-Library scan at a time; intermediate typed queries
+            // are superseded by the latest text once this request finishes.
+            requestRemoteLibrarySearch(state.query);
           }
         });
     }
@@ -38286,6 +38911,44 @@ INDEX_HTML = """<!doctype html>
       cancelLibraryEntryRename();
     }
 
+    function applyFolderRenameResult(data) {
+      const paths = data.renamed_paths || [];
+      if (!paths.length) return;
+      state.libraryPathRevision += 1;
+      const remap = (value) => {
+        if (typeof value !== "string" || !value) return value;
+        const pair = paths.find(({old}) => value === old || value.startsWith(`${old}/`));
+        return pair ? pair.new + value.slice(pair.old.length) : value;
+      };
+      const affected = new Set(data.renamed_paper_ids || []);
+      affected.forEach((paperId) => {
+        delete state.paperFilesByPaperId[paperId];
+        delete state.paperFileRequests[paperId];
+        delete state.libraryPaperDetailRequests[paperId];
+      });
+      const lists = [state.papers, state.themePapers, state.authorMonitorPapers,
+        ...Object.values(state.reportCache).map((report) => report?.papers),
+        ...Object.values(state.themePapersByDate),
+        state.libraryItems.map((item) => item.paper), state.myPublications.map((item) => item.paper)];
+      lists.forEach((papers) => (papers || []).forEach((paper) => {
+        if (!paper || !affected.has(paper.paper_id)) return;
+        ["main_pdf_path", "merged_pdf_path", "source_path", "analysis_path", "native_file_path"].forEach((key) => {
+          const value = remap(paper[key]);
+          if (value === paper[key]) return;
+          paper[key] = value;
+          if (key === "merged_pdf_path") paper.merged_pdf_url = `/files?path=${encodeURIComponent(value)}`;
+          if (key === "analysis_path") paper.analysis_url = `/files?path=${encodeURIComponent(value)}`;
+        });
+      }));
+      state.libraryFolders.forEach((folder) => {
+        if (folder.native_folder_path) folder.native_folder_path = remap(folder.native_folder_path);
+      });
+      // Responses started before the rename must not reinstall obsolete paths.
+      state.libraryFolderLoadPromises = {};
+      state.libraryPaperDetailRequests = {};
+      resetRemoteLibrarySearch();
+    }
+
     async function commitLibraryEntryRename(type, id, name) {
       const entryId = Number(id || 0);
       if (!entryId) return;
@@ -38303,6 +38966,7 @@ INDEX_HTML = """<!doctype html>
         upsertLibraryItemLocal(data.item);
         if (data.paper) updatePaperState(data.paper.paper_id || data.item.paper_id, data.paper);
       } else {
+        applyFolderRenameResult(data);
         upsertLibraryFolderLocal(data.folder);
       }
       state.libraryRenamingFolderId = 0;
@@ -38326,6 +38990,7 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not load Library folders");
       state.libraryRootId = Number(data.root_id || state.libraryRootId || 1);
+      state.libraryDefaultAddFolderId = Number(data.default_add_folder_id || data.unsorted_id || 0);
       state.libraryFolders = Array.isArray(data.folders) ? data.folders : state.libraryFolders;
       state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
       rebuildLibraryIndexes();
@@ -38423,7 +39088,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function navigateToPaperInLibrary(paperId, preferredItemId = 0) {
-      await refreshLibrarySnapshotForNavigation(paperId);
+      const snapshot = await refreshLibrarySnapshotForNavigation(paperId);
+      paperId = String(snapshot?.paper_id || paperId);
       const preferredItem = Number(preferredItemId || 0)
         ? libraryItemById(Number(preferredItemId))
         : null;
@@ -38774,7 +39440,7 @@ INDEX_HTML = """<!doctype html>
         await ensureLibrarySnapshotForAddMenu();
         if (!menu.isConnected || !menu.classList.contains("open")) return;
         let rootId = Number(state.libraryRootId || 1);
-        let selectedId = Number(options.selectedFolderId || libraryUnsortedFolderId());
+        let selectedId = Number(options.selectedFolderId || state.libraryDefaultAddFolderId || libraryUnsortedFolderId());
         const selectedFolder = libraryFolderById(selectedId);
         if (!libraryAddFolderCanTarget(selectedFolder)) selectedId = Number(libraryUnsortedFolderId() || rootId);
         const workspace = libraryAddWorkspaceRoots().find(item => libraryFolderIsWithin(selectedId, Number(item.root_folder_id)));
@@ -38810,7 +39476,8 @@ INDEX_HTML = """<!doctype html>
     async function addPaperToLibrary(article, paperId, options = {}) {
       const button = article.querySelector('[data-action="add-library"]');
       if (button?.dataset.libraryState === "show") return showPaperInLibrary(article, paperId);
-      const monitorViewport = captureMonitorViewport(article);
+      if (state.monitorPaperOperations.get(paperId)?.library?.busy) return;
+      setMonitorPaperOperation(paperId, "library", {busy: true});
       if (button) {
         button.disabled = true;
         button.classList.add("is-busy");
@@ -38821,7 +39488,7 @@ INDEX_HTML = """<!doctype html>
       const folderId = Number(options.folderId || 0);
       const payload = folderId
         ? {paper_id: paperId, folder_id: folderId, snapshot: false}
-        : {paper_id: paperId, unsorted: true, snapshot: false};
+        : {paper_id: paperId, snapshot: false};
       try {
         const res = await fetch("/api/library/items", {
           method: "POST",
@@ -38830,6 +39497,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add to library");
+        applyPaperFilesPayloads(data.paper_files);
         if (Array.isArray(data.items) && Array.isArray(data.folders)) {
           applyLibrarySnapshot(data);
         } else if (state.libraryLoaded) {
@@ -38840,13 +39508,14 @@ INDEX_HTML = """<!doctype html>
         if (button) {
           setReportLibraryButtonShowState(button);
         }
-        renderCurrentPaperSurface({monitorViewport});
+        setMonitorPaperOperation(paperId, "library", null);
       } catch (error) {
+        setMonitorPaperOperation(paperId, "library", {error: error.message});
         if (button) {
           setReportLibraryButtonAddState(button);
         }
         const status = article.querySelector('[data-role="status"]');
-        if (status) {
+        if (status && !article.classList.contains("paper")) {
           status.textContent = error.message;
           status.className = "status err";
         }
@@ -38936,28 +39605,81 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function handleNativeLibraryItemDrop(sourceItemId, dropPoint = null) {
-      const x = Number(dropPoint?.x);
-      const y = Number(dropPoint?.y);
+      return handleNativeLibraryManagedDrop({type: "item", id: Number(sourceItemId)}, dropPoint);
+    }
+
+    function clearNativeLibraryDrag() {
+      state.libraryDragPayload = null;
+      clearLibraryFinderDropTarget();
+      document.querySelectorAll(".library-attachment-drop-target, .drag-over").forEach((node) => {
+        node.classList.remove("library-attachment-drop-target", "drag-over");
+      });
+    }
+
+    async function reassignPaperFile(payload) {
+      const response = await fetch("/api/paper-files/reassign", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not move file");
+      applyPaperFilesPayloads(data.paper_files);
+      clearLibraryPaperResourceSelection({focusPaper: true});
+      if (state.libraryQuickLookOpen) closeLibraryQuickLook({restoreFocus: false});
+      await refreshMainLibrarySnapshot("file-reassigned");
+      return data;
+    }
+
+    // A native file-URL drag may also trigger WebKit DOM drop callbacks.
+    // One gesture token must result in at most one ownership operation.
+    const libraryManagedDropRequests = new Map();
+    async function performLibraryManagedDrop(payload, {paperId = "", folderId = 0} = {}) {
+      const token = payload?.token;
+      if (token && libraryManagedDropRequests.has(token)) return libraryManagedDropRequests.get(token);
+      const perform = async () => {
+        if (Array.isArray(payload?.entries) && payload.entries.length > 1 && paperId) {
+          throw new Error("Move one Library item into Paper Files at a time.");
+        }
+        if (payload?.type === "paper-file") {
+          if (paperId === payload.paper_id) return false;
+          if (!paperId && !folderId) return false;
+          const data = await reassignPaperFile({paper_id: payload.paper_id, resource_id: payload.resource_id,
+            ...(paperId ? {target_paper_id: paperId} : {folder_id: folderId,
+              new_title: String(payload.name || "Attached File").replace(/\.[^.]+$/, "") || "Attached File"})});
+          updateLibraryActivityStatus(`File moved to ${data.reassignment.target_gewu_key}.`, {live: false, clear: false});
+          return true;
+        }
+        if (payload?.type === "item" && paperId) {
+          await convertLibraryItemToAttachment(Number(payload.id), paperId);
+          return true;
+        }
+        if (folderId && ["item", "folder"].includes(payload?.type)) {
+          if (payload.entries?.length > 1) await moveLibraryEntries(payload.entries, folderId);
+          else await moveLibraryEntry(payload.type, Number(payload.id), folderId);
+          return true;
+        }
+        return false;
+      };
+      const request = perform().catch((error) => {
+        updateLibraryActivityStatus(error.message || "Could not move file", {live: false, clear: false});
+        return false;
+      });
+      if (token) {
+        libraryManagedDropRequests.set(token, request);
+        if (libraryManagedDropRequests.size > 100) libraryManagedDropRequests.delete(libraryManagedDropRequests.keys().next().value);
+      }
+      return request;
+    }
+
+    async function handleNativeLibraryManagedDrop(payload, dropPoint = null) {
+      const x = Number(dropPoint?.x), y = Number(dropPoint?.y);
       if (state.mode !== "library" || !Number.isFinite(x) || !Number.isFinite(y)) return false;
       const element = document.elementFromPoint(x, y);
-      const resourceColumn = element?.closest?.("[data-library-resource-paper]");
-      const detailsPanel = element?.closest?.("[data-paper-files-panel]");
-      const targetPaperId = String(
-        resourceColumn?.dataset.libraryResourcePaper
-        || detailsPanel?.dataset.paperId
-        || ""
-      );
-      document.querySelectorAll(".library-attachment-drop-target").forEach((node) => {
-        node.classList.remove("library-attachment-drop-target");
-      });
-      if (!Number(sourceItemId || 0) || !targetPaperId) return false;
-      try {
-        await convertLibraryItemToAttachment(Number(sourceItemId), targetPaperId);
-        return true;
-      } catch (_) {
-        // withLibraryActivityStatus already reports the server error.
-        return false;
-      }
+      const column = element?.closest?.("[data-library-resource-paper]");
+      const panel = element?.closest?.("[data-paper-files-panel]");
+      const paperId = String(column?.dataset.libraryResourcePaper || panel?.dataset.paperId || "");
+      const folder = element?.closest?.("[data-library-drop-folder], [data-library-column-folder]");
+      const folderId = Number(folder?.dataset.libraryDropFolder || folder?.dataset.libraryColumnFolder || 0);
+      clearNativeLibraryDrag();
+      return performLibraryManagedDrop(payload, {paperId, folderId});
     }
 
     async function reorderLibraryEntry(type, id, parentFolderId, targetId, position) {
@@ -39029,6 +39751,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
+        applyPaperFilesPayloads(data.paper_files);
         applyLocalLibraryDeleteResult(data.deleted);
         selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
         renderLibrary();
@@ -39041,14 +39764,15 @@ INDEX_HTML = """<!doctype html>
       if (!recycleId || targetFolderId !== recycleId) return;
       const deletePreview = await previewRecycleDeletion({clear_special: true, folder_id: targetFolderId});
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion("all items in Recycle", deletePreview))) return;
-      return withLibraryActivityStatus("Deleting Recycle...", "Delete complete.", async () => {
+      return withLibraryActivityStatus("Emptying Recycle...", "Recycle emptied.", async () => {
         const res = await fetch("/api/library/special-folder/clear", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({folder_id: targetFolderId, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: false})
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not delete Recycle");
+        if (!res.ok) throw new Error(data.error || "Could not empty Recycle");
+        applyPaperFilesPayloads(data.paper_files);
         clearLibraryFolderContentsLocal(targetFolderId);
         clearLibraryRangeSelection();
         setLibraryColumnSelection(parentFolderId(targetFolderId), {type: "folder", id: targetFolderId});
@@ -39062,8 +39786,7 @@ INDEX_HTML = """<!doctype html>
       const recycleId = Number(libraryRecycleFolderId());
       if (!recycleId) return 0;
       if (entryType === "folder" && Number(entryId) === recycleId) return recycleId;
-      if (Number(parentId || 0) === recycleId) return recycleId;
-      if (Number(state.libraryActiveFolderId || 0) === recycleId) return recycleId;
+      if (!entryType && !Number(entryId || 0) && Number(parentId || 0) === recycleId) return recycleId;
       return 0;
     }
 
@@ -39111,20 +39834,24 @@ INDEX_HTML = """<!doctype html>
       const pathList = Array.isArray(preview.local_copy_paths) ? preview.local_copy_paths : [];
       const metadataCount = Number(preview.metadata_paper_count || 0);
       const shortcutOnlyCount = Number(preview.shortcut_only_paper_count || 0);
+      const folderPaths = Array.isArray(preview.folder_paths) ? preview.folder_paths : [];
       const orphanPaths = Array.isArray(preview.orphan_local_copy_paths) ? preview.orphan_local_copy_paths : [];
       const lines = [
         `Delete ${targetLabel} permanently?`,
         "",
         `${metadataCount} paper record${metadataCount === 1 ? "" : "s"} no longer used outside Recycle will be removed with related metadata and source/resource records.`
       ];
+      if (folderPaths.length) {
+        lines.push("", "Folders to move intact to macOS Trash, including all contents:", ...folderPaths);
+      }
       if (pathList.length) {
         lines.push(
           "",
           `Managed local cop${pathList.length === 1 ? "y" : "ies"} to move to macOS Trash:`,
           ...pathList
         );
-      } else {
-        lines.push("", "No managed local copy files were found.");
+      } else if (!folderPaths.length) {
+        lines.push("", "No local files were found.");
       }
       if (orphanPaths.length) {
         lines.push(
@@ -39178,6 +39905,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entries");
+        applyPaperFilesPayloads(data.paper_files);
         (Array.isArray(data.deleted) ? data.deleted : []).forEach(applyLocalLibraryDeleteResult);
         clearLibraryRangeSelection();
         const lastDeleted = selectedEntries[selectedEntries.length - 1];
@@ -39215,6 +39943,7 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not recover library entry");
+      applyPaperFilesPayloads(data.paper_files);
       if (type === "item") applyLocalLibraryItemMove(id, Number(data.recovered?.folder_id || libraryUnsortedFolderId()), data.recovered || null);
       else upsertLibraryFolderLocal(data.recovered);
       const recoveredId = Number(data.recovered?.id || id);
@@ -39241,6 +39970,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not paste library entries");
+        applyPaperFilesPayloads(data.paper_files);
         (Array.isArray(data.pasted) ? data.pasted : []).forEach((pasted, index) => {
           if (pasted?.type === "folder") applyLibraryTreeSnapshotLocal(pasted.tree);
           else {
@@ -39325,56 +40055,291 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    async function refreshLibraryMetadataFromDoi(paper) {
-      if (!paper?.paper_id) return;
-      const input = $("libraryDetailDoiInput");
-      const identifier = String(input?.value || "").trim();
-      const status = $("libraryDetailStatus");
-      const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
-      const activityId = `metadata:${paper.paper_id}`;
-      if (!identifier) {
-        if (status) {
-          status.textContent = "Enter a DOI or arXiv ID first.";
-          status.className = "library-detail-status err";
+    const paperMetadataRequests = new Map();
+
+    function metadataRefreshActivityText(scope) {
+      const requests = [...paperMetadataRequests.values()].filter((request) => request.scope === scope);
+      if (!requests.length) return "";
+      return requests.length === 1
+        ? `Refreshing info · ${requests[0].title}`
+        : `Refreshing info · ${requests.length} papers`;
+    }
+
+    function updateMetadataRefreshActivity(scope, message = "", failed = false, activityId = "") {
+      const pending = metadataRefreshActivityText(scope);
+      if (scope === "author") {
+        if (message) updateAuthorMonitorActivityStatus(message, {channel: "secondary", kind: "metadata-refresh", delay: failed ? 4800 : 3200});
+        else syncAuthorMonitorActivityDisplay();
+      } else if (scope === "my-publications") {
+        setMyPublicationActivity("metadata-refresh", pending || message, {live: Boolean(pending)});
+        if (!pending) {
+          const notice = state.myPublicationActivities.find((item) => item.id === "metadata-refresh");
+          window.setTimeout(() => {
+            if (state.myPublicationActivities.includes(notice)) clearMyPublicationActivity("metadata-refresh");
+          }, failed ? 4800 : 3200);
         }
-        input?.focus({preventScroll: true});
+      } else {
+        // Keep a separate in-flight refresh indicator alongside imports/downloads.
+        if (message && (activityId || !state.libraryActivityLive)) updateLibraryActivityStatus(message, {activityId, failed, delay: failed ? 4800 : 3200});
+        else renderLibraryActivityStatus();
+      }
+    }
+
+    function metadataDetailContext(root) {
+      return `${state.mode}/${state.libraryTab}/${root?.dataset.metadataPaperId || ""}`;
+    }
+
+    function applyMetadataResult(root, context, paper) {
+      if (!paper?.paper_id) return;
+      const known = state.libraryItems.find((item) => item.paper_id === paper.paper_id)?.paper
+        || state.authorMonitorPapers.find((item) => item.paper_id === paper.paper_id)
+        || state.myPublications.find((item) => item.paper_id === paper.paper_id)?.paper;
+      if (Date.parse(known?.metadata_refresh?.checked_at || "") > Date.parse(paper.metadata_refresh?.checked_at || "")) return;
+      updatePaperState(paper.paper_id, paper);
+      if (!root?.isConnected || metadataDetailContext(root) !== context) return;
+      const active = document.activeElement;
+      const editing = root.contains(active) && (active.matches("input, textarea, select") || active.isContentEditable);
+      const drafts = Array.from(root.querySelectorAll("input, textarea")).some((el) => {
+        if (el.id === "libraryDetailDoiInput") return el.value !== el.defaultValue;
+        if (el.classList.contains("preprint-identifier-input")) return el.closest(".is-editing");
+        return el.hasAttribute("data-manual-metadata-field") && el.value !== el.defaultValue;
+      });
+      if (editing || drafts) {
+        updateMetadataRefreshButton(root, paper.metadata_refresh || {});
+        // Preserve unsaved text. The next normal detail opening uses the new data.
         return;
       }
-      buttons.forEach((button) => button.disabled = true);
+      const showingRefresh = $("metadataRefreshTooltip")?._anchor === root.querySelector('[data-action="refresh-library-metadata"]');
+      const top = root.scrollTop;
+      const focusedAction = root.contains(active) ? active?.dataset?.action : "";
+      if (root.id === "authorMonitorDetailBody") renderAuthorMonitorPaperDetail();
+      else if (state.libraryTab === "my-publications") renderPublicationDetail();
+      else renderLibraryDetail();
+      root.scrollTop = top;
+      const refreshButton = root.querySelector('[data-action="refresh-library-metadata"]');
+      if (showingRefresh && refreshButton?.matches(":hover")) showMetadataRefreshTooltip(refreshButton);
+      if (focusedAction && root.contains(active) === false && document.activeElement === document.body) {
+        root.querySelector(`[data-action="${focusedAction}"]`)?.focus({preventScroll: true});
+      }
+    }
+
+    function identifierSaveNotice(root, context, message, error = false) {
+      if (!root?.isConnected || metadataDetailContext(root) !== context) return;
+      const status = root.querySelector(".library-detail-status");
       if (status) {
-        status.textContent = "Refreshing metadata, metrics, and PubMed details from identifier...";
-        status.className = "library-detail-status";
+        status.className = "library-detail-status " + (error ? "err" : "ok");
+        status.setAttribute("role", "status");
+        status.textContent = message;
       }
-      if (state.libraryTab === "my-publications") {
-        setMyPublicationActivity(activityId, "Refreshing metadata...");
+    }
+
+    async function savePaperIdentifier(paper, root, kind, {render = true, finishEditing = false} = {}) {
+      const input = root?.querySelector(kind === "doi" ? "#libraryDetailDoiInput" : ".preprint-identifier-input");
+      if (!input) return paper;
+      if (input._identifierSave) return input._identifierSave;
+      const context = metadataDetailContext(root);
+      const value = input.value.trim();
+      const changed = value !== input.defaultValue.trim();
+      const finish = (saved) => {
+        updatePaperState(paper.paper_id, saved);
+        if (!root.isConnected || metadataDetailContext(root) !== context || !input.isConnected || input.value.trim() !== value) return saved;
+        input.value = kind === "doi" ? (saved.doi || "") : (saved.preprint_id || "");
+        input.defaultValue = input.value;
+        if (kind === "arxiv") {
+          const label = input.closest(".preprint-identifier-main")?.querySelector('[data-action="edit-preprint-identifier"]');
+          if (label) { label.textContent = input.value || "—"; label.classList.toggle("is-empty", !input.value); }
+        }
+        if (finishEditing) {
+          input.closest(".preprint-identifier-main")?.classList.remove("is-editing");
+          if (document.activeElement === input) input.blur();
+        }
+        if (render) applyMetadataResult(root, context, saved);
+        if (finishEditing) identifierSaveNotice(root, context, changed ? "Identifier updated" : "Identifier saved");
+        return saved;
+      };
+      if (!changed) {
+        // The input's acknowledged value, not an older render closure, is current.
+        const current = state.libraryItems.find((item) => item.paper_id === paper.paper_id)?.paper
+          || state.authorMonitorPapers.find((item) => item.paper_id === paper.paper_id)
+          || state.myPublications.find((item) => item.paper_id === paper.paper_id)?.paper || paper;
+        const saved = {...current, [kind === "doi" ? "doi" : "preprint_id"]: input.defaultValue};
+        return finishEditing ? finish(saved) : saved;
       }
-      updateLibraryActivityStatus("Refreshing metadata...", {live: true, clear: false});
+      const previousReadOnly = input.readOnly;
+      input.readOnly = true;
+      if (finishEditing) identifierSaveNotice(root, context, "Saving identifier…");
+      const request = (async () => {
+        try {
+          const res = await fetch("/api/library/preprint-identifier", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_id: paper.paper_id, kind, identifier: value})
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not save identifier");
+          return finish(data.paper);
+        } catch (error) {
+          if (finishEditing) identifierSaveNotice(root, context, error.message || "Could not save identifier", true);
+          throw error;
+        } finally {
+          input.readOnly = previousReadOnly;
+          input._identifierSave = null;
+        }
+      })();
+      input._identifierSave = request;
+      return request;
+    }
+
+    async function savePaperDoi(paper, root, options = {}) {
+      return savePaperIdentifier(paper, root, "doi", options);
+    }
+
+    function wireDoiIdentifierControls(root, paper) {
+      root?.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.isComposing) {
+          event.preventDefault();
+          event.stopPropagation();
+          savePaperDoi(paper, root, {finishEditing: true}).catch(() => {});
+        }
+      });
+    }
+
+    async function refreshLibraryMetadataFromDoi(paper) {
+      if (!paper?.paper_id || paperMetadataRequests.has(paper.paper_id)) return;
+      const root = $(state.mode === "author" ? "authorMonitorDetailBody" : "libraryDetail");
+      const context = metadataDetailContext(root);
+      const button = root?.querySelector('[data-action="refresh-library-metadata"]');
+      const scope = state.mode === "author" ? "author" : state.libraryTab === "my-publications" ? "my-publications" : "library";
+      const title = paper.title || paper.storage_key || paper.preprint_id || paper.doi || "Paper";
+      let completion = "Refresh complete";
+      let failed = false;
+      paperMetadataRequests.set(paper.paper_id, {scope, title});
+      if (scope === "library") updateLibraryActivityStatus("", {activityId: `metadata:${paper.paper_id}`});
+      updateMetadataRefreshButton(root, paper.metadata_refresh || {});
+      updateMetadataRefreshActivity(scope);
       try {
+        await savePaperDoi(paper, root, {render: false});
         const res = await fetch("/api/library/refresh-metadata", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paper.paper_id, identifier, snapshot: false})
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_id: paper.paper_id, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
-        if (Array.isArray(data.publications)) applyMyPublications(data);
-        updatePaperState(paper.paper_id, data.paper);
-        state.figureFailures.delete(paper.paper_id);
-        if (state.libraryTab === "my-publications") renderMyPublications();
-        else renderLibrary();
-        updateLibraryActivityStatus("Metadata refreshed.", {delay: 2600});
+        paperMetadataRequests.delete(paper.paper_id);
+        applyMetadataResult(root, context, data.paper);
       } catch (error) {
-        const message = error.message || "Could not refresh metadata";
-        updateLibraryActivityStatus(`Metadata refresh failed: ${message}`, {delay: 4200});
-        if (status) {
-          status.textContent = message;
-          status.className = "library-detail-status err";
+        failed = true;
+        completion = `Info refresh failed: ${error.message || "Could not refresh information"}`;
+        if (metadataDetailContext(root) === context && root?.isConnected) {
+          paperMetadataRequests.delete(paper.paper_id);
+          updateMetadataRefreshButton(root, {...paper.metadata_refresh, error: error.message || "Could not refresh metadata"});
         }
-        buttons.forEach((button) => button.disabled = false);
       } finally {
-        clearMyPublicationActivity(activityId);
+        paperMetadataRequests.delete(paper.paper_id);
+        if (button?.isConnected) updateMetadataRefreshButton(root);
+        updateMetadataRefreshActivity(scope, scope === "library" ? `${completion} · ${title}` : completion,
+          failed, scope === "library" ? `metadata:${paper.paper_id}` : "");
       }
     }
+
+    let metadataDetailPollBusy = false;
+    async function pollVisibleMetadataResult() {
+      if (metadataDetailPollBusy || document.hidden || !["library", "author"].includes(state.mode)) return;
+      const root = $(state.mode === "author" ? "authorMonitorDetailBody" : "libraryDetail");
+      const paperId = root?.dataset.metadataPaperId;
+      if (!paperId || paperMetadataRequests.has(paperId)) return;
+      const context = metadataDetailContext(root);
+      metadataDetailPollBusy = true;
+      try {
+        const res = await fetch(`/api/paper?paper_id=${encodeURIComponent(paperId)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const stamp = data.paper?.metadata_refresh?.checked_at || "";
+        if (stamp && (!root.dataset.metadataCheckedAt || Date.parse(stamp) > Date.parse(root.dataset.metadataCheckedAt)) && !paperMetadataRequests.has(paperId) && metadataDetailContext(root) === context) {
+          applyMetadataResult(root, context, data.paper);
+        }
+      } catch (_) {
+      } finally { metadataDetailPollBusy = false; }
+    }
+    window.setInterval(pollVisibleMetadataResult, 30000);
+
+    function metadataRefreshButtonMarkup(paper) {
+      const busy = paperMetadataRequests.has(paper.paper_id);
+      return `<button class="action" type="button" data-action="refresh-library-metadata" data-metadata-refresh-report="${escapeAttr(JSON.stringify(paper.metadata_refresh || {}))}" aria-busy="${busy}" aria-disabled="${busy}">Refresh Info</button>`;
+    }
+
+    function metadataRefreshTooltipMarkup(report, busy = false) {
+      const sources = Object.entries(report.sources || {}).map(([name, status]) => `${name}: ${String(status).replaceAll("_", " ")}`);
+      const retries = Object.entries(report.source_retry_at || {}).map(([name, time]) => `${name}: retry after ${new Date(Number(time) * 1000).toLocaleString()}`);
+      return `${busy ? "<div>Refreshing information…</div>" : ""}${report.error ? `<div>${escapeHtml(report.error)}</div>` : ""}
+        <div>${escapeHtml(report.message || "Refresh paper information using its DOI or arXiv ID.")}</div>
+        ${report.checked_at ? `<div>Last checked: ${escapeHtml(new Date(report.checked_at).toLocaleString())}</div>` : ""}
+        ${sources.length ? `<div>${escapeHtml(sources.join(" · "))}</div>` : ""}
+        ${retries.length ? `<div>${escapeHtml(retries.join(" · "))}</div>` : ""}
+        ${(report.conflicts || []).map((text) => `<div>${escapeHtml(text)}</div>`).join("")}`;
+    }
+
+    function updateMetadataRefreshButton(root, report) {
+      const button = root?.querySelector('[data-action="refresh-library-metadata"]');
+      if (!button) return;
+      if (report) button.dataset.metadataRefreshReport = JSON.stringify(report);
+      const busy = paperMetadataRequests.has(root.dataset.metadataPaperId);
+      button.setAttribute("aria-busy", String(busy));
+      button.setAttribute("aria-disabled", String(busy));
+      if ($("metadataRefreshTooltip")?._anchor === button) showMetadataRefreshTooltip(button);
+    }
+
+    function showMetadataRefreshTooltip(anchor) {
+      closeMetadataRefreshTooltip();
+      if (!anchor?.isConnected) return;
+      let report = {};
+      try { report = JSON.parse(anchor.dataset.metadataRefreshReport || "{}"); } catch (_) {}
+      const tooltip = document.createElement("div");
+      tooltip.id = "metadataRefreshTooltip";
+      tooltip.className = "metadata-refresh-tooltip";
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.innerHTML = metadataRefreshTooltipMarkup(report, anchor.getAttribute("aria-busy") === "true");
+      tooltip._anchor = anchor;
+      const rect = anchor.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 16);
+      tooltip.style.width = `${width}px`;
+      tooltip.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+      // Always below the button, independent of the scrolling Details panel.
+      tooltip.style.top = `${rect.bottom + 6}px`;
+      tooltip.style.maxHeight = `${Math.max(0, window.innerHeight - rect.bottom - 14)}px`;
+      anchor.setAttribute("aria-describedby", tooltip.id);
+      document.body.appendChild(tooltip);
+    }
+
+    function closeMetadataRefreshTooltip() {
+      const tooltip = $("metadataRefreshTooltip");
+      tooltip?._anchor?.removeAttribute("aria-describedby");
+      tooltip?.remove();
+    }
+
+    function wireMetadataRefreshTooltipEvents() {
+      const selector = '[data-action="refresh-library-metadata"]';
+      document.addEventListener("pointerover", (event) => {
+        const anchor = event.target.closest?.(selector);
+        if (anchor && !anchor.contains(event.relatedTarget)) showMetadataRefreshTooltip(anchor);
+      });
+      document.addEventListener("pointerout", (event) => {
+        const anchor = event.target.closest?.(selector);
+        if (anchor && !anchor.contains(event.relatedTarget)) closeMetadataRefreshTooltip();
+      });
+      document.addEventListener("focusin", (event) => {
+        const anchor = event.target.closest?.(selector);
+        if (anchor?.matches(":focus-visible")) showMetadataRefreshTooltip(anchor);
+      });
+      document.addEventListener("focusout", (event) => {
+        if (event.target.matches?.(selector)) closeMetadataRefreshTooltip();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeMetadataRefreshTooltip();
+      });
+      window.addEventListener("resize", closeMetadataRefreshTooltip);
+      window.addEventListener("scroll", closeMetadataRefreshTooltip, true);
+    }
+    wireMetadataRefreshTooltipEvents();
 
     async function extractLibraryIdentifierFromFiles(paper) {
       if (!paper?.paper_id) return;
@@ -40364,22 +41329,22 @@ INDEX_HTML = """<!doctype html>
     }
 
     function focusMonitorCalendarCursor(mode = activeMonitorKeyboardMode()) {
-      if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
+      if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
       const iso = state.monitorCalendarCursorDates[mode] || state.selectedDate;
       window.requestAnimationFrame(() => {
-        if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
+        if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
         const button = document.querySelector(`#calendar .day[data-date="${CSS.escape(iso)}"]`);
         button?.focus({preventScroll: true});
       });
     }
 
     function focusMonitorPaperSelection(mode = activeMonitorKeyboardMode(), options = {}) {
-      if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
+      if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
       const papers = activeReportPapers();
       ensureReportPaperSelection(papers);
       const selectedId = String(state.reportSelectedPaperId || "");
       window.requestAnimationFrame(() => {
-        if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
+        if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
         const root = $("papers");
         const article = selectedId
           ? root?.querySelector(`.paper[data-paper-id="${CSS.escape(selectedId)}"]`)
@@ -40605,6 +41570,16 @@ INDEX_HTML = """<!doctype html>
       state.primaryKeyboardLayer = "root";
       syncPrimaryKeyboardLayer();
       return true;
+    }
+
+    function focusClickedPrimaryTab(event) {
+      const button = event.target.closest?.(".view-switch");
+      if (!button || !$("primaryViewSwitcher")?.contains(button)) return;
+      // Run before each tab's loader. Async Monitor restoration must already
+      // see the root layer, and the clicked tab must retain real DOM focus.
+      state.primaryKeyboardLayer = "root";
+      syncPrimaryKeyboardLayer({focus: false});
+      button.focus({preventScroll: true});
     }
 
     function leavePrimaryKeyboardRoot(options = {}) {
@@ -41210,6 +42185,7 @@ INDEX_HTML = """<!doctype html>
 	    }
 
     function renderLibraryLoader() {
+      if (state.libraryLoaderLogPointerDown) return;
       const backdrop = $("libraryLoaderBackdrop");
       const root = $("libraryLoaderModalBody");
       if (!backdrop || !root) return;
@@ -41235,11 +42211,21 @@ INDEX_HTML = """<!doctype html>
       const refreshMode = state.libraryTaskMode === "metadata-refresh";
       const identifierMode = state.libraryTaskMode === "identifier-recovery";
       const maintenanceMode = refreshMode || identifierMode;
-      const runLabel = identifierMode ? "Start Search" : (refreshMode ? "Start Refresh" : "Import");
-      const stopLabel = identifierMode ? "Stop Search" : (refreshMode ? "Stop Refresh" : "Stop Import");
+      const heading = backdrop.querySelector("h2");
+      const description = backdrop.querySelector(".settings-modal-head p");
+      if (heading) heading.textContent = refreshMode ? "Refresh Info" : (identifierMode ? "Find Missing Identifiers" : "Folder Loader");
+      if (description) description.textContent = refreshMode ? "Refresh paper information in the selected scope. You can keep browsing." : (identifierMode ? "Find identifiers for saved papers with missing DOI or arXiv IDs." : "Import a folder into Library with a live log. Source files are never moved or deleted.");
+      const resumable = refreshMode && ["paused", "failed"].includes(job.status);
+      const runLabel = identifierMode ? "Start Search" : (refreshMode ? (resumable ? "Continue" : "Start Refresh") : "Import");
+      const stopping = job.status === "stopping";
+      const canStop = refreshMode
+        ? ["queued", "running", "pausing", "paused", "failed"].includes(job.status)
+        : state.libraryImportBusy && !stopping;
+      const canPause = refreshMode && ["queued", "running"].includes(job.status);
+      const stopLabel = stopping ? "Stopping…" : (identifierMode ? "Stop Search" : (refreshMode ? "Stop" : "Stop Import"));
       const maintenanceSource = identifierMode
         ? "All Library PDF files without DOI/arXiv"
-        : "All Library papers with DOI/arXiv";
+        : (state.metadataRefreshScopeLabel || "All active Library and Space papers");
       root.innerHTML = `
         <div class="loader-panel">
           <div class="loader-form">
@@ -41252,7 +42238,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="loader-field loader-metadata-field">
               <label for="libraryImportMetadataMode">${identifierMode ? "Lookup" : "Metadata"}</label>
-              <select id="libraryImportMetadataMode"${state.libraryImportBusy || identifierMode ? " disabled" : ""} title="Full metadata refresh can take a long time for large imports.">
+              <select id="libraryImportMetadataMode"${state.libraryImportBusy || identifierMode || resumable ? " disabled" : ""} title="Full metadata refresh can take a long time for large imports.">
                 ${identifierMode
                   ? `<option value="quick" selected>Identifier + quick metadata</option>`
                   : `
@@ -41264,12 +42250,13 @@ INDEX_HTML = """<!doctype html>
               <div class="loader-metadata-hint">${escapeHtml(
                 identifierMode
                   ? "Verified checks within 7 days are skipped; transient failures cool down for 1 hour. No Google Scholar requests."
-                  : (refreshMode ? "Papers refreshed in the last 3 days will be skipped." : loaderMetadataModeHint(state.libraryImportMetadataMode))
+                  : (refreshMode ? "Successful checks within 3 days are skipped; Full also satisfies Quick." : loaderMetadataModeHint(state.libraryImportMetadataMode))
               )}</div>
             </div>
             <div class="loader-action-group">
               <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>${runLabel}</button>
-              <button class="smallbtn" id="libraryStopImport" type="button"${state.libraryImportBusy ? "" : " disabled"}>${stopLabel}</button>
+              ${refreshMode ? `<button class="smallbtn" id="libraryPauseImport" type="button"${canPause ? "" : " disabled"}>Pause</button>` : ""}
+              <button class="smallbtn" id="libraryStopImport" type="button"${canStop ? "" : " disabled"}>${stopLabel}</button>
               ${maintenanceMode ? "" : `<button class="smallbtn danger loader-action-danger" id="libraryDeleteImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Delete Import</button>`}
             </div>
             <div class="loader-target-summary${maintenanceMode ? " hidden" : ""}">
@@ -41281,8 +42268,9 @@ INDEX_HTML = """<!doctype html>
             <span>${percent ? `${percent}%` : ""}</span>
             <div class="loader-progress-track"><div class="loader-progress-bar" style="width:${percent}%"></div></div>
           </div>
-          ${loaderHistoryMarkup()}
+          ${refreshMode ? metadataJobHistoryMarkup() : loaderHistoryMarkup()}
           ${result ? `<div class="loader-result">${escapeHtml(loaderResultSummary(result))}</div>` : ""}
+          ${state.libraryLoaderNavigationError ? `<div class="status err" role="alert">${escapeHtml(state.libraryLoaderNavigationError)}</div>` : ""}
           <div class="loader-main">
             <div class="loader-console-wrap">
               <div class="loader-console" id="libraryLoaderConsole">${loaderConsoleMarkup(job)}</div>
@@ -41299,6 +42287,7 @@ INDEX_HTML = """<!doctype html>
       if (consoleEl) {
         consoleEl.scrollTop = state.libraryImportFollowLatest || consoleWasAtBottom ? consoleEl.scrollHeight : previousConsoleScrollTop;
         wireLoaderConsoleScroll(consoleEl);
+        wireLoaderLogNavigation(consoleEl);
       }
       const sideEl = $("libraryLoaderSide");
       if (sideEl && previousSideScrollTop) sideEl.scrollTop = previousSideScrollTop;
@@ -41320,12 +42309,14 @@ INDEX_HTML = """<!doctype html>
     function loaderMetadataModeHint(mode) {
       mode = normalizeLibraryImportMetadataMode(mode);
       if (mode === "skip") return "Fastest: import files and identifiers only.";
-      if (mode === "full") return "Slow: refreshes detailed metadata and citation sources.";
-      return "Recommended: recovers missing identifiers by PDF title, then refreshes core metadata.";
+      if (mode === "full") return "Core information and DOI/arXiv links, plus detailed authors and citation sources.";
+      return "Core information and verified DOI/arXiv links. Import also recovers missing identifiers first.";
     }
 
     function loaderStatusText(job) {
       if (!job?.status) return "Idle";
+      if (job.job_type === "metadata_refresh") return metadataJobStatusText(job);
+      if (job.status === "completed" && job.result?.identity_conflicts?.length) return `Completed · ${job.result.identity_conflicts.length} identity mismatch(es); files kept`;
       const base = `${job.status}${job.stage ? ` · ${job.stage}` : ""}`;
       if (job.stage === "scan") {
         return `${base} · ${job.scan_files || 0} files · ${job.scan_dirs || 0} folders`;
@@ -41420,14 +42411,75 @@ INDEX_HTML = """<!doctype html>
         const groupClass = loaderLogGroupClass(message);
         const label = loaderLogLabel(kind);
         const time = String(entry.time || "").split("T").pop() || "";
+        const target = entry.paper_id
+          ? ` data-paper-id="${escapeAttr(entry.paper_id)}" data-library-item-id="${Number(entry.library_item_id || 0)}" role="button" tabindex="0" title="Show in Library" aria-label="${escapeAttr(`Show in Library: ${message}`)}"`
+          : "";
         return `
-          <div class="loader-line ${escapeAttr(kind)} ${escapeAttr(groupClass)}">
+          <div class="loader-line ${escapeAttr(kind)} ${escapeAttr(groupClass)}"${target}>
             <span class="loader-badge">${escapeHtml(label)}</span>
             <span class="loader-time">${escapeHtml(time)}</span>
             <span class="loader-message">${loaderLogMessageMarkup(message)}</span>
           </div>
         `;
       }).join("");
+    }
+
+    function wireLoaderLogNavigation(consoleEl) {
+      consoleEl.addEventListener("pointerdown", event => {
+        if (!event.target.closest?.(".loader-line[data-paper-id]")) return;
+        // Keep polling from replacing the row between pointerdown and click.
+        state.libraryLoaderLogPointerDown = true;
+        const release = () => {
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+          window.removeEventListener("blur", release);
+          window.setTimeout(() => { state.libraryLoaderLogPointerDown = false; }, 0);
+        };
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+        window.addEventListener("blur", release);
+      });
+      const activate = (event) => {
+        if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
+        if (event.type === "click" && window.getSelection()?.isCollapsed === false) return;
+        const row = event.target.closest?.(".loader-line[data-paper-id]");
+        if (!row || !consoleEl.contains(row)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openLoaderLogPaper(row.dataset.paperId, Number(row.dataset.libraryItemId || 0));
+      };
+      consoleEl.addEventListener("click", activate);
+      consoleEl.addEventListener("keydown", activate);
+    }
+
+    function finishLoaderPaperReveal(errorMessage = "") {
+      state.libraryLoaderRevealBusy = false;
+      state.libraryLoaderNavigationError = errorMessage;
+      if (state.libraryLoaderOpen) renderLibraryLoader();
+    }
+
+    async function revealLoaderPaper(paperId, itemId = 0) {
+      // An import completion already refreshing the main window must finish
+      // before explicit navigation, or its saved selection can replace ours.
+      if (state.libraryRefreshPromise) await state.libraryRefreshPromise;
+      await navigateToPaperInLibrary(paperId, itemId);
+      closeLibraryLoader();
+    }
+
+    async function openLoaderLogPaper(paperId, itemId = 0) {
+      if (!paperId || state.libraryLoaderRevealBusy) return;
+      state.libraryLoaderRevealBusy = true;
+      state.libraryLoaderNavigationError = "";
+      try {
+        if (IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
+          window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type: "show-paper", paper_id: paperId, library_item_id: itemId});
+          return; // Native bridge waits for the main window before hiding this one.
+        }
+        await revealLoaderPaper(paperId, itemId);
+        finishLoaderPaperReveal();
+      } catch (error) {
+        finishLoaderPaperReveal(error.message || "Could not show paper in Library.");
+      }
     }
 
     function loaderLogGroupClass(message) {
@@ -41529,17 +42581,16 @@ INDEX_HTML = """<!doctype html>
         `;
       }
       if (refreshMode) {
+        const job = state.libraryImportJob || {};
+        const counts = job.counts || result || {};
         return `
-          <h3>Metadata Refresh</h3>
-          <p>Refreshes Library papers with DOI/arXiv identifiers. Papers successfully refreshed in the last 3 days are skipped.</p>
-          <div class="loader-metric"><strong>Mode</strong><span>${escapeHtml(state.libraryImportMetadataMode || result?.metadata_mode || "full")}</span></div>
-          <div class="loader-metric"><strong>Scope</strong><span>All Library papers with DOI/arXiv</span></div>
-          <div class="loader-metric"><strong>Skip rule</strong><span>Successful refreshes within 3 days are skipped.</span></div>
-          ${result ? `
-            <div class="loader-metric"><strong>${result.metadata_refreshed || 0} refreshed</strong><span>Papers whose metadata changed during this run.</span></div>
-            <div class="loader-metric"><strong>${result.skipped_recent || 0} skipped</strong><span>Papers already refreshed recently.</span></div>
-            <div class="loader-metric"><strong>${result.failed || 0} failed</strong><span>Papers that could not be refreshed this time.</span></div>
-          ` : ""}
+          <h3>Refresh Info</h3>
+          <div class="loader-metric"><strong>Scope</strong><span>${escapeHtml(job.scope_label || state.metadataRefreshScopeLabel || "All active Library and Space papers")}</span></div>
+          <div class="loader-metric"><strong>Mode</strong><span>${escapeHtml(state.libraryImportMetadataMode || "full")}</span></div>
+          <p>${escapeHtml(loaderMetadataModeHint(state.libraryImportMetadataMode))}</p>
+          <p>One check per Gewu Key. Recycle is excluded. Successful checks within 3 days are skipped; Full also satisfies Quick. Files, Default and folder locations stay unchanged.</p>
+          <p>Pause finishes the current paper and saves the remaining queue. Continue resumes it, including after restarting the App. Stop finishes the current paper and ends the remaining queue. Completed results and task history are kept; a stopped task cannot be continued.</p>
+          ${Object.entries({updated:"Updated", unchanged:"Unchanged", partial:"Partial", failed:"Failed", skipped_recent:"Cooldown skipped", missing_identifier:"Missing DOI/arXiv", removed:"No longer in scope"}).map(([key,label]) => `<div class="loader-metric"><strong>${Number(counts[key] || 0)}</strong><span>${label}</span></div>`).join("")}
         `;
       }
       if (!result) {
@@ -41566,6 +42617,7 @@ INDEX_HTML = """<!doctype html>
       const selectedDoi = missingDoi[doiIndex] || null;
       return `
         <h3>Result Guide</h3>
+        ${result.identity_conflicts?.length ? `<h3>Files Kept Despite Identity Mismatches</h3><p>All listed files were kept in Paper Files. Existing paper metadata was preserved. Use the file menu to change ownership if needed.</p>${result.identity_conflicts.map((entry) => `<div class="loader-metric"><strong>${escapeHtml(entry.filename || entry.relative_path)}</strong><span>${escapeHtml(entry.relative_path || "")}<br>Detected DOI: ${escapeHtml(entry.incoming_doi || "(none)")}<br>Existing DOI: ${escapeHtml(entry.existing_doi || "(none)")}<br>${escapeHtml(entry.gewu_key || "")}</span></div>`).join("")}` : ""}
         ${loaderLocalCopyPlanMarkup(plan, result)}
         <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New shared paper/file records created in the database.</span></div>
         <div class="loader-metric"><strong>${result.library_items_created || 0} library items</strong><span>Folder shortcuts created or restored in Library, including already-known papers.</span></div>
@@ -41579,7 +42631,7 @@ INDEX_HTML = """<!doctype html>
         <div class="loader-metric"><strong>${result.reused_existing_files || 0} reused</strong><span>Already-copied files reused from Journal Monitor storage, so repeated imports do not copy them again.</span></div>
         <div class="loader-metric"><strong>${result.skipped || 0} skipped</strong><span>${result.skipped_system_metadata || 0} system metadata and ${result.mac_aliases_found || 0} macOS aliases. Normal papers are not deleted by this.</span></div>
         <div class="loader-metric"><strong>${result.missing_source_files || 0} missing</strong><span>Source paths that could not be read during import. These need checking in Finder.</span></div>
-        <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI duplicates and ${result.arxiv_duplicates || 0} arXiv duplicates were merged into existing paper records.</span></div>
+        <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI matches and ${result.arxiv_duplicates || 0} arXiv matches share paper records; distinct files are retained.</span></div>
         <h3 style="margin-top:12px;">PDFs Without DOI</h3>
         ${missingDoi.length ? `
           <div class="loader-missing-tools">
@@ -41658,7 +42710,7 @@ INDEX_HTML = """<!doctype html>
     function renderLibrary() {
       state.mode = "library";
       if (!state.libraryTab?.startsWith("shortcut-") && !state.libraryTab?.startsWith("workspace-")) state.libraryTab = "library";
-      if ((state.libraryTab !== "library" || librarySearchIsActive()) && state.libraryInlineAddFolderId) {
+      if (state.libraryInlineAddFolderId && (state.libraryInlineAddContext?.view !== state.libraryTab || !libraryInlineAddAllowed(state.libraryInlineAddFolderId))) {
         resetLibraryInlineAddPaper();
       }
       stopArxivUpdateCountdown();
@@ -41669,6 +42721,7 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").innerHTML = "";
       $("reportTitle").textContent = libraryViewTitle();
       const root = $("papers");
+      const navigation = activeLibraryNavigationToolContext();
       captureLibraryColumnScrollTops();
       captureLibraryNavigationScroll();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
@@ -41676,10 +42729,13 @@ INDEX_HTML = """<!doctype html>
       $("summary").textContent = "";
       root.classList.add("library-view");
       root.innerHTML = `
-        <div class="library-shell${paperFilesFocusActive ? " paper-files-focus-active" : ""}${state.libraryNavigationRailFocus ? " navigation-rail-focus-active" : ""}" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
+        <div class="library-shell${navigation ? " has-navigation-header" : ""}${paperFilesFocusActive ? " paper-files-focus-active" : ""}${state.libraryNavigationRailFocus ? " navigation-rail-focus-active" : ""}" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
           <aside class="library-tab-rail" id="libraryShortcutTabs" aria-label="Library shortcuts and spaces"></aside>
+          ${navigation ? `<header class="library-navigation-header" id="libraryNavigationHeader">
+            <span class="library-table-folder-title" title="${escapeAttr(navigation.label)}">${escapeHtml(navigation.label)}</span>
+            <span class="library-table-folder-count" id="libraryNavigationCount"></span>${libraryNavigationMenuMarkup(navigation)}
+          </header>` : ""}
           <div class="library-main-area">
-            ${workspaceToolsMarkup()}
             ${librarySearchIsActive()
               ? `<div class="library-search-results" id="librarySearchResults"></div>`
               : `<div class="library-columns" id="libraryColumns"></div>`}
@@ -41691,7 +42747,9 @@ INDEX_HTML = """<!doctype html>
           </aside>
           <div class="library-path-bar" id="libraryPathBar" title="${escapeAttr(librarySelectionPathText())}">
             <span class="library-path-parts">${librarySelectionPathMarkup()}</span>
-            <span class="${libraryActivityStatusClass()}" id="libraryActivityStatus">${escapeHtml(libraryActivityStatusText())}</span>
+            <span class="library-activity-list" id="libraryActivityStatus" role="list" aria-label="Background tasks and activity"></span>
+            <button class="library-import-status-action" id="libraryImportDetails" type="button" hidden>Details</button>
+            <button class="library-import-status-action" id="libraryImportDismiss" type="button" aria-label="Dismiss import result" hidden>Dismiss</button>
             <span class="library-view-toggle" id="libraryViewToggle" role="group" aria-label="Library content view">
               <button type="button" data-library-content-view="list" title="Finder list view">List View</button>
               <span class="library-view-toggle-separator">/</span>
@@ -41700,6 +42758,10 @@ INDEX_HTML = """<!doctype html>
           </div>
         </div>
         <div class="library-context-menu library-tab-context-menu" id="libraryTabContextMenu">
+          <button type="button" data-action="add-tab-paper">Add Paper</button>
+          <button type="button" data-action="rename-tab">Rename</button>
+          <button type="button" data-action="move-tab-library">Move Space to Library</button>
+          <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="remove-tab">Remove Shortcut</button>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
@@ -41708,6 +42770,7 @@ INDEX_HTML = """<!doctype html>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="open-native-entry">Open Native File</button>
           <button type="button" data-action="reveal-native-entry">Open in Finder</button>
+          <button type="button" data-action="refresh-folder-info">Refresh Info</button>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="rename-entry">Rename</button>
           <button type="button" data-action="rename-pdf-metadata">Auto rename from Metadata</button>
@@ -41722,7 +42785,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="sort-by-modified">Sort by Modified Time</button>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="recover-entry">Recover</button>
-          <button type="button" data-action="delete-recycle-all">Delete All</button>
+          <button type="button" data-action="delete-recycle-all">Empty Recycle</button>
           <button type="button" data-action="delete-entry">Delete</button>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
         </div>
@@ -41740,18 +42803,29 @@ INDEX_HTML = """<!doctype html>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="add-paper-resource">Add File</button>
           <button type="button" data-action="sync-paper-resources">Sync Versions</button>
+          <button type="button" data-action="move-paper-resource">Move to Another Paper</button>
+          <button type="button" data-action="split-paper-resource">Create Paper from File</button>
           <button type="button" data-action="delete-paper-resource">Delete from Paper Files</button>
         </div>
       `;
       renderLibraryShortcutTabs();
       updateLibraryViewToggle();
+      renderLibraryActivityStatus();
+      $("libraryImportDetails")?.addEventListener("click", () => {
+        if (state.libraryImportNotice) openLibraryLoader({currentJob: true});
+        else { const job = state.metadataRefreshJobs.find(j => ["running","queued","pausing","stopping","paused","failed"].includes(j.status)); if (job) showMetadataJob(job.job_id); }
+      });
+      $("libraryImportDismiss")?.addEventListener("click", () => {
+        if (state.libraryImportBusy) return;
+        state.libraryImportNotice = null;
+        updateLibraryActivityStatus("");
+      });
       wireLibraryPaneTools();
       resizeLibraryViewport();
       if (librarySearchIsActive()) renderLibrarySearchResults();
       else renderLibraryColumns();
       renderLibraryDetail();
       wireLibraryInteractions();
-      wireWorkspaceTools();
       updateToolbarLibraryImport();
       restoreLibraryColumnScrollTops();
       const columns = $("libraryColumns");
@@ -41823,6 +42897,7 @@ INDEX_HTML = """<!doctype html>
 
     function librarySelectionPathParts() {
       const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      const showAbsolutePath = state.libraryTab?.startsWith("shortcut-");
       const folderParts = [];
       const seen = new Set();
       let folderId = displayRootId;
@@ -41843,8 +42918,8 @@ INDEX_HTML = """<!doctype html>
         const folder = libraryFolderById(current);
         if (!folder) break;
         folderParts.unshift({type: "folder", name: folder.name || "Library", iconClass: libraryEntryIconClass("folder", folder)});
-        if (current === displayRootId) break;
-        current = Number(folder.parent_id || displayRootId);
+        if (current === displayRootId && !showAbsolutePath) break;
+        current = Number(folder.parent_id || 0);
       }
       if (!folderParts.length) {
         const displayRoot = libraryFolderById(displayRootId);
@@ -41870,51 +42945,128 @@ INDEX_HTML = """<!doctype html>
         .join("");
     }
 
-    function libraryActivityStatusText() {
-      return state.libraryActivityText || "";
+    function libraryActivityStatusItems() {
+      const items = [];
+      for (const job of state.metadataRefreshJobs || []) {
+        if (!["running", "queued", "pausing", "stopping", "paused", "failed"].includes(job.status)) continue;
+        const text = `Refresh Info · ${job.status} · ${job.current}/${job.total}`;
+        items.push({id: `batch:${job.job_id}`, text,
+          detail: [text, job.scope_label, job.metadata_mode, job.current_paper, job.message].filter(Boolean).join("\\n"),
+          live: ["running", "queued", "pausing", "stopping"].includes(job.status), failed: job.status === "failed"});
+      }
+      if (state.libraryImportNotice) {
+        const job = state.libraryImportJob || {};
+        const notice = state.libraryImportNotice;
+        const percent = Math.min(100, Math.max(0, Math.round(Number(job.percent) || 0)));
+        const text = notice.live && state.libraryTaskMode === "import"
+          ? ["Folder Loader", percent ? `${percent}%` : "", job.stage, state.libraryImportTargetPath].filter(Boolean).join(" · ")
+          : notice.text;
+        items.push({id: "import", text, live: notice.live,
+          detail: [notice.text, state.libraryImportPath, job.message, job.current != null && job.total ? `${job.current}/${job.total}` : ""].filter(Boolean).join("\\n")});
+      }
+      for (const [paperId, request] of paperMetadataRequests) {
+        if (request.scope === "library") items.push({id: `metadata:${paperId}`, text: `Refreshing info · ${request.title}`, live: true});
+      }
+      for (const activity of state.libraryActivities || []) {
+        if (!items.some(item => item.id === activity.id)) items.push(activity);
+      }
+      if (state.libraryActivityText) items.push({id: "notice", text: state.libraryActivityText, live: state.libraryActivityLive});
+      return items;
     }
 
-    function libraryActivityStatusClass() {
+    function libraryActivityStatusText() {
+      return libraryActivityStatusItems().map(item => item.text).join("\\n");
+    }
+
+    function libraryActivityStatusClass(item) {
       const base = "library-activity-status";
-      if (!state.libraryActivityText) return base;
-      if (state.libraryActivityLive) return `${base} live`;
-      if (/failed|could not|error/i.test(state.libraryActivityText)) return `${base} err`;
+      const text = item.text || "";
+      if (!text) return base;
+      if (item.live) return `${base} live`;
+      if (item.failed || (item.failed == null && /failed|could not|error|partial|review|unavailable/i.test(text))) return `${base} err`;
+      if (text.startsWith("Refresh complete")) return `${base} refresh-complete`;
       return `${base} ok`;
     }
 
+    function renderLibraryActivityStatus() {
+      const status = $("libraryActivityStatus");
+      if (status) {
+        const items = libraryActivityStatusItems();
+        const existing = new Map(Array.from(status.children, node => [node.dataset.activityId, node]));
+        // Keep each task's element stable across polling so hover and animation
+        // are not restarted every time the progress changes.
+        for (const [index, item] of items.entries()) {
+          let node = existing.get(item.id);
+          if (!node) {
+            node = document.createElement("span");
+            node.dataset.activityId = item.id;
+            node.setAttribute("role", "listitem");
+            node.tabIndex = 0;
+            const label = document.createElement("span");
+            label.className = "library-activity-label";
+            node.appendChild(label);
+          }
+          const className = libraryActivityStatusClass(item);
+          if (node.className !== className) node.className = className;
+          if (node.firstElementChild.textContent !== item.text) node.firstElementChild.textContent = item.text;
+          const detail = item.detail || item.text;
+          if (node.title !== detail) { node.title = detail; node.setAttribute("aria-label", detail); }
+          if (status.children[index] !== node) status.insertBefore(node, status.children[index] || null);
+          existing.delete(item.id);
+        }
+        existing.forEach(node => node.remove());
+      }
+      const details = $("libraryImportDetails");
+      const dismiss = $("libraryImportDismiss");
+      if (details) details.hidden = !state.libraryImportNotice && !metadataBatchActivityText();
+      if (dismiss) dismiss.hidden = !state.libraryImportNotice || state.libraryImportBusy;
+    }
+
     function updateLibraryActivityStatus(text = "", options = {}) {
+      if (options.activityId) {
+        const activities = state.libraryActivities ||= [];
+        const previous = activities.find(item => item.id === options.activityId);
+        if (previous?.timer) window.clearTimeout(previous.timer);
+        const index = activities.indexOf(previous);
+        if (text) {
+          const item = {id: options.activityId, text, detail: options.detail || text, live: Boolean(options.live), failed: Boolean(options.failed)};
+          if (index < 0) activities.push(item);
+          else activities[index] = item;
+          if (!item.live && options.clear !== false) item.timer = window.setTimeout(() => {
+            // A finished task's timer must not clear a newer run of that task.
+            const current = activities.indexOf(item);
+            if (current >= 0) activities.splice(current, 1);
+            renderLibraryActivityStatus();
+          }, Number(options.delay || 1800));
+        } else if (index >= 0) activities.splice(index, 1);
+        renderLibraryActivityStatus();
+        return;
+      }
       if (state.libraryActivityTimer) {
         window.clearTimeout(state.libraryActivityTimer);
         state.libraryActivityTimer = 0;
       }
       state.libraryActivityText = text;
       state.libraryActivityLive = Boolean(options.live);
-      const status = $("libraryActivityStatus");
-      if (status) {
-        status.textContent = libraryActivityStatusText();
-        status.className = libraryActivityStatusClass();
-      }
+      renderLibraryActivityStatus();
       if (text && !options.live && options.clear !== false) {
         state.libraryActivityTimer = window.setTimeout(() => {
           state.libraryActivityText = "";
           state.libraryActivityLive = false;
-          const current = $("libraryActivityStatus");
-          if (current) {
-            current.textContent = "";
-            current.className = libraryActivityStatusClass();
-          }
+          renderLibraryActivityStatus();
         }, Number(options.delay || 1800));
       }
     }
 
     async function withLibraryActivityStatus(liveText, doneText, action) {
-      updateLibraryActivityStatus(liveText, {live: true, clear: false});
+      const activityId = `operation:${state.libraryActivitySequence = (state.libraryActivitySequence || 0) + 1}`;
+      updateLibraryActivityStatus(liveText, {activityId, live: true, clear: false});
       try {
         const result = await action();
-        if (doneText) updateLibraryActivityStatus(doneText, {live: false});
+        updateLibraryActivityStatus(doneText, {activityId, live: false});
         return result;
       } catch (error) {
-        updateLibraryActivityStatus(`Library action failed: ${error.message || "Unknown error"}`, {live: false});
+        updateLibraryActivityStatus(`Library action failed: ${error.message || "Unknown error"}`, {activityId, failed: true, live: false});
         throw error;
       }
     }
@@ -41958,27 +43110,6 @@ INDEX_HTML = """<!doctype html>
       return null;
     }
 
-    function workspaceToolsMarkup() {
-      const context = activeLibraryNavigationToolContext();
-      if (!context) return "";
-      const status = String(state.workspaceStatus || "").trim();
-      const kindLabel = context.type === "workspace" ? "Space" : "Shortcut";
-      return `
-        <div class="workspace-tools">
-          <div class="workspace-tool-group">
-            <input class="search" id="workspaceNameInput" value="${escapeAttr(context.label)}" placeholder="${kindLabel} name">
-            <button class="smallbtn" id="workspaceRenameButton" type="button">Rename</button>
-          </div>
-          <div class="workspace-tool-group">
-            <input class="search" id="workspaceDoiInput" placeholder="DOI, arXiv ID, or title">
-            <button class="smallbtn" id="workspaceAddDoiButton" type="button"${state.workspaceAddPaperBusy ? " disabled" : ""}>Add Paper</button>
-          </div>
-          ${status ? `<span class="workspace-status" id="workspaceStatus">${escapeHtml(status)}</span>` : `<span class="workspace-status" id="workspaceStatus"></span>`}
-          ${context.type === "workspace" ? `<button class="smallbtn workspace-move-library-button" id="workspaceMoveToLibraryButton" type="button">Move Space to Library</button>` : ""}
-        </div>
-      `;
-    }
-
     function updateToolbarLibraryImport() {
       const tools = $("toolbarLibraryImport");
       const statusEl = $("libraryImportStatus");
@@ -42011,7 +43142,13 @@ INDEX_HTML = """<!doctype html>
       const stopButton = $("libraryStopImport");
       const deleteButton = $("libraryDeleteImport");
       if (runButton) runButton.disabled = state.libraryImportBusy;
-      if (stopButton) stopButton.disabled = !state.libraryImportBusy;
+      const refreshMode = state.libraryTaskMode === "metadata-refresh";
+      const statusValue = state.libraryImportJob?.status;
+      if (stopButton) stopButton.disabled = refreshMode
+        ? !["queued", "running", "pausing", "paused", "failed"].includes(statusValue)
+        : !state.libraryImportBusy || statusValue === "stopping";
+      const pauseButton = $("libraryPauseImport");
+      if (pauseButton) pauseButton.disabled = !["queued", "running"].includes(statusValue);
       if (deleteButton) deleteButton.disabled = state.libraryImportBusy;
     }
 
@@ -42031,11 +43168,19 @@ INDEX_HTML = """<!doctype html>
       });
       $("libraryChooseFolder")?.addEventListener("click", chooseLibraryImportFolder);
       $("libraryRunImport")?.addEventListener("click", () => {
-        if (state.libraryTaskMode === "metadata-refresh") runLibraryMetadataRefresh();
+        if (state.libraryTaskMode === "metadata-refresh") {
+          if (["paused", "failed"].includes(state.libraryImportJob?.status)) controlMetadataJob("resume");
+          else runLibraryMetadataRefresh();
+        }
         else if (state.libraryTaskMode === "identifier-recovery") runLibraryIdentifierRecovery();
         else runLibraryFolderImport();
       });
-      $("libraryStopImport")?.addEventListener("click", stopLibraryFolderImport);
+      $("libraryPauseImport")?.addEventListener("click", () => controlMetadataJob("pause"));
+      $("libraryStopImport")?.addEventListener("click", () => {
+        if (state.libraryTaskMode === "metadata-refresh") controlMetadataJob("stop");
+        else stopLibraryFolderImport();
+      });
+      $("metadataJobHistory")?.addEventListener("change", event => { if (event.target.value) showMetadataJob(event.target.value); });
       $("libraryDeleteImport")?.addEventListener("click", deleteLibraryFolderImport);
       const reportSelect = $("libraryImportReportSelect");
       reportSelect?.addEventListener("focus", () => ensureLibraryImportReportsLoaded());
@@ -42138,6 +43283,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryFolderImport() {
+      state.libraryImportNotice = null;
+      renderLibraryActivityStatus();
       const sourcePaths = Array.isArray(state.libraryImportSourcePaths) ? state.libraryImportSourcePaths.filter(Boolean) : [];
       const path = sourcePaths.length ? "" : ($("libraryImportPath")?.value || state.libraryImportPath || "").trim();
       if (!sourcePaths.length && !path) {
@@ -42189,6 +43336,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryMetadataRefresh() {
+      state.libraryImportNotice = null;
+      renderLibraryActivityStatus();
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportBackground = false;
@@ -42205,7 +43354,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/metadata-refresh/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({metadata_mode: state.libraryImportMetadataMode, skip_days: 3})
+          body: JSON.stringify({metadata_mode: state.libraryImportMetadataMode, skip_days: 3, folder_id: state.metadataRefreshScopeId})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not start metadata refresh");
@@ -42223,6 +43372,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryIdentifierRecovery() {
+      state.libraryImportNotice = null;
+      renderLibraryActivityStatus();
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportBackground = false;
@@ -42340,6 +43491,8 @@ INDEX_HTML = """<!doctype html>
     function startLibraryImportPolling() {
       stopLibraryImportPolling();
       if (!state.libraryImportJobId) return;
+      state.libraryImportPollFailures = 0;
+      state.libraryImportNextPollAt = 0;
       state.libraryImportPoller = window.setInterval(refreshLibraryImportJob, 500);
       refreshLibraryImportJob();
     }
@@ -42353,7 +43506,7 @@ INDEX_HTML = """<!doctype html>
     function resumeLibraryImportPollingIfNeeded() {
       if (!state.libraryImportJobId || state.libraryImportPoller) return;
       const status = state.libraryImportJob?.status || "";
-      if (["completed", "failed", "cancelled", "deleted", "loaded"].includes(status)) return;
+      if (["completed", "failed", "cancelled", "deleted", "loaded", "unavailable", "paused", "stopped"].includes(status)) return;
       startLibraryImportPolling();
     }
 
@@ -42363,15 +43516,20 @@ INDEX_HTML = """<!doctype html>
       const result = job.result || {};
       if (status === "completed") {
         const total = Number(result.library_items_created || 0);
+        const conflicts = Array.isArray(result.identity_conflicts) ? result.identity_conflicts.length : 0;
+        if (conflicts) return `Loaded ${total} items into ${target}; ${conflicts} identity mismatch(es), files kept. See Details.`;
         return total
           ? `Loaded ${total} item${total === 1 ? "" : "s"} into ${target}.`
           : `Finished loading into ${target}.`;
       }
       if (status === "failed") {
         const message = job.error || (Array.isArray(result.errors) ? result.errors[0] : "") || "Unknown error";
-        return `Library load failed for ${target}: ${message}`;
+        const count = Number(result.library_items_created || 0);
+        const conflicts = Array.isArray(result.identity_conflicts) ? result.identity_conflicts.length : 0;
+        return `${count ? `Partial import: ${count} items loaded` : "Library load failed"} into ${target}. ${conflicts ? `${conflicts} identity mismatch(es); files kept. ${message}` : message}`;
       }
-      if (status === "cancelled") return `Library load cancelled for ${target}.`;
+      if (status === "cancelled") return `Library load cancelled for ${target}; ${Number(result.library_items_created || 0)} items loaded.`;
+      if (status === "unavailable") return `Import status unavailable for ${target}. ${job.error || "Check Details before retrying."}`;
       const percent = Number(job.percent);
       const percentText = Number.isFinite(percent) && percent > 0 ? ` · ${Math.min(100, Math.max(0, Math.round(percent)))}%` : "";
       const stageText = job.stage ? ` · ${job.stage}` : "";
@@ -42383,51 +43541,79 @@ INDEX_HTML = """<!doctype html>
 
     function updateLibraryDroppedImportActivity(job = {}) {
       if (!state.libraryImportBackground) return;
-      const terminal = ["completed", "failed", "cancelled"].includes(String(job.status || "").toLowerCase());
-      updateLibraryActivityStatus(libraryDroppedImportActivityText(job), {
-        live: !terminal,
-        clear: terminal,
-        delay: terminal ? 6000 : undefined
-      });
+      const terminal = ["completed", "failed", "cancelled", "unavailable"].includes(String(job.status || "").toLowerCase());
+      state.libraryImportNotice = {text: libraryDroppedImportActivityText(job), live: !terminal};
+      renderLibraryActivityStatus();
     }
 
     async function refreshLibraryImportJob() {
-      if (!state.libraryImportJobId) return;
+      const jobId = state.libraryImportJobId;
+      if (!jobId || state.libraryImportInFlight || Date.now() < state.libraryImportNextPollAt) return;
+      state.libraryImportInFlight = true;
       try {
-        const res = await fetch(`/api/library/import-folder/progress?job_id=${encodeURIComponent(state.libraryImportJobId)}`);
+        const res = await fetch(`/api/library/import-folder/progress?job_id=${encodeURIComponent(jobId)}`);
         const data = await parseJsonResponse(res);
-        if (!res.ok) throw new Error(data.error || "Could not read loader progress");
-        const job = data.job || {};
+        if (jobId !== state.libraryImportJobId) return;
+        if (!res.ok) {
+          const error = new Error(data.error || "Could not read loader progress");
+          error.status = res.status;
+          throw error;
+        }
+        if (!data.job?.status) throw new Error("Invalid loader progress response");
+        const job = data.job;
+        state.libraryImportPollFailures = 0;
+        state.libraryImportNextPollAt = 0;
         state.libraryImportJob = job;
         state.libraryImportStatus = loaderStatusText(job);
-        updateLibraryDroppedImportActivity(job);
         if (job.result) {
           state.libraryImportLastResult = job.result;
           if (job.result.report_path) state.libraryImportReportPath = job.result.report_path;
         }
-        if (job.library_ready && !state.libraryImportReadyRefreshDone) {
+        const terminal = ["completed", "failed", "cancelled", "deleted", "paused", "stopped"].includes(job.status);
+        if (terminal) {
+          state.libraryImportBusy = false;
+          stopLibraryImportPolling();
+        }
+        updateLibraryDroppedImportActivity(job);
+        if (job.job_type === "metadata_refresh") {
+          // Polling never reselects a folder or replaces a user's current edit.
+          pollMetadataJobs();
+          if (terminal) signalLibraryRefresh("metadata-completed");
+        } else if (terminal) {
+          state.libraryImportReportsLoaded = false;
+          // Failed/cancelled imports may already have committed visible items.
+          await refreshLibraryAfterImportCompletion();
+          state.libraryImportBackground = false;
+        } else if (job.library_ready && !state.libraryImportReadyRefreshDone) {
           state.libraryImportReadyRefreshDone = true;
           await refreshLibraryAfterImportReady();
         }
-        if (["completed", "failed", "cancelled", "deleted"].includes(job.status)) {
-          state.libraryImportBusy = false;
-          stopLibraryImportPolling();
-          if (job.status === "completed") {
-            if (job.result?.report_path) state.libraryImportReportsLoaded = false;
-            await refreshLibraryAfterImportCompletion();
-          }
-          state.libraryImportBackground = false;
-        }
         if (state.libraryLoaderOpen) renderLibraryLoader();
       } catch (error) {
-        state.libraryImportStatus = error.message || "Could not read loader progress";
-        state.libraryImportBusy = false;
-        stopLibraryImportPolling();
-        if (state.libraryImportBackground) {
-          updateLibraryActivityStatus(`Library load failed: ${state.libraryImportStatus}`, {live: false, delay: 6000});
+        if (jobId !== state.libraryImportJobId) return;
+        if ([401, 403, 404].includes(error.status)) {
+          state.libraryImportStatus = error.status === 404
+            ? "The server no longer tracks this import. Check Library and Previous Logs before retrying."
+            : "Import status access is unavailable. Reopen Gewu Insight to reconnect.";
+          state.libraryImportBusy = false;
+          stopLibraryImportPolling();
+          state.libraryImportJob = {...state.libraryImportJob, status: "unavailable", error: state.libraryImportStatus};
+          updateLibraryDroppedImportActivity(state.libraryImportJob);
           state.libraryImportBackground = false;
+          if (error.status === 404) await refreshLibraryAfterImportCompletion();
+        } else {
+          // A transport error is not evidence that the worker failed or stopped.
+          state.libraryImportPollFailures += 1;
+          state.libraryImportNextPollAt = Date.now() + Math.min(10000, 1000 * 2 ** Math.min(4, state.libraryImportPollFailures));
+          state.libraryImportStatus = "Progress temporarily unavailable; reconnecting. The import may still be running.";
+          if (state.libraryImportBackground) {
+            state.libraryImportNotice = {text: state.libraryImportStatus, live: true};
+            renderLibraryActivityStatus();
+          }
         }
         if (state.libraryLoaderOpen) renderLibraryLoader();
+      } finally {
+        state.libraryImportInFlight = false;
       }
     }
 
@@ -42512,6 +43698,9 @@ INDEX_HTML = """<!doctype html>
 
     function handleLibraryRefreshSignal(event) {
       if (event.key !== LIBRARY_REFRESH_SIGNAL_KEY || !event.newValue) return;
+      try {
+        if (JSON.parse(event.newValue).reason === "metadata-completed") { pollVisibleMetadataResult(); return; }
+      } catch (_) {}
       refreshMainLibrarySnapshot("external-loader").catch(() => {});
     }
 
@@ -42538,6 +43727,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryTaskMode = draft.job_type === "metadata_refresh"
         ? "metadata-refresh"
         : (draft.job_type === "identifier_recovery" ? "identifier-recovery" : "import");
+      state.metadataRefreshScopeId = draft.folder_id == null ? null : Number(draft.folder_id);
+      state.metadataRefreshScopeLabel = draft.scope_label || "All active Library and Space papers";
       state.libraryImportSourcePaths = sourcePaths;
       state.libraryImportPath = sourcePaths.length === 1 ? sourcePaths[0] : (sourcePaths.length ? `${sourcePaths.length} dropped items` : (draft.source_root || state.libraryImportPath || ""));
       state.libraryImportTargetFolderId = Number(draft.target_folder_id || state.libraryRootId || 1);
@@ -42575,15 +43766,107 @@ INDEX_HTML = """<!doctype html>
       return false;
     }
 
-    function openMetadataRefreshWindow() {
+    function openMetadataRefreshWindow(folderId = null) {
+      const scope = folderId == null ? null : Number(folderId);
       const draft = {
-        job_type: "metadata_refresh",
-        metadata_mode: "full",
-        status: "Ready to refresh Library metadata. Papers refreshed in the last 3 days will be skipped."
+        job_type: "metadata_refresh", metadata_mode: "full", folder_id: scope,
+        scope_label: scope == null ? "All active Library and Space papers" : `${libraryFolderPath(scope)} — including all subfolders`,
+        status: "Ready to refresh. Successful checks within 3 days are skipped; Full also satisfies Quick."
       };
       saveLibraryImportDraft(draft);
-      applyLibraryImportDraft(draft);
+      if (IS_STANDALONE_LOADER_WINDOW || !window.webkit?.messageHandlers?.libraryLoaderWindow) applyLibraryImportDraft(draft);
       openLibraryLoaderWindow();
+      pollMetadataJobs();
+    }
+
+    function metadataJobStatusText(job) {
+      const c = job.counts || {};
+      return `Refresh Info · ${job.status} · ${Number(job.current || 0)}/${Number(job.total || 0)} checked · ${Number(c.updated || 0)} updated · ${Number(c.unchanged || 0)} unchanged · ${Number(c.partial || 0)} partial · ${Number(c.failed || 0)} failed · ${Number(c.skipped_recent || 0)} skipped · ${Number(c.missing_identifier || 0)} missing ID`;
+    }
+
+    function metadataBatchActivityText() {
+      const pending = (state.metadataRefreshJobs || []).filter(j => ["running","queued","pausing","stopping","paused","failed"].includes(j.status));
+      const job = pending.find(j => j.status === "running") || pending[0];
+      if (!job) return "";
+      return `Refresh Info · ${job.status} · ${job.current}/${job.total}${pending.length > 1 ? ` · ${pending.length} tasks` : ""}`;
+    }
+
+    function metadataJobHistoryMarkup() {
+      return `<div class="loader-history"><label for="metadataJobHistory">Refresh tasks</label><select id="metadataJobHistory"><option value="">Select a task to inspect or continue</option>${(state.metadataRefreshJobs || []).map(job => `<option value="${escapeAttr(job.job_id)}"${job.job_id === state.libraryImportJobId ? " selected" : ""}>${escapeHtml(`${job.scope_label} · ${job.metadata_mode} · ${job.status} · ${job.current}/${job.total}`)}</option>`).join("")}</select></div>`;
+    }
+
+    async function showMetadataJob(jobId) {
+      stopLibraryImportPolling();
+      const job = state.metadataRefreshJobs.find(j => j.job_id === jobId);
+      if (!job) return;
+      state.libraryTaskMode = "metadata-refresh";
+      state.libraryImportJobId = jobId;
+      state.libraryImportJob = job;
+      state.libraryImportLastResult = job.result;
+      state.libraryImportMetadataMode = job.metadata_mode;
+      state.metadataRefreshScopeId = job.folder_id;
+      state.metadataRefreshScopeLabel = job.scope_label;
+      state.libraryImportStatus = metadataJobStatusText(job);
+      state.libraryImportBusy = ["queued", "running", "pausing", "stopping"].includes(job.status);
+      state.libraryImportReadyRefreshDone = true;
+      state.libraryLoaderOpen = true;
+      await refreshLibraryImportJob();
+      renderLibraryLoader();
+      if (state.libraryImportBusy) startLibraryImportPolling();
+    }
+
+    async function controlMetadataJob(action) {
+      try {
+        const res = await fetch("/api/library/metadata-refresh/control", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({job_id:state.libraryImportJobId, action})});
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not update refresh task");
+        state.libraryImportJob = data.job;
+        state.libraryImportLastResult = data.job.result;
+        state.metadataRefreshJobs = (state.metadataRefreshJobs || []).map(job => job.job_id === data.job.job_id ? data.job : job);
+        renderLibraryActivityStatus();
+        state.libraryImportBusy = ["queued","running","pausing","stopping"].includes(data.job.status);
+        state.libraryImportStatus = metadataJobStatusText(data.job);
+        renderLibraryLoader();
+        if (state.libraryImportBusy) startLibraryImportPolling();
+        else {
+          stopLibraryImportPolling();
+          signalLibraryRefresh("metadata-completed");
+        }
+        pollMetadataJobs();
+      } catch (error) { state.libraryImportStatus = error.message; renderLibraryLoader(); }
+    }
+
+    let metadataJobsPolling = false;
+    async function pollMetadataJobs() {
+      if (metadataJobsPolling) return;
+      metadataJobsPolling = true;
+      try {
+        const res = await fetch("/api/library/metadata-refresh/jobs");
+        if (!res.ok) return;
+        const data = await res.json();
+        const previous = state.metadataRefreshJobs || [];
+        state.metadataRefreshJobs = data.jobs || [];
+        for (const job of state.metadataRefreshJobs) {
+          const old = previous.find(j => j.job_id === job.job_id);
+          if (old && old.status !== job.status && ["completed", "stopped"].includes(job.status)) {
+            if (!state.libraryActivityLive) updateLibraryActivityStatus(job.status === "stopped" ? "Refresh stopped" : "Refresh complete", {delay:5000});
+            pollVisibleMetadataResult();
+          }
+        }
+        renderLibraryActivityStatus();
+        if (state.libraryLoaderOpen && state.libraryTaskMode === "metadata-refresh" && !state.libraryImportBusy && JSON.stringify(previous) !== JSON.stringify(state.metadataRefreshJobs)) {
+          const selected = state.metadataRefreshJobs.find(job => job.job_id === state.libraryImportJobId);
+          if (selected) {
+            state.libraryImportJob = selected;
+            state.libraryImportLastResult = selected.result;
+            state.libraryImportStatus = metadataJobStatusText(selected);
+            state.libraryImportBusy = ["queued", "running", "pausing", "stopping"].includes(selected.status);
+            if (state.libraryImportBusy) startLibraryImportPolling();
+          }
+          renderLibraryLoader();
+        }
+      } catch (_) { /* Keep the last known queue; a transient error is not completion. */ }
+      finally { metadataJobsPolling = false; }
     }
 
     function openIdentifierRecoveryWindow() {
@@ -42598,6 +43881,9 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function handleNativeFinderDrop(paths, dropPoint = null) {
+      if (state.libraryDragPayload) {
+        return handleNativeLibraryManagedDrop(state.libraryDragPayload, dropPoint);
+      }
       const droppedPaths = Array.isArray(paths)
         ? paths.filter((path) => typeof path === "string" && path.trim())
         : [];
@@ -42823,6 +44109,7 @@ INDEX_HTML = """<!doctype html>
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportBackground = true;
+      state.libraryImportJobId = "";
       state.libraryTaskMode = "import";
       state.libraryImportSourcePaths = [...paths];
       state.libraryImportPath = paths.length === 1 ? paths[0] : `${paths.length} dropped items`;
@@ -42850,11 +44137,12 @@ INDEX_HTML = """<!doctype html>
         startLibraryImportPolling();
       } catch (error) {
         state.libraryImportBusy = false;
-        state.libraryImportBackground = false;
         state.libraryImportStatus = error.message || "Could not start dropped import";
         state.libraryImportLastResult = {errors: [state.libraryImportStatus]};
         appendLibraryImportLog(state.libraryImportStatus, "error");
-        updateLibraryActivityStatus(`Library load failed: ${state.libraryImportStatus}`, {live: false, delay: 6000});
+        state.libraryImportJob = {...state.libraryImportJob, status: "failed", error: state.libraryImportStatus};
+        updateLibraryDroppedImportActivity(state.libraryImportJob);
+        state.libraryImportBackground = false;
       }
     }
 
@@ -43343,7 +44631,7 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename shortcut");
       applyLibraryNavigationSnapshot(data);
-      state.workspaceStatus = "Shortcut renamed.";
+      updateLibraryActivityStatus("Shortcut renamed.", {live: false});
       if (state.libraryTab === `shortcut-${index}`) state.libraryTab = `shortcut-${index}`;
       renderLibrary();
     }
@@ -43369,7 +44657,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function renameLibraryWorkspace(index, labelOverride = null) {
-      const label = labelOverride === null ? ($("workspaceNameInput")?.value || `Space ${index + 1}`) : labelOverride;
+      const label = labelOverride === null ? window.prompt("Rename space", libraryWorkspaceLabel(index)) : labelOverride;
+      if (label === null || !String(label).trim()) return;
       const res = await fetch("/api/library/workspace-tabs/rename", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -43377,8 +44666,9 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename space");
+      applyFolderRenameResult(data);
       applyLibraryNavigationSnapshot(data);
-      state.workspaceStatus = "Space renamed.";
+      updateLibraryActivityStatus("Space renamed.", {live: false});
       state.libraryTab = `workspace-${index}`;
       renderLibrary();
     }
@@ -43645,95 +44935,27 @@ INDEX_HTML = """<!doctype html>
       renderLibrary();
     }
 
-    async function addLibraryNavigationPaper(tabType, index) {
-      const identifier = $("workspaceDoiInput")?.value || "";
-      if (!identifier.trim() || state.workspaceAddPaperBusy) return;
-      const isWorkspace = tabType === "workspace";
-      const tab = isWorkspace ? state.libraryWorkspaceTabs[index] : state.libraryShortcutTabs[index];
-      const rootFolderId = Number(isWorkspace ? tab?.root_folder_id : tab?.folder_id);
-      const tabKey = `${tabType}-${index}`;
-      const currentFolderId = Number(state.libraryCurrentFolderId || rootFolderId);
-      const targetFolderId = libraryFolderIsWithin(currentFolderId, rootFolderId)
-        ? currentFolderId
-        : rootFolderId;
-      const targetName = libraryFolderPath(targetFolderId)
-        || (isWorkspace ? libraryWorkspaceLabel(index) : libraryShortcutLabel(index))
-        || "current folder";
-      state.workspaceAddPaperBusy = true;
-      state.workspaceStatus = "Looking up paper...";
-      updateLibraryActivityStatus(
-        `Finding paper and adding it to ${targetName}...`,
-        {live: true, clear: false}
-      );
-      state.libraryTab = tabKey;
-      renderLibrary();
-      try {
-        const res = await fetch("/api/library/navigation-tabs/add-paper", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            tab_type: tabType,
-            tab_id: tab?.tab_id || "",
-            index,
-            identifier,
-            folder_id: targetFolderId
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not add paper");
-        applyLibraryNavigationSnapshot(data);
-        upsertLibraryItemLocal(data.item);
-        if (data.paper) updatePaperState(data.paper.paper_id || data.paper_id, data.paper);
-        const addedFolderId = Number(data.folder_id || targetFolderId || rootFolderId);
-        const added = data.item?.id
-          ? libraryItemById(Number(data.item.id))
-          : state.libraryItems.find((item) => (
-              String(item.paper_id || "") === String(data.paper_id || "")
-              && Number(item.folder_id) === addedFolderId
-            ));
-        if (added) {
-          state.libraryActiveFolderId = addedFolderId;
-          state.libraryCurrentFolderId = addedFolderId;
-          state.librarySelection = {type: "item", id: Number(added.id)};
-          setLibraryColumnSelection(addedFolderId, state.librarySelection);
-        }
-        state.workspaceStatus = "Literature added.";
-        state.libraryTab = tabKey;
-        const paperTitle = String(data.paper?.title || identifier).trim();
-        updateLibraryActivityStatus(
-          `Added ${paperTitle} to ${targetName}.`,
-          {live: false, delay: 4200}
-        );
-      } catch (error) {
-        const message = error.message || "Could not add paper";
-        state.workspaceStatus = message;
-        state.libraryTab = tabKey;
-        updateLibraryActivityStatus(
-          `Add Paper failed: ${message}`,
-          {live: false, delay: 5200}
-        );
-      } finally {
-        state.workspaceAddPaperBusy = false;
-        renderLibrary();
-      }
-    }
-
     function resetLibraryInlineAddPaper() {
       state.libraryInlineAddFolderId = 0;
+      state.libraryInlineAddContext = null;
       state.libraryInlineAddQuery = "";
       state.libraryInlineAddBusy = false;
       state.libraryInlineAddError = "";
     }
 
+    function libraryInlineAddAllowed(folderId) {
+      return !librarySearchIsActive()
+        && (state.libraryTab === "library" || Boolean(activeLibraryNavigationToolContext()))
+        && libraryAddFolderCanTarget(libraryFolderById(folderId))
+        && libraryFolderIsWithin(folderId, libraryDisplayRootId());
+    }
+
     function beginLibraryInlineAddPaper(folderId) {
-      const targetFolderId = Number(folderId || state.libraryActiveFolderId || state.libraryRootId);
-      if (
-        state.libraryTab !== "library"
-        || librarySearchIsActive()
-        || !libraryFolderById(targetFolderId)
-        || !libraryFolderIsWithin(targetFolderId, Number(state.libraryRootId || 1))
-        || targetFolderId === libraryRecycleFolderId()
-      ) return;
+      const targetFolderId = Number(folderId || state.libraryActiveFolderId || libraryDisplayRootId());
+      if (!libraryInlineAddAllowed(targetFolderId) || state.libraryInlineAddBusy) return;
+      const context = activeLibraryNavigationToolContext();
+      const tab = context?.type === "workspace" ? state.libraryWorkspaceTabs[context.index] : state.libraryShortcutTabs[context?.index];
+      state.libraryInlineAddContext = {view: state.libraryTab, tab_type: context?.type || "library", tab_id: tab?.tab_id || "", index: context?.index ?? 0};
       state.libraryInlineAddFolderId = targetFolderId;
       state.libraryInlineAddQuery = "";
       state.libraryInlineAddBusy = false;
@@ -43757,6 +44979,8 @@ INDEX_HTML = """<!doctype html>
         input?.focus({preventScroll: true});
         return;
       }
+      const context = state.libraryInlineAddContext;
+      if (!context || !libraryInlineAddAllowed(targetFolderId)) return;
       const targetName = libraryFolderPath(targetFolderId) || "current folder";
       state.libraryInlineAddBusy = true;
       state.libraryInlineAddError = "";
@@ -43766,10 +44990,11 @@ INDEX_HTML = """<!doctype html>
       );
       renderLibrary();
       try {
-        const res = await fetch("/api/library/add-paper", {
+        const endpoint = context.tab_type === "library" ? "/api/library/add-paper" : "/api/library/navigation-tabs/add-paper";
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({identifier, folder_id: targetFolderId})
+          body: JSON.stringify({identifier, folder_id: targetFolderId, tab_type: context.tab_type, tab_id: context.tab_id, index: context.index})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not add paper");
@@ -43783,8 +45008,9 @@ INDEX_HTML = """<!doctype html>
               String(item.paper_id || "") === String(data.paper_id || "")
               && Number(item.folder_id) === addedFolderId
             ));
-        resetLibraryInlineAddPaper();
-        if (added) {
+        const stillEditing = state.mode === "library" && state.libraryInlineAddContext === context && state.libraryTab === context.view;
+        if (stillEditing) resetLibraryInlineAddPaper();
+        if (added && stillEditing) {
           state.libraryActiveFolderId = addedFolderId;
           state.libraryCurrentFolderId = addedFolderId;
           state.librarySelection = {type: "item", id: Number(added.id)};
@@ -43796,6 +45022,7 @@ INDEX_HTML = """<!doctype html>
           {live: false, delay: 4200}
         );
       } catch (error) {
+        if (state.libraryInlineAddContext !== context) return;
         state.libraryInlineAddBusy = false;
         state.libraryInlineAddError = error.message || "Could not add paper";
         updateLibraryActivityStatus(
@@ -43803,51 +45030,7 @@ INDEX_HTML = """<!doctype html>
           {live: false, delay: 5200}
         );
       }
-      renderLibrary();
-    }
-
-    function wireWorkspaceTools() {
-      const context = activeLibraryNavigationToolContext();
-      if (!context) return;
-      $("workspaceRenameButton")?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        const label = $("workspaceNameInput")?.value || context.label;
-        if (context.type === "workspace") {
-          runLibraryMenuAction(() => renameLibraryWorkspace(context.index, label));
-        } else {
-          runLibraryMenuAction(() => renameLibraryShortcutTab(context.index, label));
-        }
-      });
-      $("workspaceNameInput")?.addEventListener("click", (event) => event.stopPropagation());
-      $("workspaceNameInput")?.addEventListener("keydown", (event) => {
-        event.stopPropagation();
-        if (event.key === "Enter") {
-          event.preventDefault();
-          const label = $("workspaceNameInput")?.value || context.label;
-          if (context.type === "workspace") {
-            runLibraryMenuAction(() => renameLibraryWorkspace(context.index, label));
-          } else {
-            runLibraryMenuAction(() => renameLibraryShortcutTab(context.index, label));
-          }
-        }
-      });
-      $("workspaceAddDoiButton")?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        runLibraryMenuAction(() => addLibraryNavigationPaper(context.type, context.index));
-      });
-      $("workspaceMoveToLibraryButton")?.addEventListener("click", (event) => {
-        event.stopPropagation();
-        state.libraryNavWorkspaceTabId = String(state.libraryWorkspaceTabs[context.index]?.tab_id || "");
-        runLibraryMenuAction(() => openLibraryNavigationDialog("move-workspace"));
-      });
-      $("workspaceDoiInput")?.addEventListener("click", (event) => event.stopPropagation());
-      $("workspaceDoiInput")?.addEventListener("keydown", (event) => {
-        event.stopPropagation();
-        if (event.key === "Enter") {
-          event.preventDefault();
-          runLibraryMenuAction(() => addLibraryNavigationPaper(context.type, context.index));
-        }
-      });
+      if (state.mode === "library") renderActiveLibraryTab();
     }
 
     function renderMyPublications(options = {}) {
@@ -44006,16 +45189,17 @@ INDEX_HTML = """<!doctype html>
           id: activity.id || "",
           text: activity.text,
           live: activity.live !== false
-        }));
+        }))
+        .sort((a, b) => Number(b.id === "metadata-refresh") - Number(a.id === "metadata-refresh"));
       const workItem = myPublicationWorkStatusItem();
-      if (workItem) return [workItem, searchItem?.live ? searchItem : (activities[0] || searchItem)].filter(Boolean);
+      if (workItem) return [workItem, activities.find((item) => item.id === "metadata-refresh") || (searchItem?.live ? searchItem : (activities[0] || searchItem))].filter(Boolean);
       if (searchItem?.live) return [searchItem, ...activities].slice(0, 2);
       if (activities.length) return activities.slice(0, 2);
       return searchItem ? [searchItem] : [];
     }
 
     function myPublicationStatusClass(item, secondary = false) {
-      return `publication-search-status${secondary ? " secondary" : ""}${item?.live ? " live" : ""}${item?.id === "work" ? " publication-work-summary" : ""}`;
+      return `publication-search-status${secondary ? " secondary" : ""}${item?.live ? " live" : ""}${!item?.live && item?.id === "metadata-refresh" && item.text === "Refresh complete" ? " refresh-complete" : ""}${item?.id === "work" ? " publication-work-summary" : ""}`;
     }
 
     function myPublicationStatusBarMarkup() {
@@ -44941,6 +46125,15 @@ INDEX_HTML = """<!doctype html>
     function renderLibraryColumns({preserveRows = false} = {}) {
       const root = $("libraryColumns");
       if (!root) return;
+      const navigation = activeLibraryNavigationToolContext();
+      const count = $("libraryNavigationCount");
+      if (count && navigation) {
+        const entries = libraryEntriesForFolder(navigation.rootFolderId);
+        const folders = entries.filter(entry => entry.type === "folder").length;
+        const items = entries.filter(entry => entry.type === "item").length;
+        count.textContent = libraryFolderLoaded(navigation.rootFolderId)
+          ? `${folders} folder${folders === 1 ? "" : "s"} · ${items} item${items === 1 ? "" : "s"}` : "Loading";
+      }
       const folderIds = libraryColumnFolderIds();
       const pathFolderIds = selectedLibraryPathFolderIds();
       const tableMode = libraryTableViewActive();
@@ -44975,7 +46168,7 @@ INDEX_HTML = """<!doctype html>
       const paperId = String(item?.paper_id || paper.paper_id || "");
       const snapshot = paperFilesSnapshot(paperId);
       if (!snapshot && paperId) loadPaperFiles(paperId).catch(() => {});
-      const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+      const files = orderedLibraryPaperResources(paperId);
       const rows = files.length
         ? files.map((file) => {
               const name = file.display_name || String(file.local_path || "").split("/").pop() || "Attached File";
@@ -44991,6 +46184,7 @@ INDEX_HTML = """<!doctype html>
               return `
                 <div class="library-resource-card${file.is_default ? " is-primary" : ""}${selected ? " is-selected" : ""}"
                   data-library-resource-id="${Number(file.id || 0)}" data-library-resource-paper-id="${escapeAttr(paperId)}"
+                  draggable="${file.exists ? "true" : "false"}"
                   data-library-resource-path="${escapeAttr(file.local_path || "")}" data-library-resource-ext="${escapeAttr(ext)}"
                   role="listitem" aria-current="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}"
                   title="${escapeAttr(file.local_path || name)}">
@@ -45022,7 +46216,7 @@ INDEX_HTML = """<!doctype html>
             <div class="library-resource-inspector-title"><strong>Paper Files</strong><span class="library-resource-count">${snapshot ? `${files.length} item${files.length === 1 ? "" : "s"}` : "Loading"}</span></div>
             <div class="library-resource-paper-title" title="${escapeAttr(title)}">${escapeHtml(title)}</div>
           </header>
-          <div class="library-resource-body" role="list" aria-label="Paper Files">${rows}</div>
+          <div class="library-resource-body" role="list" aria-label="Paper Files">${publicationNoticesMarkup(snapshot)}${rows}</div>
           <input type="file" data-library-resource-file-input hidden multiple>
         </section>
       `;
@@ -45064,6 +46258,17 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function libraryNavigationHeaderContext(folderId) {
+      const context = activeLibraryNavigationToolContext();
+      return context && Number(context.rootFolderId) === Number(folderId) ? context : null;
+    }
+
+    function libraryNavigationMenuMarkup(context) {
+      return context ? `<button type="button" class="library-navigation-menu" data-library-navigation-menu
+        data-navigation-type="${context.type}" data-navigation-index="${context.index}"
+        aria-haspopup="menu" aria-label="${context.type === "workspace" ? "Space" : "Shortcut"} actions" title="${context.type === "workspace" ? "Space" : "Shortcut"} actions">⋯</button>` : "";
+    }
+
     function libraryColumnMarkup(folderId, pathFolderIds = new Set(), options = {}) {
       const folder = libraryFolderById(folderId) || {name: "Library"};
       const loaded = libraryFolderLoaded(folderId);
@@ -45100,19 +46305,22 @@ INDEX_HTML = """<!doctype html>
         ? `${folderCount} folder${folderCount === 1 ? "" : "s"} · ${itemCount} item${itemCount === 1 ? "" : "s"}`
         : "Loading";
       const inlineAddPaper = libraryInlineAddPaperMarkup(folderId, {table: true});
+      const navigation = libraryNavigationHeaderContext(folderId);
+      const sort = normalizeLibraryTableSort(state.libraryTableSort);
+      const headers = [["title", "Title"], ["authors", "Authors"], ["year", "Year"], ["journal", "Journal"], ["added", "Time added"]].map(([key, label]) => {
+        const active = sort?.key === key;
+        const direction = active ? (sort.direction === "asc" ? "ascending" : "descending") : "none";
+        const next = active && sort.direction === "asc" ? "descending" : "ascending";
+        return `<span role="columnheader" aria-sort="${direction}"><button class="library-table-sort${active ? " active" : ""}" type="button" data-library-table-sort="${key}" title="Sort by ${label.toLowerCase()}, ${next}" aria-label="${label}, sort ${next}">${label}${active ? `<span aria-hidden="true"> ${sort.direction === "asc" ? "↑" : "↓"}</span>` : ""}</button></span>`;
+      }).join("");
       return `
         <section class="library-column table-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}">
-          <div class="library-table">
-            <div class="library-table-head">
+          <div class="library-table${navigation ? " navigation-root-table" : ""}">
+            ${navigation ? "" : `<div class="library-table-head">
               <div class="library-table-folder-title" title="${escapeAttr(folder.name || "Library")}">${escapeHtml(folder.name || "Library")}</div>
               <div class="library-table-folder-count">${escapeHtml(subtitle)}</div>
-            </div>
-            <div class="library-table-header-row" aria-hidden="true">
-              <span>Title</span>
-              <span>Authors</span>
-              <span>Year</span>
-              <span>Journal</span>
-            </div>
+            </div>`}
+            <div class="library-table-header-row" role="row">${headers}</div>
             <div class="library-column-body library-table-body">
               ${loaded
                 ? (inlineAddPaper + rows || surfaceInlineStatusMarkup("empty", "Empty folder", "Right-click to create a folder or add a paper."))
@@ -45245,6 +46453,7 @@ INDEX_HTML = """<!doctype html>
       const authors = type === "item" ? libraryPaperAuthorsText(paper, entry, name) : "";
       const year = type === "item" ? libraryPaperYearText(paper, entry, name) : "";
       const journal = type === "item" ? libraryPaperJournalText(paper) : "Folder";
+      const addedMs = libraryAddedTimeMs(entry);
       return `
         <${rowTag} class="library-row library-table-row${rangeSelected ? " range-selected" : ""}${selected && !rangeSelected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
           ${rowAttrs}
@@ -45260,6 +46469,7 @@ INDEX_HTML = """<!doctype html>
           <span class="library-table-cell" title="${escapeAttr(authors)}">${escapeHtml(authors)}</span>
           <span class="library-table-cell year">${escapeHtml(year)}</span>
           <span class="library-table-cell" title="${escapeAttr(journal)}">${escapeHtml(journal)}</span>
+          <span class="library-table-cell time-added" title="${addedMs === null ? "" : escapeAttr(new Date(addedMs).toString())}">${escapeHtml(libraryAddedTimeText(entry))}</span>
         </${rowTag}>
       `;
     }
@@ -45503,7 +46713,7 @@ INDEX_HTML = """<!doctype html>
       return `
         <div class="library-detail-doi">
           <input id="libraryDetailDoiInput" type="text" value="${escapeAttr(value)}" placeholder="Enter DOI">
-          <button class="action" type="button" data-action="refresh-library-metadata" title="Refresh metadata from DOI">Refresh</button>
+
         </div>
       `;
     }
@@ -45526,6 +46736,16 @@ INDEX_HTML = """<!doctype html>
       return state.paperFilesByPaperId[String(paperId || "")] || null;
     }
 
+    function publicationNoticesMarkup(snapshot) {
+      return (snapshot?.publication_notices || []).map(notice => {
+        const label = paperFileRoleLabel({file_type: notice.kind});
+        const doi = String(notice.doi || "");
+        const link = doi ? `<a href="https://doi.org/${escapeAttr(encodeURIComponent(doi))}" target="_blank" rel="noopener noreferrer">${escapeHtml(doi)}</a>` : "";
+        const date = notice.publication_date ? ` <span class="paper-files-notice-date">· ${escapeHtml(notice.publication_date)}</span>` : "";
+        return `<details class="paper-files-notice"><summary>${escapeHtml(label)}${date}</summary><div class="paper-files-notice-content"><p>${escapeHtml(notice.title || "")}</p>${link}<p class="paper-files-notice-hint">Notice about this article. Original article and files retained.</p></div></details>`;
+      }).join("");
+    }
+
     function applyPaperFilesPayloads(payloads) {
       (Array.isArray(payloads) ? payloads : []).forEach((payload) => {
         const paperId = String(payload?.paper_id || "");
@@ -45543,8 +46763,18 @@ INDEX_HTML = """<!doctype html>
         published_version: "Published version",
         corrected_published_version: "Corrected published version",
         correction_notice: "Correction notice",
+        retraction_notice: "Retraction notice",
+        expression_of_concern: "Expression of concern",
+        withdrawal_notice: "Withdrawal notice",
+        addendum: "Addendum",
         supplementary_material: "Supplementary material",
         peer_review_file: "Peer review file",
+        perspective: "Perspective",
+        news_and_views: "News and Views",
+        summary: "Summary",
+        analysis: "Analysis",
+        source_data: "Source Data",
+        source_code: "Source Code",
         other: "Other",
         unknown: "Unknown",
         invalid_file: "Invalid file"
@@ -45567,8 +46797,18 @@ INDEX_HTML = """<!doctype html>
         ["published_version", "Published version"],
         ["corrected_published_version", "Corrected published version"],
         ["correction_notice", "Correction notice"],
+        ["retraction_notice", "Retraction notice"],
+        ["expression_of_concern", "Expression of concern"],
+        ["withdrawal_notice", "Withdrawal notice"],
+        ["addendum", "Addendum"],
         ["supplementary_material", "Supplementary material"],
         ["peer_review_file", "Peer review file"],
+        ["perspective", "Perspective"],
+        ["news_and_views", "News and Views"],
+        ["summary", "Summary"],
+        ["analysis", "Analysis"],
+        ["source_data", "Source Data"],
+        ["source_code", "Source Code"],
         ["other", "Other"],
         ["unknown", "Unknown"],
         ["invalid_file", "Invalid file"]
@@ -45659,7 +46899,7 @@ INDEX_HTML = """<!doctype html>
     function paperFilesPanelMarkup(paper) {
       const paperId = String(paper?.paper_id || "");
       const snapshot = paperFilesSnapshot(paperId);
-      const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+      const files = orderedLibraryPaperResources(paperId);
       const collapsed = !state.expandedPaperFiles.has(paperId);
       const defaultFile = files.find((file) => file.is_default) || null;
       const currentSummary = !snapshot
@@ -45686,21 +46926,147 @@ INDEX_HTML = """<!doctype html>
             </span>
             <span class="paper-files-current-summary" title="${escapeAttr(currentSummary)}">${escapeHtml(currentSummary)}</span>
           </div>
-          <div class="paper-files-body">${paper?.preprint_id ? `<div class="paper-files-sync-row"><button class="action" type="button" data-action="sync-arxiv-versions">Sync Versions</button></div>` : ""}${body}</div>
+          <div class="paper-files-body">${publicationNoticesMarkup(snapshot)}${paper?.preprint_id ? `<div class="paper-files-sync-row"><button class="action" type="button" data-action="sync-arxiv-versions">Sync Versions</button></div>` : ""}${body}</div>
         </section>
       `;
     }
 
     window.setGewuAIAccessEnabled = (enabled) => { state.aiAccessEnabled = enabled === true; };
+    let libraryExternalCursor = null;
+    let libraryExternalPending = false;
+    function libraryExternalRefreshAllowed() {
+      const active = document.activeElement;
+      return state.aiAccessEnabled && state.libraryLoaded && state.mode === "library"
+        && state.libraryTab !== "my-publications" && !IS_STANDALONE_LOADER_WINDOW
+        && !librarySearchIsActive() && Boolean($("libraryColumns"))
+        && !document.hidden && !state.libraryDragPayload && !state.libraryRefreshPromise
+        && !state.libraryInlineAddFolderId && !state.libraryRenamingFolderId && !state.libraryRenamingItemId
+        && !Object.keys(state.libraryFolderLoadPromises).length
+        && !Object.keys(state.paperFileRequests).length
+        && !document.querySelector(".settings-backdrop.open, .finder-drop-backdrop.open, .library-context-menu.open")
+        && !(active?.matches("input, textarea, select") || active?.isContentEditable);
+    }
+
+    function libraryExternalViewKey() {
+      return JSON.stringify([state.mode, state.libraryTab, state.librarySelection,
+        state.libraryActiveFolderId, state.libraryCurrentFolderId, state.libraryPathRevision,
+        state.libraryPaperResourceSelection, state.query, state.libraryContentView,
+        state.libraryTableSort, state.librarySortMode]);
+    }
+
+    async function pollExternalLibraryChanges() {
+      if (libraryExternalPending || !libraryExternalRefreshAllowed()) return;
+      libraryExternalPending = true;
+      const viewKey = libraryExternalViewKey();
+      const folderIds = [...new Set([...libraryColumnFolderIds(), libraryDisplayRootId(),
+        state.libraryActiveFolderId, state.libraryCurrentFolderId].map(Number).filter(Boolean))].slice(0, 64);
+      const selectedItem = state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id) : null;
+      const query = new URLSearchParams();
+      if (libraryExternalCursor !== null) query.set("since", libraryExternalCursor);
+      folderIds.forEach(id => query.append("folder_id", id));
+      if (selectedItem?.paper_id) query.set("paper_id", selectedItem.paper_id);
+      try {
+        const res = await fetch(`/api/library/changes?${query}`, {cache: "no-store"});
+        if (!res.ok) return;
+        const data = await res.json();
+        // A user navigation/edit during the request wins. Retry the same cursor
+        // against the new view; never acknowledge an update we did not apply.
+        if (!libraryExternalRefreshAllowed() || libraryExternalViewKey() !== viewKey) return;
+        if (data.changed) applyExternalLibraryChanges(data);
+        libraryExternalCursor = data.cursor;
+      } catch (_) {
+        // A temporary service failure is retried; do not replace user status.
+      } finally {
+        libraryExternalPending = false;
+      }
+    }
+
+    function applyExternalLibraryChanges(data) {
+      const columns = $("libraryColumns");
+      if (!columns) return;
+      const previousSelection = libraryEntryKey(state.librarySelection);
+      const tabType = state.libraryTab?.split("-")[0];
+      const oldTab = tabType === "workspace" ? state.libraryWorkspaceTabs[Number(state.libraryTab.split("-")[1])]
+        : tabType === "shortcut" ? state.libraryShortcutTabs[Number(state.libraryTab.split("-")[1])] : null;
+      captureLibraryColumnScrollTops();
+      const horizontal = columns.scrollLeft;
+      const resourceScroll = columns.querySelector(".library-resource-body")?.scrollTop || 0;
+      const focusedRow = document.activeElement?.closest("[data-library-type][data-library-id]");
+      const focusIdentity = focusedRow ? [focusedRow.dataset.libraryType, focusedRow.dataset.libraryId] : null;
+      state.libraryPathRevision += 1;
+      state.libraryFolders = data.folders;
+      state.libraryItems = [];
+      state.libraryLoadedFolderIds = new Set();
+      state.libraryFolderLoadPromises = {};
+      state.libraryPaperLocationsLoaded.clear();
+      state.libraryPaperLocationRequests = {};
+      state.libraryRemoteSearchSequence += 1;
+      resetRemoteLibrarySearch();
+      state.libraryShortcutTabs = data.shortcut_tabs;
+      state.libraryWorkspaceTabs = data.workspace_tabs;
+      rebuildLibraryIndexes();
+      for (const child of data.children || []) applyLibraryFolderChildren(child);
+      // Keep the same Space/Shortcut by stable identity, not by its old index.
+      if (oldTab) {
+        const tabs = tabType === "workspace" ? state.libraryWorkspaceTabs : state.libraryShortcutTabs;
+        const index = tabs.findIndex(tab => tab.tab_id === oldTab.tab_id);
+        state.libraryTab = index >= 0 ? `${tabType}-${index}` : "library";
+      }
+      const fallback = libraryDisplayRootId();
+      if (!libraryFolderIsWithin(state.libraryActiveFolderId, fallback)) state.libraryActiveFolderId = fallback;
+      if (!libraryFolderIsWithin(state.libraryCurrentFolderId, fallback)) state.libraryCurrentFolderId = fallback;
+      const selectionFolder = state.librarySelection?.type === "item"
+        ? libraryItemById(state.librarySelection.id)?.folder_id : state.librarySelection?.id;
+      if (!librarySelectionExists(state.librarySelection) || !libraryFolderIsWithin(selectionFolder, fallback)) {
+        state.librarySelection = {type: "folder", id: state.libraryActiveFolderId};
+      }
+      for (const id of Object.keys(state.libraryColumnSelections)) {
+        if (!libraryFolderById(id) || !librarySelectionExists(state.libraryColumnSelections[id])) delete state.libraryColumnSelections[id];
+      }
+      state.paperFilesByPaperId = {};
+      applyPaperFilesPayloads(data.paper_files);
+      if (!selectedLibraryPaperResource()) state.libraryPaperResourceSelection = {paperId: "", resourceId: 0};
+      pruneLibraryClipboard();
+      pruneLibraryRangeSelection();
+      renderLibraryShortcutTabs();
+      $("reportTitle").textContent = libraryViewTitle();
+      const heading = $("libraryNavigationHeader")?.querySelector(".library-table-folder-title");
+      if (heading) heading.textContent = libraryViewTitle();
+      renderLibraryColumns();
+      if (previousSelection !== libraryEntryKey(state.librarySelection)) renderLibraryDetail();
+      const shell = $("libraryShell");
+      wireLibraryResourceInteractions(shell);
+      wireLibraryColumnInteractions(shell);
+      restoreLibraryColumnScrollTops();
+      columns.scrollLeft = horizontal;
+      const resourceBody = columns.querySelector(".library-resource-body");
+      if (resourceBody) resourceBody.scrollTop = resourceScroll;
+      if (focusIdentity) {
+        const row = [...columns.querySelectorAll("[data-library-type][data-library-id]")]
+          .find(el => el.dataset.libraryType === focusIdentity[0] && el.dataset.libraryId === focusIdentity[1]);
+        row?.focus({preventScroll: true});
+      }
+      const path = $("libraryPathBar");
+      if (path) {
+        path.title = librarySelectionPathText();
+        const parts = path.querySelector(".library-path-parts");
+        if (parts) parts.innerHTML = librarySelectionPathMarkup();
+      }
+      // Paper Details, its drafts and the Quick Look DOM/scroll remain intact.
+      // Updated resources become available immediately in Paper Files.
+    }
+
     window.addEventListener("focus", () => {
-      // Refresh only on returning from an AI client, with AI access enabled.
-      // No idle polling, and disabled AI access changes no file-loading work.
-      if (!state.aiAccessEnabled || state.mode !== "library" || document.querySelector(".settings-backdrop.open")) return;
-      const paperId = state.libraryTab === "my-publications"
-        ? selectedMyPublicationPaper()?.paper_id
-        : state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id)?.paper_id : null;
-      if (paperId) loadPaperFiles(paperId, {force: true}).catch(() => {});
+      pollExternalLibraryChanges();
+      // Preserve the existing on-focus attachment refresh for My Publications.
+      if (state.aiAccessEnabled && state.mode === "library" && state.libraryTab === "my-publications"
+          && !document.querySelector(".settings-backdrop.open")) {
+        const id = selectedMyPublicationPaper()?.paper_id;
+        if (id) loadPaperFiles(id, {force: true}).catch(() => {});
+      }
     });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) pollExternalLibraryChanges(); });
+    window.setInterval(pollExternalLibraryChanges, 3000);
 
     async function loadPaperFiles(paperId, {force = false} = {}) {
       const key = String(paperId || "");
@@ -45730,13 +47096,16 @@ INDEX_HTML = """<!doctype html>
       return request;
     }
 
-    async function uploadPaperFiles(panel, paperId, fileList) {
+    async function uploadPaperFiles(panel, paperId, fileList, dropOptions = null) {
       const files = Array.from(fileList || []);
       for (const file of files) {
         const form = new FormData();
         form.append("paper_id", paperId);
         form.append("file_type", "unknown");
         form.append("file_source", "user_import");
+        if (dropOptions) {
+          Object.entries(paperFileDropMetadata(file.name, dropOptions)).forEach(([key, value]) => form.set(key, value));
+        }
         form.append("file", file, file.name);
         const res = await fetch("/api/paper-files", {method: "POST", body: form});
         const data = await res.json();
@@ -45746,24 +47115,29 @@ INDEX_HTML = """<!doctype html>
       await loadPaperFiles(paperId, {force: true});
     }
 
+    function paperFileDropMetadata(name, {fileRole = "other", versionRole = ""} = {}) {
+      const isPdf = String(name).toLowerCase().endsWith(".pdf");
+      const role = isPdf ? fileRole : (fileRole === "publication_version" ? "other" : fileRole);
+      return {
+        file_role: role,
+        version_role: role === "publication_version" ? versionRole : "",
+        file_type: role === "publication_version"
+          ? ({version_of_record: "published_version", accepted_manuscript: "accepted_manuscript", preprint: "preprint"}[versionRole] || "unknown")
+          : "unknown",
+        file_source: "user_import"
+      };
+    }
+
     async function uploadPaperFilePaths(paperId, paths, {fileRole = "other", versionRole = "", addedVia = "paper_details_path"} = {}) {
       const selectedPaths = Array.from(paths || []).filter(Boolean);
       for (const sourcePath of selectedPaths) {
-        const lowerPath = String(sourcePath).toLowerCase();
-        const isPdf = lowerPath.endsWith(".pdf");
-        const role = isPdf ? fileRole : (fileRole === "publication_version" ? "other" : fileRole);
         const res = await fetch("/api/paper-files/path", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({
             paper_id: paperId,
             source_path: sourcePath,
-            file_role: role,
-            version_role: role === "publication_version" ? versionRole : "",
-            file_type: role === "publication_version"
-              ? ({version_of_record: "published_version", accepted_manuscript: "accepted_manuscript", preprint: "preprint"}[versionRole] || "unknown")
-              : "unknown",
-            file_source: "user_import",
+            ...paperFileDropMetadata(sourcePath, {fileRole, versionRole}),
             added_via: addedVia
           })
         });
@@ -45972,7 +47346,7 @@ INDEX_HTML = """<!doctype html>
 
     function libraryIdentifierFromFilesButtonMarkup(paper) {
       return (paper?.merged_pdf_path || paper?.main_pdf_path)
-        ? `<button class="action" data-action="extract-library-identifier">Get Identifier from Files</button>`
+        ? `<button class="action" data-action="extract-library-identifier" title="Find DOI or arXiv ID from local paper files">Get DOI</button>`
         : "";
     }
 
@@ -46004,9 +47378,14 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wirePreprintIdentifierControls(root, paper) {
+      wireDoiIdentifierControls(root, paper);
+      if (root) {
+        root.dataset.metadataPaperId = String(paper?.paper_id || "");
+        root.dataset.metadataCheckedAt = paper?.metadata_refresh?.checked_at || "";
+      }
       root?.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
         const url = event.currentTarget?.dataset?.preprintUrl || "";
-        openLibraryWebsiteURL(url);
+        openLibraryWebsiteURL(url, paper);
       });
       root?.querySelector('[data-action="download-arxiv-latest"]')?.addEventListener("click", (event) => {
         downloadArxivPreprintVersions(paper, "latest", event.currentTarget);
@@ -46017,63 +47396,37 @@ INDEX_HTML = """<!doctype html>
       const input = field?.querySelector(".preprint-identifier-input");
       const status = field?.querySelector(".preprint-identifier-status");
       if (!field || !main || !edit || !input || !paper?.paper_id) return;
-      let busy = false;
       const begin = () => {
-        if (busy) return;
+        if (input._identifierSave) return;
         if (status) status.textContent = "";
-        input.value = String(paper.preprint_id || "");
+        input.value = input.defaultValue;
         main.classList.add("is-editing");
         input.focus({preventScroll: true});
         input.select();
       };
       const cancel = () => {
-        if (busy) return;
-        input.value = String(paper.preprint_id || "");
+        if (input._identifierSave) return;
+        input.value = input.defaultValue;
         main.classList.remove("is-editing");
         if (status) status.textContent = "";
       };
-      const save = async () => {
-        if (busy) return;
-        busy = true;
-        input.disabled = true;
-        if (status) status.textContent = "Saving...";
-        try {
-          const res = await fetch("/api/library/preprint-identifier", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({paper_id: paper.paper_id, identifier: String(input?.value || "").trim()})
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Could not update preprint identifier");
-          if (Array.isArray(data.publications)) applyMyPublications(data);
-          updatePaperState(paper.paper_id, data.paper);
-          if (state.mode === "author") renderAuthorMonitorPaperDetail();
-          else if (state.libraryTab === "my-publications") renderPublicationDetail();
-          else renderLibrary();
-          const message = data.paper?.preprint_id ? "Preprint identifier updated." : "Preprint identifier removed.";
-          if (state.mode === "author") updateAuthorMonitorActivityStatus(message, {live: false});
-          else updateLibraryActivityStatus(message, {delay: 3000});
-        } catch (error) {
-          busy = false;
-          input.disabled = false;
-          if (status) status.textContent = error.message || "Could not update preprint identifier";
-          input?.focus({preventScroll: true});
-        }
-      };
       edit.addEventListener("click", begin);
       input.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !busy) {
+        if (event.isComposing) return;
+        if (event.key === "Escape") {
           event.preventDefault();
+          event.stopPropagation();
           cancel();
         }
-        if (event.key === "Enter" && !busy) {
+        if (event.key === "Enter") {
           event.preventDefault();
-          save();
+          event.stopPropagation();
+          savePaperIdentifier(paper, root, "arxiv", {finishEditing: true}).catch(() => {});
         }
       });
       input.addEventListener("blur", () => {
         window.setTimeout(() => {
-          if (!busy && document.activeElement !== input) cancel();
+          if (document.activeElement !== input) cancel();
         }, 0);
       });
     }
@@ -46083,9 +47436,10 @@ INDEX_HTML = """<!doctype html>
       const syncAll = mode === "all";
       const progress = syncAll ? "Syncing arXiv versions..." : "Downloading latest arXiv PDF...";
       const activityId = `arxiv:${paper.paper_id}`;
+      const activityText = text => `${text} · ${paper.title || paper.storage_key || paper.paper_id}`;
       if (button) button.disabled = true;
       if (state.libraryTab === "my-publications") setMyPublicationActivity(activityId, progress);
-      updateLibraryActivityStatus(progress, {live: true, clear: false});
+      updateLibraryActivityStatus(activityText(progress), {activityId, live: true, clear: false});
       try {
         const res = await fetch("/api/paper-files/arxiv", {
           method: "POST",
@@ -46107,9 +47461,9 @@ INDEX_HTML = """<!doctype html>
             ? `arXiv ${existing.map((value) => `v${value}`).join(", ")} already downloaded.`
             : "arXiv versions checked.";
         const message = failed.length ? `${versionLabel} ${failed.length} version${failed.length === 1 ? "" : "s"} failed.` : versionLabel;
-        updateLibraryActivityStatus(message, {delay: failed.length ? 4800 : 3000});
+        updateLibraryActivityStatus(activityText(message), {activityId, failed: Boolean(failed.length), delay: failed.length ? 4800 : 3000});
       } catch (error) {
-        updateLibraryActivityStatus(error.message || "arXiv download failed", {delay: 4800});
+        updateLibraryActivityStatus(activityText(error.message || "arXiv download failed"), {activityId, failed: true, delay: 4800});
         if (button && document.body.contains(button)) button.disabled = false;
       } finally {
         clearMyPublicationActivity(activityId);
@@ -46466,8 +47820,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderLibraryDetail() {
+      closeMetadataRefreshTooltip();
       const root = $("libraryDetail");
       if (!root) return;
+      delete root.dataset.metadataPaperId;
       const selection = state.librarySelection;
       if (!selection) {
         root.innerHTML = runtimeBrandedEmptyMarkup("Select a folder or paper.");
@@ -46525,13 +47881,18 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
-        <div class="actions">
+        <div class="actions paper-detail-actions">
+          <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${isPdfLike ? `<button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          </div>
+          <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
+          ${metadataRefreshButtonMarkup(paper)}
+          </div>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors, null, {showLibraryFolders: true, selectedLibraryItemId: item?.id, hideFiles: true, managePreprintFiles: true})}
@@ -46558,9 +47919,6 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
-      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
-      });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
@@ -46617,9 +47975,11 @@ INDEX_HTML = """<!doctype html>
     async function loadLibraryItemPaperDetail(item) {
       if (!item?.paper_id || item.paper?.full_detail) return;
       if (state.libraryPaperDetailRequests[item.paper_id]) return state.libraryPaperDetailRequests[item.paper_id];
+      const pathRevision = state.libraryPathRevision;
       state.libraryPaperDetailRequests[item.paper_id] = fetch(`/api/paper?paper_id=${encodeURIComponent(item.paper_id)}`)
         .then(async (res) => {
           const data = await res.json();
+          if (pathRevision !== state.libraryPathRevision) return;
           if (!res.ok) throw new Error(data.error || "Could not load paper details");
           if (data.paper) {
             updatePaperState(item.paper_id, data.paper);
@@ -46634,6 +47994,7 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .catch((error) => {
+          if (pathRevision !== state.libraryPathRevision) return;
           if (
             state.mode === "library"
             && state.libraryTab !== "my-publications"
@@ -46648,6 +48009,7 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .finally(() => {
+          if (pathRevision !== state.libraryPathRevision) return;
           delete state.libraryPaperDetailRequests[item.paper_id];
         });
       return state.libraryPaperDetailRequests[item.paper_id];
@@ -46657,9 +48019,11 @@ INDEX_HTML = """<!doctype html>
       const paperId = publication?.paper_id || publication?.paper?.paper_id || "";
       if (!paperId || publication?.paper?.full_detail) return;
       if (state.libraryPaperDetailRequests[paperId]) return state.libraryPaperDetailRequests[paperId];
+      const pathRevision = state.libraryPathRevision;
       state.libraryPaperDetailRequests[paperId] = fetch(`/api/paper?paper_id=${encodeURIComponent(paperId)}`)
         .then(async (res) => {
           const data = await res.json();
+          if (pathRevision !== state.libraryPathRevision) return;
           if (!res.ok) throw new Error(data.error || "Could not load paper details");
           const paper = data.paper || null;
           if (!paper) return;
@@ -46670,6 +48034,7 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .catch((error) => {
+          if (pathRevision !== state.libraryPathRevision) return;
           const status = $("libraryDetailStatus");
           if (status) {
             status.textContent = error.message || "Could not load paper details";
@@ -46677,14 +48042,17 @@ INDEX_HTML = """<!doctype html>
           }
         })
         .finally(() => {
+          if (pathRevision !== state.libraryPathRevision) return;
           delete state.libraryPaperDetailRequests[paperId];
         });
       return state.libraryPaperDetailRequests[paperId];
     }
 
     function renderPublicationDetail() {
+      closeMetadataRefreshTooltip();
       const root = $("libraryDetail");
       if (!root) return;
+      delete root.dataset.metadataPaperId;
       const publication = myPublicationById(state.myPublicationSelectionId);
       const paper = publication?.paper || null;
       if (!paper) {
@@ -46711,12 +48079,17 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
-        <div class="actions">
+        <div class="actions paper-detail-actions">
+          <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          </div>
+          <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
+          ${metadataRefreshButtonMarkup(paper)}
+          </div>
           <span class="publication-role-flags">
             <label class="publication-role-flag" title="Only check for co-first authors. Leave unchecked for solo first author."><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> Co-1st</label>
             <label class="publication-role-flag" title="Corresponding or co-corresponding author"><input type="checkbox" data-action="toggle-corresponding-author" ${publication.corresponding_author ? "checked" : ""}> Co-corr.</label>
@@ -46748,9 +48121,6 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
-      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
-      });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
@@ -47100,9 +48470,63 @@ INDEX_HTML = """<!doctype html>
       return `${clean.replace(/[.。]+$/g, "")}.`;
     }
 
+    let listReorderMarker = null;
+    let listReorderMarkerRow = null;
+
+    function clearListReorderMarker(row = null) {
+      if (row && row !== listReorderMarkerRow) return;
+      listReorderMarker?.remove();
+      listReorderMarker = null;
+      listReorderMarkerRow = null;
+    }
+
+    function showListReorderMarker(row, after) {
+      const rect = row.getBoundingClientRect();
+      const scroller = row.closest(".author-monitor-authors, .my-publications-table-wrap");
+      const bounds = scroller?.getBoundingClientRect() || {left: 0, right: window.innerWidth, top: 0, bottom: window.innerHeight};
+      const top = after ? rect.bottom : rect.top;
+      const left = Math.max(rect.left + 5, bounds.left + 5);
+      const right = Math.min(rect.right - 4, bounds.right - 5);
+      if (!row.isConnected || right <= left || top < bounds.top || top > bounds.bottom) {
+        clearListReorderMarker();
+        return;
+      }
+      if (!listReorderMarker) {
+        listReorderMarker = document.createElement("div");
+        listReorderMarker.className = "list-reorder-marker";
+        listReorderMarker.setAttribute("aria-hidden", "true");
+        document.body.appendChild(listReorderMarker);
+      }
+      listReorderMarkerRow = row;
+      Object.assign(listReorderMarker.style, {left: `${left}px`, top: `${top - 1}px`, width: `${right - left}px`});
+    }
+
+    function setListReorderDragImage(row, event) {
+      clearListReorderMarker();
+      const preview = document.createElement("div");
+      preview.className = "list-reorder-drag-image";
+      preview.setAttribute("aria-hidden", "true");
+      for (const selector of [".my-publications-title-text, .author-monitor-author-name", ".my-publications-id, .author-monitor-author-affiliation"]) {
+        const text = row.querySelector(selector)?.textContent?.trim();
+        if (!text) continue;
+        const line = document.createElement("div");
+        line.textContent = text;
+        preview.appendChild(line);
+      }
+      preview.style.width = `${Math.min(480, Math.max(160, row.getBoundingClientRect().width))}px`;
+      document.body.appendChild(preview);
+      preview.style.left = `${Math.max(8, Math.min(window.innerWidth - preview.offsetWidth - 8, event.clientX))}px`;
+      preview.style.top = `${Math.max(8, Math.min(window.innerHeight - preview.offsetHeight - 8, event.clientY))}px`;
+      event.dataTransfer?.setDragImage(preview, 18, 16);
+      // Leave it mounted until WebKit has captured the native drag image.
+      window.setTimeout(() => preview.remove(), 0);
+    }
+
     function wireMyPublicationInteractions() {
       const shell = $("libraryShell");
       if (!shell) return;
+      if (listReorderMarkerRow && !listReorderMarkerRow.isConnected) clearListReorderMarker();
+      shell.querySelector(".my-publications-table-wrap")?.addEventListener("scroll", clearMyPublicationDragMarkers, {passive: true});
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (state.suppressClickOnce) {
@@ -47142,14 +48566,20 @@ INDEX_HTML = """<!doctype html>
           }
           event.dataTransfer?.setData("text/plain", row.dataset.publicationId || "");
           event.dataTransfer?.setData("application/x-my-publication-id", row.dataset.publicationId || "");
+          setListReorderDragImage(row, event);
           row.classList.add("dragging");
         });
         row.addEventListener("dragover", (event) => {
+          if (!event.dataTransfer?.types?.includes("application/x-my-publication-id") || row.classList.contains("dragging")) {
+            clearMyPublicationDragMarkers();
+            return;
+          }
           event.preventDefault();
-          clearMyPublicationDragMarkers();
-          row.classList.add(myPublicationDropPosition(row, event) === "after" ? "drag-over-after" : "drag-over-before");
+          showListReorderMarker(row, myPublicationDropPosition(row, event) === "after");
         });
-        row.addEventListener("dragleave", () => row.classList.remove("drag-over-before", "drag-over-after"));
+        row.addEventListener("dragleave", (event) => {
+          if (!row.contains(event.relatedTarget)) clearListReorderMarker(row);
+        });
         row.addEventListener("dragend", () => {
           row.classList.remove("dragging");
           clearMyPublicationDragMarkers();
@@ -47157,7 +48587,7 @@ INDEX_HTML = """<!doctype html>
         row.addEventListener("drop", async (event) => {
           event.preventDefault();
           const position = myPublicationDropPosition(row, event);
-          row.classList.remove("drag-over-before", "drag-over-after");
+          clearMyPublicationDragMarkers();
           const draggedId = Number(event.dataTransfer?.getData("application/x-my-publication-id") || event.dataTransfer?.getData("text/plain") || 0);
           const targetId = Number(row.dataset.publicationId || 0);
           if (draggedId && targetId && draggedId !== targetId) await reorderMyPublications(draggedId, targetId, position);
@@ -47329,9 +48759,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function clearMyPublicationDragMarkers() {
-      document.querySelectorAll(".my-publications-row.drag-over-before, .my-publications-row.drag-over-after").forEach((row) => {
-        row.classList.remove("drag-over-before", "drag-over-after");
-      });
+      clearListReorderMarker();
     }
 
     function rightDragSelectIsInteractiveTarget(target) {
@@ -48389,7 +49817,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function orderedLibraryPaperResources(paperId) {
-      const files = Array.isArray(paperFilesSnapshot(paperId)?.files) ? paperFilesSnapshot(paperId).files : [];
+      // Renderers and keyboard/deletion navigation share this stable order.
+      // Default stays first; the remaining files retain their snapshot order.
+      const snapshot = paperFilesSnapshot(paperId);
+      const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
       return [...files].sort((left, right) => Number(Boolean(right.is_default)) - Number(Boolean(left.is_default)));
     }
 
@@ -48681,6 +50112,12 @@ INDEX_HTML = """<!doctype html>
           downloadArxivPreprintVersions(paper, "all", syncButton);
         };
       }
+      for (const [action, createNew] of [["move-paper-resource", false], ["split-paper-resource", true]]) {
+        const button = menu.querySelector(`[data-action="${action}"]`);
+        if (!button) continue;
+        button.style.display = file?.exists ? "" : "none";
+        button.onclick = () => { hidePaperResourceContextMenu(); openPaperFileReassignment(paperId, file, createNew); };
+      }
       if (deleteButton) {
         deleteButton.style.display = file && !file.is_primary ? "" : "none";
         deleteButton.onclick = () => {
@@ -48696,8 +50133,153 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function openPaperFileReassignment(paperId, file, createNew) {
+      document.getElementById("paperFileReassignBackdrop")?.remove();
+      const dialog = document.createElement("div");
+      dialog.id = "paperFileReassignBackdrop";
+      dialog.className = "settings-backdrop open";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-labelledby", "paperFileReassignTitle");
+      const name = file.display_name || "Attached File";
+      dialog.innerHTML = `<div class="settings-modal" style="width:min(600px,92vw);max-height:80vh;overflow:auto;padding:20px">
+        <h2 id="paperFileReassignTitle">${createNew ? "Create Paper from File" : "Move to Another Paper"}</h2>
+        <p style="overflow-wrap:anywhere">${escapeHtml(name)}</p>
+        <p>${createNew ? "Create a separate paper in the current folder. Its title is editable; no DOI will be guessed." : "Choose the paper that should contain this file."} The file will leave the current paper. Other files stay in place.</p>
+        <label for="paperFileReassignInput">${createNew ? "New paper title" : "Search title, DOI or Gewu Key"}</label>
+        <input id="paperFileReassignInput" style="width:100%;box-sizing:border-box;margin:8px 0" value="${escapeAttr(createNew ? name.replace(/\.[^.]+$/, "") : "")}">
+        <div id="paperFileReassignResults" style="max-height:240px;overflow:auto;display:grid;gap:6px"></div>
+        <p id="paperFileReassignStatus" role="status" style="overflow-wrap:anywhere"></p>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
+          <button type="button" class="smallbtn" id="paperFileReassignCancel">Cancel</button>
+          <button type="button" class="smallbtn" id="paperFileReassignSave" ${createNew ? "" : "disabled"}>${createNew ? "Create Paper" : "Move File"}</button>
+        </div></div>`;
+      document.body.appendChild(dialog);
+      const input = dialog.querySelector("input");
+      const results = dialog.querySelector("#paperFileReassignResults");
+      const status = dialog.querySelector("#paperFileReassignStatus");
+      const save = dialog.querySelector("#paperFileReassignSave");
+      const cancel = dialog.querySelector("#paperFileReassignCancel");
+      let targetKey = "", sequence = 0, timer = 0, busy = false;
+      const close = () => { if (!busy) { sequence++; window.clearTimeout(timer); dialog.remove(); } };
+      cancel.onclick = close;
+      dialog.onclick = (event) => { if (event.target === dialog) close(); };
+      dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } });
+      input.oninput = () => {
+        targetKey = ""; sequence++; const request = sequence;
+        save.disabled = !createNew || !input.value.trim();
+        results.innerHTML = ""; status.textContent = "";
+        window.clearTimeout(timer);
+        if (createNew || !input.value.trim()) return;
+        timer = window.setTimeout(async () => {
+          status.textContent = "Searching…";
+          try {
+            const response = await fetch(`/api/library/search?q=${encodeURIComponent(input.value.trim())}&limit=40`);
+            const data = await response.json();
+            if (request !== sequence || !dialog.isConnected) return;
+            if (!response.ok) throw new Error(data.error || "Could not search Library");
+            const seen = new Set();
+            for (const result of data.results || []) {
+              const paper = result.item?.paper;
+              if (!paper?.storage_key || paper.paper_id === paperId || seen.has(paper.storage_key)) continue;
+              seen.add(paper.storage_key);
+              const button = document.createElement("button");
+              button.type = "button"; button.className = "smallbtn";
+              button.style.cssText = "text-align:left;white-space:normal;overflow-wrap:anywhere";
+              button.textContent = `${paper.title || result.item.display_name} · ${paper.doi || paper.storage_key}`;
+              button.onclick = () => {
+                targetKey = paper.storage_key; save.disabled = false;
+                status.textContent = `Destination: ${paper.title || paper.storage_key} (${paper.storage_key})`;
+              };
+              results.appendChild(button);
+            }
+            status.textContent = seen.size ? "Select a destination." : "No matching paper in Library.";
+          } catch (error) { if (request === sequence) status.textContent = error.message; }
+        }, 250);
+      };
+      save.onclick = async () => {
+        if (busy || (!createNew && !targetKey) || (createNew && !input.value.trim())) return;
+        busy = true; save.disabled = true; cancel.disabled = true; input.disabled = true;
+        results.querySelectorAll("button").forEach((button) => button.disabled = true);
+        status.textContent = "Updating file ownership…";
+        try {
+          const data = await reassignPaperFile({paper_id: paperId, resource_id: file.id,
+            folder_id: Number(state.libraryCurrentFolderId || state.libraryRootId || 1),
+            ...(createNew ? {new_title: input.value.trim()} : {target_key: targetKey})});
+          busy = false; close();
+          updateLibraryActivityStatus(`File moved to ${data.reassignment.target_gewu_key}.`, {live: false, clear: false});
+        } catch (error) {
+          busy = false; save.disabled = false; cancel.disabled = false; input.disabled = false;
+          results.querySelectorAll("button").forEach((button) => button.disabled = false);
+          status.textContent = error.message;
+        }
+      };
+      focusDialogSurface(dialog);
+      input.focus();
+    }
+
+    function wireLibraryPaperFilesDropTarget(shell) {
+      if (!shell) return;
+      // WebKit hit-tests composited scrolling areas before dispatching DOM
+      // drag events. An ancestor-only listener can leave the scroll body's
+      // non-selectable background outside its drop region. Register the
+      // column AND its scrolling body, including after a column rerender.
+      shell.querySelectorAll("[data-library-resource-paper]").forEach((column) => {
+        if (column.dataset.paperFilesDropWired === "1") return;
+        column.dataset.paperFilesDropWired = "1";
+        const surfaces = [column, column.querySelector(".library-resource-body")].filter(Boolean);
+        const targetFor = (event) => {
+          if (state.mode !== "library" || libraryDragPayload(event)) return null;
+          if (!Array.from(event.dataTransfer?.types || []).includes("Files")) return null;
+          const column = event.target?.closest?.("[data-library-resource-paper]");
+          return column?.dataset.libraryResourcePaper && shell.contains(column) ? column : null;
+        };
+        ["dragenter", "dragover"].forEach((eventName) => {
+          surfaces.forEach(surface => surface.addEventListener(eventName, (event) => {
+            const target = targetFor(event);
+            if (!target) return;
+            event.preventDefault();
+            event.stopPropagation();
+            clearLibraryFinderDropTargetVisuals();
+            state.libraryFinderDropTargetFolderId = 0;
+            state.libraryFinderDropTargetKind = "resource-column";
+            shell.classList.add("finder-drag-over");
+            target.classList.add("finder-drop-association-target");
+            event.dataTransfer.dropEffect = "copy";
+          }, true));
+        });
+        column.addEventListener("dragleave", (event) => {
+          const target = event.target?.closest?.("[data-library-resource-paper]");
+          if (target && !target.contains(event.relatedTarget)) clearLibraryFinderDropTarget();
+        }, true);
+        surfaces.forEach(surface => surface.addEventListener("drop", async (event) => {
+          const target = targetFor(event);
+          if (!target) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const paperId = String(target.dataset.libraryResourcePaper);
+          const files = Array.from(event.dataTransfer.files || []);
+          clearLibraryFinderDropTarget();
+          if (!files.length) {
+            updateLibraryActivityStatus("Could not read the dropped files. Please drag them again.", {live: false, clear: false});
+            return;
+          }
+          try {
+            // Match the native Finder-drop classification, retaining the manual
+            // Add File dialog's existing Unknown default.
+            await uploadPaperFiles(target, paperId, files, {fileRole: "publication_version", versionRole: "preprint"});
+            renderLibrary();
+            updateLibraryActivityStatus(`${files.length} file${files.length === 1 ? "" : "s"} added.`, {delay: 2600});
+          } catch (error) {
+            updateLibraryActivityStatus(error.message || "Could not add file", {live: false, clear: false});
+          }
+        }, true));
+      });
+    }
+
     function wireLibraryResourceInteractions(shell) {
       if (!shell) return;
+      wireLibraryPaperFilesDropTarget(shell);
       shell.querySelectorAll(".library-resource-card[data-library-resource-id]").forEach((card) => {
         const paperId = String(card.dataset.libraryResourcePaperId || "");
         const resourceId = Number(card.dataset.libraryResourceId || 0);
@@ -48788,7 +50370,7 @@ INDEX_HTML = """<!doctype html>
         };
         target.addEventListener("dragover", (event) => {
           const payload = libraryDragPayload(event);
-          if (!payload || payload.type !== "item" || (Array.isArray(payload.entries) && payload.entries.length > 1)) return;
+          if (!payload || !["item", "paper-file"].includes(payload.type) || (Array.isArray(payload.entries) && payload.entries.length > 1)) return;
           event.preventDefault();
           event.stopPropagation();
           pendingAttachmentPayload = {payload, updatedAt: Date.now()};
@@ -48807,7 +50389,7 @@ INDEX_HTML = """<!doctype html>
             : null;
           const payload = libraryDragPayload(event) || cachedPayload;
           clearTarget({clearPayload: true});
-          if (!payload || payload.type !== "item") {
+          if (!payload || !["item", "paper-file"].includes(payload.type)) {
             updateLibraryActivityStatus("Could not read the dropped Library item. Please drag it again.", {live: false, clear: false});
             return;
           }
@@ -48815,17 +50397,7 @@ INDEX_HTML = """<!doctype html>
             updateLibraryActivityStatus("Move one Library item into Paper Files at a time.", {live: false, clear: false});
             return;
           }
-          const sourceItemId = Number(payload.id || 0);
-          const targetPaperId = String(target.dataset.libraryResourcePaper || "");
-          if (!sourceItemId || !targetPaperId) {
-            updateLibraryActivityStatus("Could not identify the source file or target paper.", {live: false, clear: false});
-            return;
-          }
-          try {
-            await convertLibraryItemToAttachment(sourceItemId, targetPaperId);
-          } catch (_) {
-            // withLibraryActivityStatus already reports the server error.
-          }
+          await performLibraryManagedDrop(payload, {paperId: String(target.dataset.libraryResourcePaper || "")});
         });
       });
     }
@@ -48840,6 +50412,12 @@ INDEX_HTML = """<!doctype html>
           if (folderId) state.libraryColumnScrollTops[folderId] = body.scrollTop;
         });
         column.addEventListener("click", (event) => {
+          const sortButton = event.target.closest("[data-library-table-sort]");
+          if (sortButton) {
+            event.stopPropagation();
+            setLibraryTableSort(sortButton.dataset.libraryTableSort);
+            return;
+          }
           if (state.suppressClickOnce) {
             event.preventDefault();
             event.stopPropagation();
@@ -48849,6 +50427,9 @@ INDEX_HTML = """<!doctype html>
           selectLibraryColumnFolder(Number(column.dataset.libraryColumnFolder || state.libraryRootId));
           renderLibrary();
           refreshLibraryQuickLookForSelection();
+        });
+        column.addEventListener("keydown", (event) => {
+          if (event.target.closest("[data-library-table-sort], [data-library-navigation-menu]")) event.stopPropagation();
         });
       });
       $("libraryColumns")?.addEventListener("scroll", (event) => {
@@ -48864,6 +50445,20 @@ INDEX_HTML = """<!doctype html>
       const shell = $("libraryShell");
       if (!shell) return;
       shell.addEventListener("pointerdown", () => setLibraryNavigationRailFocus(false), {capture: true});
+      const navigationHeader = $("libraryNavigationHeader");
+      const navigationMenu = navigationHeader?.querySelector("[data-library-navigation-menu]");
+      navigationMenu?.addEventListener("click", event => {
+        event.stopPropagation();
+        const rect = navigationMenu.getBoundingClientRect();
+        showLibraryTabContextMenu({clientX: rect.left, clientY: rect.bottom}, navigationMenu.dataset.navigationType, Number(navigationMenu.dataset.navigationIndex));
+      });
+      navigationHeader?.addEventListener("contextmenu", event => {
+        const context = activeLibraryNavigationToolContext();
+        if (!context) return;
+        event.preventDefault();
+        event.stopPropagation();
+        showLibraryTabContextMenu(event, context.type, context.index);
+      });
       const inlineAddPaper = shell.querySelector("[data-library-inline-add-paper]");
       const inlineAddPaperInput = inlineAddPaper?.querySelector("[data-library-inline-add-paper-input]");
       const inlineAddPaperSubmit = inlineAddPaper?.querySelector("[data-library-inline-add-paper-submit]");
@@ -48965,8 +50560,6 @@ INDEX_HTML = """<!doctype html>
         event.stopPropagation();
         if (handle.dataset.nativeFolderDragId) armNativeFolderDrag(handle);
         else {
-          const itemRow = handle.closest('.library-row[data-library-type="item"]');
-          if (itemRow) armNativeLibraryItemDrop(Number(itemRow.dataset.libraryId || 0));
           prepareNativeFileDrag(handle);
         }
       });
@@ -49014,9 +50607,21 @@ INDEX_HTML = """<!doctype html>
         if (row.dataset.libraryType === "item") openNativeLibraryEntry("item", id);
       });
       shell.addEventListener("dragstart", (event) => {
-        if (event.target.closest?.("[data-native-file-drag-handle]")) {
+        if (event.target.closest?.("[data-native-file-drag-handle]") && window.webkit?.messageHandlers?.nativeFileDrag) {
           event.preventDefault();
           event.stopPropagation();
+          return;
+        }
+        const card = event.target.closest?.(".library-resource-card[data-library-resource-id]");
+        if (card) {
+          const payload = {type: "paper-file", paper_id: card.dataset.libraryResourcePaperId,
+            resource_id: Number(card.dataset.libraryResourceId), token: libraryDragToken(),
+            name: fileNameFromPath(card.dataset.libraryResourcePath) || "Attached File"};
+          if (state.libraryDragPayload?.type === "paper-file"
+              && state.libraryDragPayload.resource_id === payload.resource_id) payload.token = state.libraryDragPayload.token;
+          state.libraryDragPayload = payload;
+          event.dataTransfer?.setData("application/x-paper-monitor-library", JSON.stringify(payload));
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
           return;
         }
         const row = event.target.closest?.(".library-row");
@@ -49031,10 +50636,14 @@ INDEX_HTML = """<!doctype html>
           return;
         }
         const payload = {
+          token: libraryDragToken(),
           type: row.dataset.libraryType,
           id: Number(row.dataset.libraryId),
           parent_folder_id: Number(row.dataset.libraryParentFolder || state.libraryRootId)
         };
+        if (state.libraryDragPayload?.type === payload.type && state.libraryDragPayload.id === payload.id) {
+          payload.token = state.libraryDragPayload.token;
+        }
         const dragEntry = {type: payload.type, id: payload.id};
         const selectedEntries = libraryEntryIsInActionSelection(payload.parent_folder_id, dragEntry)
           ? selectedLibraryEntriesForAction()
@@ -49048,7 +50657,7 @@ INDEX_HTML = """<!doctype html>
         if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
       });
       shell.addEventListener("dragend", (event) => {
-        if (!event.target.closest?.(".library-row")) return;
+        if (!event.target.closest?.(".library-row, .library-resource-card")) return;
         state.libraryDragPayload = null;
         document.querySelectorAll(".library-attachment-drop-target").forEach((node) => node.classList.remove("library-attachment-drop-target"));
       });
@@ -49056,7 +50665,7 @@ INDEX_HTML = """<!doctype html>
         const payload = libraryDragPayload(event);
         if (!payload) return;
         const row = event.target.closest?.(".library-row");
-        if (row && libraryDropIsReorder(payload, row, event)) {
+        if (payload.type !== "paper-file" && row && libraryDropIsReorder(payload, row, event)) {
           event.preventDefault();
           event.stopPropagation();
           markLibraryReorderTarget(row, event);
@@ -49078,7 +50687,7 @@ INDEX_HTML = """<!doctype html>
         const payload = libraryDragPayload(event);
         if (!payload) return;
         const row = event.target.closest?.(".library-row");
-        if (row && libraryDropIsReorder(payload, row, event)) {
+        if (payload.type !== "paper-file" && row && libraryDropIsReorder(payload, row, event)) {
           event.preventDefault();
           event.stopPropagation();
           const position = libraryDropIntent(row, event);
@@ -49092,8 +50701,7 @@ INDEX_HTML = """<!doctype html>
         event.stopPropagation();
         target.classList.remove("drag-over");
         const folderId = Number(target.dataset.libraryDropFolder || state.libraryActiveFolderId || state.libraryRootId);
-        if (Array.isArray(payload.entries) && payload.entries.length > 1) await moveLibraryEntries(payload.entries, folderId);
-        else if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
+        await performLibraryManagedDrop(payload, {folderId});
       });
       shell.addEventListener("contextmenu", (event) => {
         const row = event.target.closest?.(".library-row");
@@ -49129,6 +50737,10 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function libraryDragToken() {
+      return window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
     function libraryDragPayload(event) {
       const types = Array.prototype.slice.call(event.dataTransfer?.types || []);
       if (!types.includes("application/x-paper-monitor-library")) return state.libraryDragPayload || null;
@@ -49142,10 +50754,15 @@ INDEX_HTML = """<!doctype html>
     function prepareNativeFileDrag(handle) {
       const path = handle?.dataset?.nativeDragPath || "";
       if (!path || !window.webkit?.messageHandlers?.nativeFileDrag) return;
-      window.webkit.messageHandlers.nativeFileDrag.postMessage({
-        path,
-        name: handle.dataset.nativeDragName || fileNameFromPath(path) || "paper.pdf"
-      });
+      const card = handle.closest?.("[data-library-resource-id]");
+      const row = handle.closest?.('.library-row[data-library-type="item"]');
+      const name = handle.dataset.nativeDragName || fileNameFromPath(path) || "Attached File";
+      const payload = card ? {type: "paper-file", paper_id: card.dataset.libraryResourcePaperId,
+        resource_id: Number(card.dataset.libraryResourceId), name, token: libraryDragToken()}
+        : row ? {type: "item", id: Number(row.dataset.libraryId), token: libraryDragToken()} : null;
+      state.libraryDragPayload = payload;
+      window.webkit.messageHandlers.nativeFileDrag.postMessage({path, name, library_payload: payload});
+      window.addEventListener("mouseup", () => { state.libraryDragPayload = null; }, {once: true});
     }
 
     function armNativeFolderDrag(handle) {
@@ -49178,10 +50795,14 @@ INDEX_HTML = """<!doctype html>
         }
         const result = data.result || {};
         if (!result.desktop_path) throw new Error("Could not prepare folder copy");
+        const payload = {type: "folder", id: folderId, token: libraryDragToken()};
+        state.libraryDragPayload = payload;
+        window.addEventListener("mouseup", () => { state.libraryDragPayload = null; }, {once: true});
         window.webkit.messageHandlers.nativeFileDrag.postMessage({
           path: result.desktop_path,
           name: result.folder_name || libraryFolderById(folderId)?.name || "Library Folder",
-          cleanup_path: result.cleanup_path || ""
+          cleanup_path: result.cleanup_path || "",
+          library_payload: payload
         });
       } catch (error) {
         updateLibraryActivityStatus(
@@ -49450,7 +51071,7 @@ INDEX_HTML = """<!doctype html>
       const overlay = $("libraryQuickLook");
       const pages = $("libraryQuickLookPages");
       if (overlay) {
-        overlay.classList.remove("open", "compact");
+        overlay.classList.remove("open", "compact", "markdown-preview");
         overlay.setAttribute("aria-hidden", "true");
       }
       if (pages) pages.innerHTML = "";
@@ -49546,54 +51167,133 @@ INDEX_HTML = """<!doctype html>
 
     let libraryMarkdownWorker = null;
     let libraryMarkdownRequest = null;
+    const libraryMarkdownCache = new Map();
+    let libraryMarkdownCacheChars = 0;
 
     function cancelLibraryMarkdownPreview() {
-      if (!libraryMarkdownRequest) return;
+      const pending = libraryMarkdownRequest;
       libraryMarkdownRequest = null;
-      libraryMarkdownWorker?.postMessage({cancel: true});
+      if (!pending) return;
+      clearTimeout(pending.timeout);
+      pending.controller.abort();
+      // A stale synchronous parse cannot consume the next selection's worker.
+      if (pending.parsing && libraryMarkdownWorker) {
+        libraryMarkdownWorker.terminate();
+        libraryMarkdownWorker = null;
+      }
     }
 
-    function renderLibraryMarkdownPreview(paper, token) {
+    function isCurrentLibraryMarkdownPreview(data) {
+      return libraryMarkdownRequest?.token === data.token
+        && libraryMarkdownRequest?.path === data.path
+        && state.libraryQuickLookOpen && state.libraryQuickLookKind === "file"
+        && data.token === state.libraryQuickLookRenderToken
+        && data.path === state.libraryQuickLookPath;
+    }
+
+    function cacheLibraryMarkdownPreview(path, value) {
+      const previous = libraryMarkdownCache.get(path);
+      if (previous) libraryMarkdownCacheChars -= previous.html.length;
+      libraryMarkdownCache.delete(path);
+      if (value?.etag) {
+        libraryMarkdownCache.set(path, value);
+        libraryMarkdownCacheChars += value.html.length;
+      }
+      // Memory only: at most eight recent notes and one million HTML characters.
+      while (libraryMarkdownCache.size > 8 || libraryMarkdownCacheChars > 1000000) {
+        const oldest = libraryMarkdownCache.keys().next().value;
+        libraryMarkdownCacheChars -= libraryMarkdownCache.get(oldest).html.length;
+        libraryMarkdownCache.delete(oldest);
+      }
+    }
+
+    function finishLibraryMarkdownPreview(data) {
+      if (!isCurrentLibraryMarkdownPreview(data)) return;
+      const pending = libraryMarkdownRequest;
+      libraryMarkdownRequest = null;
+      clearTimeout(pending.timeout);
+      const root = $("libraryQuickLookPages");
+      cacheLibraryMarkdownPreview(data.path, data.error ? null : {
+        etag: pending.etag, html: data.html, truncated: data.truncated
+      });
+      if (data.error) {
+        pending.controller.abort();
+        renderLibraryFilePreviewCard(root, pending.paper, data.error);
+        return;
+      }
+      root.innerHTML = `<div class="library-file-preview markdown"><article class="library-markdown-document">${data.html}${data.truncated ? '<p class="library-markdown-truncated">[Preview truncated]</p>' : ""}</article></div>`;
+      // WebKit can underestimate an accented MathML expression's intrinsic
+      // width. Measure the actual math once, then size its scroll container.
+      // Batch reads before writes; max-width still bounds genuinely long math.
+      const mathWidths = [...root.querySelectorAll(".library-markdown-math-inline math")].map(math => {
+        const box = math.closest(".library-markdown-math-inline");
+        const width = math.getBoundingClientRect().width;
+        return {box, width, clipped: width > box.getBoundingClientRect().width + .5};
+      });
+      mathWidths.forEach(({box, width, clipped}) => {
+        if (clipped) box.style.width = `${Math.ceil(width)}px`;
+      });
+      root.querySelectorAll("[data-markdown-url]").forEach((link) => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openWebsite(link.dataset.markdownUrl);
+        });
+      });
+    }
+
+    function ensureLibraryMarkdownWorker() {
+      if (libraryMarkdownWorker) return libraryMarkdownWorker;
+      const worker = new Worker("/markdown-preview-worker.js");
+      libraryMarkdownWorker = worker;
+      worker.onmessage = ({data}) => {
+        if (libraryMarkdownWorker === worker) finishLibraryMarkdownPreview(data);
+      };
+      worker.onerror = () => {
+        if (libraryMarkdownWorker !== worker) return;
+        worker.terminate();
+        libraryMarkdownWorker = null;
+        const pending = libraryMarkdownRequest;
+        if (pending) finishLibraryMarkdownPreview({...pending, error: "Markdown preview could not be loaded. Close and reopen to retry."});
+      };
+      return worker;
+    }
+
+    async function renderLibraryMarkdownPreview(paper, token) {
       const path = paperNativePath(paper || {});
       const root = $("libraryQuickLookPages");
       root.innerHTML = `<div class="library-file-preview text"><p>Loading Markdown...</p></div>`;
-      libraryMarkdownRequest = {paper, token, path};
-      const isCurrent = (data) => state.libraryQuickLookOpen
-        && state.libraryQuickLookKind === "file"
-        && data.token === state.libraryQuickLookRenderToken
-        && data.path === state.libraryQuickLookPath;
+      const pending = {paper, token, path, controller: new AbortController(), etag: "", parsing: false};
+      libraryMarkdownRequest = pending;
+      pending.timeout = setTimeout(() => {
+        if (!isCurrentLibraryMarkdownPreview(pending)) return;
+        libraryMarkdownWorker?.terminate();
+        libraryMarkdownWorker = null;
+        finishLibraryMarkdownPreview({...pending, error: "Markdown preview took too long. Close and reopen to retry, or open the file directly."});
+      }, 15000);
+      const cached = libraryMarkdownCache.get(path);
       try {
-        if (!libraryMarkdownWorker) {
-          libraryMarkdownWorker = new Worker("/markdown-preview-worker.js");
-          libraryMarkdownWorker.onmessage = ({data}) => {
-            if (!isCurrent(data)) return;
-            const selectedPaper = libraryMarkdownRequest?.paper;
-            libraryMarkdownRequest = null;
-            if (data.error) {
-              renderLibraryFilePreviewCard(root, selectedPaper, data.error);
-              return;
-            }
-            root.innerHTML = `<div class="library-file-preview markdown"><article class="library-markdown-document">${data.html}${data.truncated ? '<p class="library-markdown-truncated">[Preview truncated]</p>' : ""}</article></div>`;
-            root.querySelectorAll("[data-markdown-url]").forEach((link) => {
-              link.addEventListener("click", (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                openWebsite(link.dataset.markdownUrl);
-              });
-            });
-          };
-          libraryMarkdownWorker.onerror = () => {
-            const pending = libraryMarkdownRequest;
-            libraryMarkdownWorker?.terminate();
-            libraryMarkdownWorker = null;
-            libraryMarkdownRequest = null;
-            if (pending && isCurrent(pending)) renderLibraryFilePreviewCard(root, pending.paper, "Markdown preview could not be loaded.");
-          };
+        // Worker scripts and file I/O start together. A validated cached note
+        // needs neither a document transfer nor another Markdown/YAML parse.
+        if (!cached) ensureLibraryMarkdownWorker();
+        const response = await fetch(`/api/markdown-preview?path=${encodeURIComponent(path)}`, {
+          signal: pending.controller.signal, cache: "no-store",
+          headers: cached ? {"If-None-Match": cached.etag} : {}
+        });
+        if (!isCurrentLibraryMarkdownPreview(pending)) return;
+        if (response.status === 304 && cached) {
+          pending.etag = cached.etag;
+          finishLibraryMarkdownPreview({...cached, token, path});
+          return;
         }
-        libraryMarkdownWorker.postMessage({path, token});
+        const content = await response.json();
+        if (!isCurrentLibraryMarkdownPreview(pending)) return;
+        if (!response.ok) throw new Error(content.error || "Markdown preview failed.");
+        pending.etag = response.headers.get("ETag") || "";
+        pending.parsing = true;
+        ensureLibraryMarkdownWorker().postMessage({path, token, content});
       } catch (error) {
-        libraryMarkdownRequest = null;
-        if (isCurrent({path, token})) renderLibraryFilePreviewCard(root, paper, error.message || "Markdown preview failed.");
+        if (error.name !== "AbortError") finishLibraryMarkdownPreview({path, token, error: error.message || "Markdown preview failed."});
       }
     }
 
@@ -49734,11 +51434,13 @@ INDEX_HTML = """<!doctype html>
       setNativePdfQuickLookActive(false);
       if (title) title.textContent = libraryPreviewPathTitle(path, libraryFilePreviewTitle(paper));
       renderLibraryQuickLookFileThumb(paper);
+      const isMarkdown = libraryFilePreviewKind(paper) === "markdown";
+      overlay.classList.toggle("markdown-preview", isMarkdown);
       overlay.classList.remove("compact");
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
       if (!state.libraryQuickLookManualFrame || !state.libraryQuickLookFrameRect) {
-        applyLibraryQuickLookFrame(defaultLibraryQuickLookFrame());
+        applyLibraryQuickLookFrame(isMarkdown ? defaultLibraryMarkdownQuickLookFrame() : defaultLibraryQuickLookFrame());
       } else {
         applyLibraryQuickLookFrame();
       }
@@ -49987,7 +51689,17 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function requestPaperPdfDownload(payload) {
+    const pendingPaperPdfDownloads = new Map();
+
+    function requestPaperPdfDownload(payload) {
+      const paperId = String(payload?.paper_id || "");
+      if (pendingPaperPdfDownloads.has(paperId)) return pendingPaperPdfDownloads.get(paperId);
+      const pending = performPaperPdfDownload(payload).finally(() => pendingPaperPdfDownloads.delete(paperId));
+      pendingPaperPdfDownloads.set(paperId, pending);
+      return pending;
+    }
+
+    async function performPaperPdfDownload(payload) {
       const res = await fetch("/api/download", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -49997,11 +51709,16 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "download failed");
       applyPaperPdfDownloadResult(payload?.paper_id, data);
       if (data.browser_fallback) {
+        if (data?.paper && payload?.paper_id) updatePaperState(payload.paper_id, data.paper);
+        if (data.browser_fallback.kind === "aaas-supplement-discovery") {
+          return downloadScienceSupplementaryPdfs(data.browser_fallback, payload);
+        }
         let downloaded = await downloadPublishedPdfInBackground(data.browser_fallback, payload);
         if (data.browser_fallback.followup) {
-          downloaded = {...downloaded, ...await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, payload)};
-        } else if (data.browser_fallback.kind === "aaas-supplement-discovery") {
-          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback, payload);
+          const followupContext = downloaded?.publisher_main_resource_id
+            ? {...payload, publisher_main_resource_id: downloaded.publisher_main_resource_id}
+            : payload;
+          downloaded = {...downloaded, ...await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, followupContext)};
         }
         return downloaded;
       }
@@ -50067,6 +51784,7 @@ INDEX_HTML = """<!doctype html>
       const status = $("libraryDetailStatus");
       const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
       const activityId = `pdf:${paper.paper_id}`;
+      const activityText = text => `${text} · ${paper.title || paper.storage_key || paper.paper_id}`;
       buttons.forEach((button) => button.disabled = true);
       if (status) {
         status.textContent = options.force ? "Refreshing PDF..." : "Downloading PDF...";
@@ -50075,7 +51793,7 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryTab === "my-publications") {
         setMyPublicationActivity(activityId, options.force ? "Refreshing PDF..." : "Downloading PDF...");
       }
-      updateLibraryActivityStatus(options.force ? "Refreshing PDF..." : "Downloading PDF...", {live: true, clear: false});
+      updateLibraryActivityStatus(activityText(options.force ? "Refreshing PDF..." : "Downloading PDF..."), {activityId, live: true, clear: false});
       try {
         const payload = {...libraryPdfContextPayload(paper.paper_id), force: Boolean(options.force)};
         const data = await requestPaperPdfDownload(payload);
@@ -50087,10 +51805,10 @@ INDEX_HTML = """<!doctype html>
         }
         if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
-        updateLibraryActivityStatus(options.force ? "PDF refreshed." : "PDF downloaded.", {delay: 2600});
+        updateLibraryActivityStatus(activityText(options.force ? "PDF refreshed." : "PDF downloaded."), {activityId, delay: 2600});
       } catch (error) {
         const message = error.message || "download failed";
-        updateLibraryActivityStatus(`PDF download failed: ${message}`, {delay: 4200});
+        updateLibraryActivityStatus(activityText(`PDF download failed: ${message}`), {activityId, failed: true, delay: 4200});
         if (status) {
           status.textContent = message;
           status.className = "library-detail-status err";
@@ -50192,7 +51910,7 @@ INDEX_HTML = """<!doctype html>
       const overlay = $("libraryQuickLook");
       const pages = $("libraryQuickLookPages");
       if (overlay) {
-        overlay.classList.remove("open", "compact");
+        overlay.classList.remove("open", "compact", "markdown-preview");
         overlay.setAttribute("aria-hidden", "true");
       }
       if (pages) pages.innerHTML = "";
@@ -50262,6 +51980,12 @@ INDEX_HTML = """<!doctype html>
       return true;
     }
 
+    function defaultLibraryMarkdownQuickLookFrame() {
+      const width = Math.min(1000, window.innerWidth - 32);
+      const height = Math.min(760, window.innerHeight - 96);
+      return {left: (window.innerWidth - width) / 2, top: 56, width, height};
+    }
+
     function defaultLibraryQuickLookFrame() {
       const columns = $("libraryColumns");
       const rect = columns?.getBoundingClientRect();
@@ -50299,10 +52023,16 @@ INDEX_HTML = """<!doctype html>
       const rect = frameRect || state.libraryQuickLookFrameRect || defaultLibraryQuickLookFrame();
       const minWidth = options.compact ? 220 : 320;
       const minHeight = options.compact ? 74 : 300;
-      const width = Math.max(minWidth, Math.min(rect.width, Math.max(2200, window.innerWidth * 1.8)));
-      const height = Math.max(minHeight, Math.min(rect.height, Math.max(2000, window.innerHeight * 1.8)));
-      const left = Math.max(80 - width, Math.min(rect.left, window.innerWidth - 80));
-      const top = Math.max(36 - height, Math.min(rect.top, window.innerHeight - 36));
+      let width = Math.max(minWidth, Math.min(rect.width, Math.max(2200, window.innerWidth * 1.8)));
+      let height = Math.max(minHeight, Math.min(rect.height, Math.max(2000, window.innerHeight * 1.8)));
+      let left = Math.max(80 - width, Math.min(rect.left, window.innerWidth - 80));
+      let top = Math.max(36 - height, Math.min(rect.top, window.innerHeight - 36));
+      if (overlay.classList.contains("markdown-preview") && !options.compact) {
+        width = Math.min(width, Math.max(240, window.innerWidth - 24));
+        height = Math.min(height, Math.max(200, window.innerHeight - 64));
+        left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
+        top = Math.max(48, Math.min(top, window.innerHeight - height - 12));
+      }
       if (options.persist !== false) state.libraryQuickLookFrameRect = {left, top, width, height};
       overlay.style.left = `${left}px`;
       overlay.style.top = `${top}px`;
@@ -50364,6 +52094,7 @@ INDEX_HTML = """<!doctype html>
           </div>
         </div>
       `;
+      overlay.classList.remove("markdown-preview");
       overlay.classList.add("open", "compact");
       overlay.setAttribute("aria-hidden", "false");
       applyLibraryQuickLookFrame(defaultLibraryQuickLookCompactFrame(), {compact: true, persist: false});
@@ -50617,7 +52348,7 @@ INDEX_HTML = """<!doctype html>
         paper.merged_pdf_path,
         paper.original_filename || paper.citation_label || paper.title || "PDF Preview"
       );
-      overlay.classList.remove("compact");
+      overlay.classList.remove("compact", "markdown-preview");
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
       if (!state.libraryQuickLookManualFrame || !state.libraryQuickLookFrameRect) {
@@ -50717,7 +52448,7 @@ INDEX_HTML = """<!doctype html>
         if ($("libraryNavBackdrop")?.classList.contains("open")) {
           $("libraryNavStatus").textContent = message;
         }
-        updateLibraryActivityStatus(message, {delay: 4600});
+        updateLibraryActivityStatus(message, {clear: false});
         console.error(error);
       }
     }
@@ -50921,6 +52652,11 @@ INDEX_HTML = """<!doctype html>
       const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
       const copyFolderDesktopButton = menu.querySelector('[data-action="copy-folder-desktop"]');
       const addPaperButton = menu.querySelector('[data-action="add-paper"]');
+      const refreshFolderButton = menu.querySelector('[data-action="refresh-folder-info"]');
+      if (refreshFolderButton) {
+        refreshFolderButton.style.display = folder && libraryAddFolderCanTarget(folder) ? "" : "none";
+        refreshFolderButton.onclick = () => { hideLibraryContextMenu(); openMetadataRefreshWindow(Number(entryId)); };
+      }
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -51033,11 +52769,7 @@ INDEX_HTML = """<!doctype html>
       }
       if (addPaperButton) {
         const targetFolderId = Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId);
-        const canAddPaper = state.libraryTab === "library"
-          && !hasEntry
-          && !librarySearchIsActive()
-          && targetFolderId !== libraryRecycleFolderId()
-          && libraryFolderIsWithin(targetFolderId, Number(state.libraryRootId || 1));
+        const canAddPaper = !hasEntry && libraryInlineAddAllowed(targetFolderId);
         addPaperButton.style.display = canAddPaper ? "" : "none";
         addPaperButton.onclick = () => {
           hideLibraryContextMenu();
@@ -51058,7 +52790,7 @@ INDEX_HTML = """<!doctype html>
         [sortByModifiedButton, "modified", "Sort by Modified Time"]
       ].forEach(([button, mode, label]) => {
         if (!button) return;
-        const active = normalizeLibrarySortMode(state.librarySortMode) === mode;
+        const active = !(libraryTableViewActive() && state.libraryTableSort) && normalizeLibrarySortMode(state.librarySortMode) === mode;
         button.textContent = `${active ? "✓ " : ""}${label}`;
         button.onclick = () => {
           hideLibraryContextMenu();
@@ -51088,16 +52820,52 @@ INDEX_HTML = """<!doctype html>
       menu.style.top = `${event.clientY}px`;
       menu.classList.add("open");
       menu.onclick = (clickEvent) => clickEvent.stopPropagation();
+      const tabs = tabType === "workspace" ? state.libraryWorkspaceTabs : state.libraryShortcutTabs;
+      const tabId = tabs[index]?.tab_id;
+      // Resolve the stable tab again when an action runs, after any tab reorder.
+      const currentIndex = () => (tabType === "workspace" ? state.libraryWorkspaceTabs : state.libraryShortcutTabs).findIndex(tab => tab.tab_id === tabId);
+      const addPaperButton = menu.querySelector('[data-action="add-tab-paper"]');
+      addPaperButton.onclick = async () => {
+        hideLibraryTabContextMenu();
+        await runLibraryMenuAction(async () => {
+          const i = currentIndex();
+          if (i < 0) return;
+          if (state.libraryTab !== `${tabType}-${i}`) {
+            if (tabType === "workspace") await openLibraryWorkspaceTab(i);
+            else await openLibraryShortcutTab(i);
+          }
+          beginLibraryInlineAddPaper(libraryDisplayRootId());
+        });
+      };
+      const renameButton = menu.querySelector('[data-action="rename-tab"]');
+      renameButton.onclick = () => {
+        hideLibraryTabContextMenu();
+        const i = currentIndex();
+        if (i < 0) return;
+        runLibraryMenuAction(() => tabType === "workspace" ? renameLibraryWorkspaceFromTab(i) : renameLibraryShortcutTab(i));
+      };
+      const moveButton = menu.querySelector('[data-action="move-tab-library"]');
+      moveButton.style.display = tabType === "workspace" ? "" : "none";
+      moveButton.onclick = () => {
+        hideLibraryTabContextMenu();
+        if (currentIndex() < 0) return;
+        state.libraryNavWorkspaceTabId = tabId;
+        runLibraryMenuAction(() => openLibraryNavigationDialog("move-workspace"));
+      };
       const removeButton = menu.querySelector('[data-action="remove-tab"]');
       if (removeButton) removeButton.textContent = tabType === "workspace" ? "Remove Empty Space" : "Remove Shortcut";
       if (removeButton) {
         removeButton.onclick = async () => {
           const type = menu.dataset.tabType || "shortcut";
-          const tabIndex = Number(menu.dataset.tabIndex || 0);
+          const tabIndex = currentIndex();
           hideLibraryTabContextMenu();
+          if (tabIndex < 0) return;
           await runLibraryMenuAction(() => removeLibraryNavigationTab(type, tabIndex));
         };
       }
+      const rect = menu.getBoundingClientRect();
+      menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8))}px`;
+      menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8))}px`;
     }
 
     function hideLibraryTabContextMenu() {
@@ -51223,6 +52991,7 @@ INDEX_HTML = """<!doctype html>
 
     function handleLibraryKeydown(event) {
       if (state.mode !== "library") return false;
+      if (event.target?.closest?.("[data-library-table-sort], [data-library-navigation-menu]")) return false;
       const keyAliases = {
         "Up": "ArrowUp",
         "Down": "ArrowDown",
@@ -51379,6 +53148,8 @@ INDEX_HTML = """<!doctype html>
         nextPaper.in_library = Boolean(existingPaper.in_library);
         nextPaper.library_item_count = Number(existingPaper.library_item_count || 0);
       }
+      const files = state.paperFilesByPaperId?.[String(paperId)];
+      if (files?.paper) files.paper = {...files.paper, ...nextPaper};
       // The active list and its cache can be the same array. Merge into each
       // view's own row before any replacement can discard its Subject groups,
       // scores or matches, which generic paper responses do not include.
@@ -51531,6 +53302,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyAuthorMonitorSnapshot(data = {}) {
+      if (data.metadataWork) state.authorMonitorMetadataWork = data.metadataWork;
       const paperScopeAuthorId = Number(data.paperScopeAuthorId || 0);
       const preserveFullIndex = state.authorMonitorIndexLoaded && paperScopeAuthorId > 0;
       if (!preserveFullIndex) {
@@ -51626,6 +53398,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyAuthorMonitorIndex(data = {}) {
+      if (data.metadataWork) state.authorMonitorMetadataWork = data.metadataWork;
       if (!data.indexReady || !Array.isArray(data.papers)) return false;
       if (Array.isArray(data.authors)) {
         state.authorMonitors = data.authors;
@@ -51678,13 +53451,9 @@ INDEX_HTML = """<!doctype html>
       const rememberedPaperId = String(
         state.authorMonitorSelectedPaperByAuthor.get(requestedId) || ""
       );
-      if (rememberedPaperId && visible.some((paper) => paper.paper_id === rememberedPaperId)) {
-        state.authorMonitorSelectedPaperId = rememberedPaperId;
-      } else if (
-        !state.authorMonitorSelectedPaperId
-        || !visible.some((paper) => paper.paper_id === state.authorMonitorSelectedPaperId)
-      ) {
-        state.authorMonitorSelectedPaperId = visible[0]?.paper_id || "";
+      if (!visible.some((paper) => paper.paper_id === state.authorMonitorSelectedPaperId)) {
+        state.authorMonitorSelectedPaperId = visible.some((paper) => paper.paper_id === rememberedPaperId)
+          ? rememberedPaperId : (visible[0]?.paper_id || "");
       }
       state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
       state.authorMonitorLoaded = true;
@@ -51693,7 +53462,7 @@ INDEX_HTML = """<!doctype html>
       persistAuthorMonitorSelectedId(requestedId);
       updateAuthorMonitorTopDot();
       syncAuthorMonitorBackgroundScholarStatus();
-      if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+      if (state.mode === "author") refreshAuthorMonitorInPlace();
       return true;
     }
 
@@ -51717,7 +53486,8 @@ INDEX_HTML = """<!doctype html>
           }, AUTHOR_MONITOR_INDEX_RETRY_MS);
         };
         try {
-          const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1", 30000);
+          // Footer queue counts arrive separately; a cold recount must not delay cards.
+          const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1&cards_only=1", 30000);
           if (data.indexReady) return applyAuthorMonitorIndex(data);
           document.documentElement.dataset.authorMonitorIndex = "building";
           scheduleRetry();
@@ -51901,7 +53671,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function refreshAuthorMonitorSummary() {
-      if (state.authorMonitorLoading || state.authorMonitorRefreshing) return;
+      if (state.authorMonitorLoading || state.authorMonitorRefreshing || state.authorMonitorSummaryLoading) return;
+      state.authorMonitorSummaryLoading = true;
       try {
         const previousSignature = state.authorMonitors.map(
           (item) => [
@@ -51918,6 +53689,15 @@ INDEX_HTML = """<!doctype html>
           ].join(":")
         ).join("|");
         const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?summary=1", 12000);
+        const metadataChanged = Boolean(data.metadataWork?.completed_at)
+          && data.metadataWork.completed_at !== state.authorMonitorMetadataWork?.completed_at;
+        if (metadataChanged) {
+          const invalidate = paper => { paper.full_detail = false; };
+          state.authorMonitorPapers.forEach(invalidate);
+          state.authorMonitorPaperCache.forEach(entry => (entry.papers || []).forEach(invalidate));
+        }
+        if (data.metadataWork) state.authorMonitorMetadataWork = data.metadataWork;
+        syncAuthorMonitorActivityDisplay();
         state.authorMonitors = Array.isArray(data.authors) ? data.authors : [];
         if (data.scholarCooldown && typeof data.scholarCooldown === "object") {
           state.scholarGlobalCooldown = data.scholarCooldown;
@@ -51947,6 +53727,7 @@ INDEX_HTML = """<!doctype html>
         syncAuthorMonitorBackgroundScholarStatus(state.authorMonitors);
         if (
           previousPaperSignature !== nextPaperSignature
+          || metadataChanged
           || data.indexReady === false
           || Number(data.indexPendingCount || 0) > 0
         ) {
@@ -51954,11 +53735,11 @@ INDEX_HTML = """<!doctype html>
         }
         if (previousSignature !== nextSignature) {
           if (state.mode === "author") {
-            renderAuthorMonitor({preserveScroll: true});
+            refreshAuthorMonitorInPlace();
           }
         }
         const pendingImport = state.authorMonitors.find(
-          (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+          authorMonitorIsBackgroundScholarJob
         );
         if (pendingImport && !state.authorMonitorImportPoller) {
           pollAuthorMonitorInitialImport(Number(pendingImport.id));
@@ -51966,6 +53747,9 @@ INDEX_HTML = """<!doctype html>
       } catch (_error) {
         // Author monitoring continues in the server even when this small badge
         // refresh cannot reach the local API.
+      } finally {
+        state.authorMonitorSummaryLoading = false;
+        syncAuthorMonitorActivityDisplay();
       }
     }
 
@@ -51980,7 +53764,7 @@ INDEX_HTML = """<!doctype html>
       } else {
         window.setTimeout(prefetchIndex, 700);
       }
-      state.authorMonitorSummaryTimer = window.setInterval(refreshAuthorMonitorSummary, 60000);
+      state.authorMonitorSummaryTimer = window.setInterval(refreshAuthorMonitorSummary, 10000);
     }
 
     function selectedAuthorMonitor() {
@@ -52194,6 +53978,7 @@ INDEX_HTML = """<!doctype html>
     function renderAuthorMonitorRail() {
       const root = $("authorMonitorAuthors");
       if (!root) return;
+      if (root.contains(listReorderMarkerRow)) clearListReorderMarker();
       const previousScroll = Number(root.scrollTop || state.authorMonitorRailScrollTop || 0);
       const totalUnread = state.authorMonitors.reduce((sum, author) => sum + Number(author.unread_count || 0), 0);
       root.innerHTML = `
@@ -52236,23 +54021,27 @@ INDEX_HTML = """<!doctype html>
           });
           row.addEventListener("dragstart", (event) => {
             state.authorMonitorDragId = Number(author.id);
+            setListReorderDragImage(row, event);
             row.classList.add("dragging");
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", String(author.id));
           });
           row.addEventListener("dragover", (event) => {
             const draggedId = Number(state.authorMonitorDragId || event.dataTransfer.getData("text/plain") || 0);
-            if (!draggedId || draggedId === Number(author.id)) return;
+            if (!draggedId || draggedId === Number(author.id)) {
+              clearListReorderMarker();
+              return;
+            }
             event.preventDefault();
             const rect = row.getBoundingClientRect();
             const after = event.clientY > rect.top + rect.height / 2;
-            row.classList.toggle("drag-over-before", !after);
-            row.classList.toggle("drag-over-after", after);
+            showListReorderMarker(row, after);
           });
-          row.addEventListener("dragleave", () => {
-            row.classList.remove("drag-over-before", "drag-over-after");
+          row.addEventListener("dragleave", (event) => {
+            if (!row.contains(event.relatedTarget)) clearListReorderMarker(row);
           });
           row.addEventListener("drop", (event) => {
+            clearListReorderMarker();
             const draggedId = Number(state.authorMonitorDragId || event.dataTransfer.getData("text/plain") || 0);
             if (!draggedId || draggedId === Number(author.id)) return;
             event.preventDefault();
@@ -52261,8 +54050,9 @@ INDEX_HTML = """<!doctype html>
           });
           row.addEventListener("dragend", () => {
             state.authorMonitorDragId = 0;
+            clearListReorderMarker();
             root.querySelectorAll(".author-monitor-author").forEach((item) => {
-              item.classList.remove("dragging", "drag-over-before", "drag-over-after");
+              item.classList.remove("dragging");
             });
           });
         }
@@ -52271,6 +54061,7 @@ INDEX_HTML = """<!doctype html>
       state.authorMonitorRailScrollTop = previousScroll;
       root.addEventListener("scroll", () => {
         state.authorMonitorRailScrollTop = root.scrollTop;
+        clearListReorderMarker();
       }, {passive: true});
     }
 
@@ -52394,6 +54185,7 @@ INDEX_HTML = """<!doctype html>
       const citationSource = String(paper.citation_count_source || "Citation source");
       article.className = `author-paper-card${selected ? " report-selected" : ""}${authorMonitorPaperIsUnread(paper) ? " author-unread" : ""}${conferenceAbstract ? " conference-abstract" : ""}`;
       article.dataset.paperId = paper.paper_id || "";
+      article._paperModel = paper;
       article.tabIndex = -1;
       article.setAttribute("role", "option");
       article.setAttribute("aria-selected", selected ? "true" : "false");
@@ -52457,10 +54249,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wireAuthorMonitorIncrementalRender(list, papers) {
-      if (!list) return;
+      if (!list || list.dataset.authorScrollWired) return;
+      list.dataset.authorScrollWired = "1";
       list.addEventListener("scroll", () => {
         state.authorMonitorListScrollTop = Number(list.scrollTop || 0);
         if (list.scrollTop + list.clientHeight < list.scrollHeight - 640) return;
+        const papers = authorMonitorPartitionedPapers().articles;
         const rendered = Number(list.dataset.renderedCount || 0);
         if (rendered >= papers.length) return;
         appendAuthorMonitorPaperCards(
@@ -52496,15 +54290,138 @@ INDEX_HTML = """<!doctype html>
       );
     }
 
-    function authorMonitorActivityStatusClass(channel = "primary") {
+    function refreshAuthorMonitorInPlace() {
+      if (state.mode !== "author") return;
+      const list = $("authorMonitorPaperList");
+      if (!list) {
+        renderAuthorMonitor({preserveScroll: true});
+        return;
+      }
+      const focused = document.activeElement;
+      const partition = authorMonitorPartitionedPapers();
+      for (const [container, papers] of [[list, partition.articles], [document.querySelector('[data-role="conference-cards"]'), partition.conferences]]) {
+        if (!container) continue;
+        const beforeScroll = container.scrollTop;
+        const nodes = [...container.querySelectorAll(".author-paper-card")];
+        const top = container.getBoundingClientRect().top;
+        const anchor = nodes.find(node => node.getBoundingClientRect().bottom > top);
+        const offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+        const existing = new Map(nodes.map(node => [node.dataset.paperId, node]));
+        const count = Math.min(papers.length, Math.max(AUTHOR_MONITOR_INITIAL_CARD_COUNT, nodes.length,
+          papers.findIndex(p => p.paper_id === state.authorMonitorSelectedPaperId) + 1,
+          papers.findIndex(p => p.paper_id === anchor?.dataset.paperId) + 1));
+        const wanted = new Set(papers.slice(0, count).map(p => p.paper_id));
+        nodes.filter(node => !wanted.has(node.dataset.paperId)).forEach(node => node.remove());
+        if (count) container.querySelectorAll(".author-monitor-empty").forEach(node => node.remove());
+        let cursor = container.firstElementChild;
+        for (const paper of papers.slice(0, count)) {
+          const node = existing.get(paper.paper_id) || renderAuthorMonitorPaperCard(paper);
+          if (node._paperModel) Object.assign(node._paperModel, paper);
+          const title = node.querySelector(".author-paper-title");
+          if (title && title.dataset.title !== paper.title) {title.innerHTML = publicationTitleMarkup(paper.title || "Untitled paper"); title.dataset.title = paper.title;}
+          const citation = node.querySelector(".author-paper-citation");
+          if (citation) citation.textContent = authorMonitorCitationText(paper);
+          const cites = node.querySelector(".author-paper-scholar-citations");
+          if (cites && paper.citation_count != null) cites.textContent = `Cited by ${paper.citation_count}`;
+          node.classList.toggle("author-unread", authorMonitorPaperIsUnread(paper));
+          node.classList.toggle("report-selected", paper.paper_id === state.authorMonitorSelectedPaperId);
+          node.setAttribute("aria-selected", paper.paper_id === state.authorMonitorSelectedPaperId ? "true" : "false");
+          if (node !== cursor) container.insertBefore(node, cursor);
+          cursor = node.nextElementSibling;
+        }
+        container.dataset.renderedCount = String(count);
+        if (!count && !container.querySelector(".author-monitor-empty")) {
+          const empty = document.createElement("div");empty.className = "author-monitor-empty";empty.textContent = "No monitored papers match this view.";container.appendChild(empty);
+        }
+        container.scrollTop = beforeScroll;
+        if (anchor?.isConnected) container.scrollTop += anchor.getBoundingClientRect().top - top - offset;
+        if (container === list) {
+          state.authorMonitorRenderedCount = count;
+          state.authorMonitorListScrollTop = container.scrollTop;
+          wireAuthorMonitorIncrementalRender(list, papers);
+        }
+      }
+      // Keep the rail, detail editor, open menus and native preview mounted.
+      document.querySelectorAll("#authorMonitorAuthors [data-author-id]").forEach(row => {
+        const id = Number(row.dataset.authorId);
+        const author = state.authorMonitors.find(a => Number(a.id) === id);
+        const unread = id ? Number(author?.unread_count || 0) : state.authorMonitors.reduce((n, a) => n + Number(a.unread_count || 0), 0);
+        let badge = row.querySelector(".author-monitor-unread");
+        if (!unread) {badge?.remove(); return;}
+        if (!badge) {badge = document.createElement("span");badge.className = "author-monitor-unread";row.appendChild(badge);}
+        badge.textContent = String(unread);
+      });
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
+      syncAuthorMonitorActivityDisplay();
+      updateAuthorMonitorTopDot();
+    }
+
+    function authorMonitorIdleActivity(channel = "primary") {
+      if (channel === "secondary") {
+        const work = state.authorMonitorMetadataWork || {};
+        if (!("eligible" in work)) return {text: "Author metadata · Checking status...", live: false};
+        const pending = Number(work.eligible || 0);
+        const waiting = Number(work.waiting_retry || 0);
+        const manual = Number(work.needs_manual || 0);
+        const label = "Author metadata · All authors";
+        const manualText = manual ? ` · ${manual} need manual lookup` : "";
+        const waitingText = waiting ? ` · ${waiting} waiting for retry` : "";
+        const retry = work.retry_at ? ` · Retry after ${autoStatusTime(work.retry_at)}` : "";
+        if (work.status === "running") return {text: `${label} · ${Number(work.current || 0)} / ${Number(work.total || 0)} · ${pending} ready${waitingText}${manualText}`, live: true};
+        if (work.status === "daily_limit" && pending) return {text: `${label} · Daily limit reached · ${pending} ready${waitingText} · Continue ${autoStatusTime(work.next_run_at)}${manualText}`, live: false};
+        if (work.status === "error") return {text: `${label} · Check failed · Retry ${autoStatusTime(work.next_run_at)}`, live: false};
+        if (pending) return {text: `${label} · ${pending} ready · ${waiting} waiting for retry${manualText}`, live: false};
+        if (waiting) return {text: `${label} · ${waiting} waiting for retry${retry}${manualText}`, live: false};
+        if (manual) return {text: `${label} · ${manual} need manual lookup · Automatic attempts finished`, live: false};
+        return {text: `${label} · No missing information queued`, live: false};
+      }
+      const authors = state.authorMonitors || [];
+      const selected = selectedAuthorMonitor();
+      if (scholarGlobalCooldownActive() && (!selected || authorMonitorIsScholar(selected))) return {text: scholarGlobalCooldownText(), live: false};
+      const scope = selected ? [selected] : authors;
+      const active = scope.find(authorMonitorIsBackgroundScholarJob);
+      if (active) return {text: `${active.name || "Author"} · ${active.message || "Checking publications..."}`, live: true};
+      const failed = scope.find(a => ["error", "cooldown"].includes(a.status));
+      if (failed?.network_retryable || failed?.profile_retryable) return {
+        text: failed.message,
+        detail: `${failed.name || "Author"}\n${failed.error_detail || failed.message}\nLast attempt: ${autoStatusTime(failed.last_checked_at)}\nAutomatic retry pending`,
+        live: false, waiting: true
+      };
+      if (failed) return {text: `${failed.name || "Author"} · ${failed.message || "Last check failed"}`, live: false};
+      const review = scope.find(a => a.status === "partial");
+      if (review) return {text: `${review.name || "Author"} · ${review.message || "Refresh completed; some publications need identity review."}`, live: false};
+      const times = scope.map(a => a.last_success_at).filter(Boolean).sort();
+      return {text: times.length ? `Publications · Last successful check ${autoStatusTime(times[times.length - 1])}${selected ? ` · ${selected.message || ""}` : ` · ${times.length} authors`}` : "Publications · Waiting for scheduled check", live: false};
+    }
+
+    function authorMonitorDisplayedActivity(channel = "primary") {
       const secondary = channel === "secondary";
-      const base = `library-activity-status${secondary ? " secondary" : ""}`;
+      const refresh = secondary ? metadataRefreshActivityText("author") : "";
+      if (refresh) return {text: refresh, live: true};
       const text = secondary ? state.authorMonitorSecondaryActivityText : state.authorMonitorActivityText;
       const live = secondary ? state.authorMonitorSecondaryActivityLive : state.authorMonitorActivityLive;
-      if (!text) return base;
+      return text ? {text, live} : authorMonitorIdleActivity(channel);
+    }
+
+    function authorMonitorActivityStatusClass(channel = "primary") {
+      const base = `library-activity-status${channel === "secondary" ? " secondary" : ""}`;
+      const {text, live, waiting} = authorMonitorDisplayedActivity(channel);
       if (live) return `${base} live`;
-      if (/failed|could not|error/i.test(text)) return `${base} err`;
-      return `${base} ok`;
+      if (waiting) return base;
+      if (text === "Refresh complete") return `${base} refresh-complete`;
+      if (/failed|could not|error|paused/i.test(text)) return `${base} err`;
+      return text ? `${base} ok` : base;
+    }
+
+    function syncAuthorMonitorActivityDisplay() {
+      for (const channel of ["primary", "secondary"]) {
+        const element = $(channel === "secondary" ? "authorMonitorSecondaryActivityStatus" : "authorMonitorActivityStatus");
+        if (!element) continue;
+        const {text, detail} = authorMonitorDisplayedActivity(channel);
+        element.textContent = text;
+        element.title = detail || text;
+        element.className = authorMonitorActivityStatusClass(channel);
+      }
     }
 
     function updateAuthorMonitorActivityStatus(text = "", options = {}) {
@@ -52527,6 +54444,7 @@ INDEX_HTML = """<!doctype html>
         status.title = text;
         status.className = authorMonitorActivityStatusClass(secondary ? "secondary" : "primary");
       }
+      syncAuthorMonitorActivityDisplay();
       if (text && !options.live && options.clear !== false) {
         const scheduledKind = state[kindKey];
         state[timerKey] = window.setTimeout(() => {
@@ -52540,12 +54458,13 @@ INDEX_HTML = """<!doctype html>
             current.title = "";
             current.className = authorMonitorActivityStatusClass(secondary ? "secondary" : "primary");
           }
+          syncAuthorMonitorActivityDisplay();
         }, Number(options.delay || 2200));
       }
     }
 
     function authorMonitorIsBackgroundScholarJob(author) {
-      return ["idle", "queued", "refreshing"].includes(String(author?.status || ""));
+      return ["queued", "refreshing"].includes(String(author?.status || ""));
     }
 
     function syncAuthorMonitorBackgroundScholarStatus(authors = state.authorMonitors) {
@@ -52611,14 +54530,9 @@ INDEX_HTML = """<!doctype html>
           const unresolved = Number(job.unresolved || 0);
           const message = Number(job.total || 0)
             ? `Metadata complete · ${matched} matched${unresolved ? ` · ${unresolved} unresolved` : ""}`
-            : "Imported-paper metadata is up to date.";
+            : "No eligible papers in this batch; recent attempts remain deferred.";
           updateAuthorMonitorActivityStatus(message, {live: false});
-          const snapshotRes = await fetch(`/api/author-monitor?author_id=${Number(state.authorMonitorSelectedId || 0)}`);
-          const snapshot = await snapshotRes.json();
-          if (snapshotRes.ok) {
-            applyAuthorMonitorSnapshot(snapshot);
-            if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
-          }
+          prefetchAuthorMonitorIndex({force: true}).catch(() => {});
           state.authorMonitorIdentifierRequests.clear();
         } else {
           const message = Array.isArray(job.errors) && job.errors.length
@@ -52632,7 +54546,7 @@ INDEX_HTML = """<!doctype html>
         if (pendingRequest) {
           startAuthorMonitorEnrichment(pendingRequest.authorId, pendingRequest);
         } else if (state.mode === "author") {
-          renderAuthorMonitor({preserveScroll: true});
+          refreshAuthorMonitorInPlace();
         }
       } catch (error) {
         state.authorMonitorEnrichmentJobId = "";
@@ -52649,34 +54563,9 @@ INDEX_HTML = """<!doctype html>
         && Number(request.maxPapers || 0) === Number(job?.max_papers || 0);
     }
 
-    function scheduleAuthorMonitorIdleEnrichment(authorId = state.authorMonitorSelectedId) {
-      const targetAuthorId = Number(authorId || 0);
-      if (
-        targetAuthorId <= 0
-        || state.authorMonitorEnrichmentStarted
-        || state.authorMonitorEnrichmentScheduled
-      ) {
-        return;
-      }
-      state.authorMonitorEnrichmentScheduled = true;
-      const startWhenStillUseful = () => {
-        window.setTimeout(() => {
-          state.authorMonitorEnrichmentScheduled = false;
-          if (
-            state.mode !== "author"
-            || state.authorMonitorEnrichmentStarted
-            || Number(state.authorMonitorSelectedId || 0) !== targetAuthorId
-          ) {
-            return;
-          }
-          startAuthorMonitorEnrichment(targetAuthorId, {maxPapers: 80});
-        }, 1800);
-      };
-      if ("requestIdleCallback" in window) {
-        window.requestIdleCallback(startWhenStillUseful, {timeout: 2200});
-      } else {
-        window.setTimeout(startWhenStillUseful, 300);
-      }
+    function scheduleAuthorMonitorIdleEnrichment() {
+      // The bounded server worker owns automatic work, independently of tabs.
+      syncAuthorMonitorActivityDisplay();
     }
 
     async function startAuthorMonitorEnrichment(authorId = state.authorMonitorSelectedId, options = {}) {
@@ -52691,7 +54580,6 @@ INDEX_HTML = """<!doctype html>
         state.authorMonitorEnrichmentPendingRequest = request;
         return;
       }
-      state.authorMonitorEnrichmentStarted = true;
       updateAuthorMonitorActivityStatus("Preparing imported-paper metadata...", {live: true, clear: false});
       try {
         const res = await fetch("/api/author-monitor/enrich", {
@@ -52753,65 +54641,14 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function refreshAuthorMonitorMetadataFromIdentifier(paper) {
-      if (!paper?.paper_id) return;
-      const root = $("authorMonitorDetailBody");
-      const input = root?.querySelector("#libraryDetailDoiInput");
-      const identifier = String(input?.value || "").trim();
-      const status = $("authorMonitorDetailStatus");
-      const buttons = root?.querySelectorAll("button") || [];
-      if (!identifier) {
-        if (status) {
-          status.textContent = "Enter a DOI or arXiv ID first.";
-          status.className = "library-detail-status err";
-        }
-        input?.focus({preventScroll: true});
-        return;
-      }
-      buttons.forEach((button) => button.disabled = true);
-      updateAuthorMonitorActivityStatus("Refreshing selected paper metadata...", {
-        live: true,
-        clear: false
-      });
-      if (status) {
-        status.textContent = "Refreshing metadata from identifier...";
-        status.className = "library-detail-status";
-      }
-      try {
-        const res = await fetch("/api/library/refresh-metadata", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            paper_id: paper.paper_id,
-            identifier,
-            snapshot: false
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
-        updatePaperState(paper.paper_id, data.paper);
-        state.figureFailures.delete(paper.paper_id);
-        const snapshotRes = await fetch(
-          `/api/author-monitor?author_id=${Number(state.authorMonitorSelectedId || 0)}`
-        );
-        const snapshot = await snapshotRes.json();
-        if (!snapshotRes.ok) throw new Error(snapshot.error || "Could not reload Author Monitor");
-        applyAuthorMonitorSnapshot(snapshot);
-        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
-        updateAuthorMonitorActivityStatus("Paper metadata refreshed.", {live: false});
-      } catch (error) {
-        const message = error.message || "Could not refresh metadata";
-        updateAuthorMonitorActivityStatus(`Metadata refresh failed: ${message}`, {live: false});
-        if (status) {
-          status.textContent = message;
-          status.className = "library-detail-status err";
-        }
-        buttons.forEach((button) => button.disabled = false);
-      }
+      return refreshLibraryMetadataFromDoi(paper);
     }
 
     function renderAuthorMonitorPaperDetail() {
+      closeMetadataRefreshTooltip();
       const root = $("authorMonitorDetailBody");
       if (!root) return;
+      delete root.dataset.metadataPaperId;
       const paper = selectedAuthorMonitorPaper();
       if (!paper) {
         root.innerHTML = runtimeBrandedEmptyMarkup("Select a paper to show its details.");
@@ -52843,12 +54680,17 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
-        <div class="actions author-detail-actions">
+        <div class="actions paper-detail-actions author-detail-actions">
+          <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="author-preview-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"}" data-action="author-download-pdf">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
           ${paper.url ? `<button class="action" data-action="author-open-page">Open Website</button>` : ""}
+          </div>
+          <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="author-open-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
+          ${metadataRefreshButtonMarkup(paper)}
+          </div>
         </div>
         <div class="library-detail-status" id="authorMonitorDetailStatus" data-role="status"></div>
         ${libraryDetailMetadataMarkup(paper, authors, null, {
@@ -52878,9 +54720,6 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="author-copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshAuthorMonitorMetadataFromIdentifier(paper));
-      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") refreshAuthorMonitorMetadataFromIdentifier(paper);
-      });
       wirePreprintIdentifierControls(root, paper);
       wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
@@ -53222,8 +55061,8 @@ INDEX_HTML = """<!doctype html>
             <div class="author-monitor-detail-body library-detail" id="authorMonitorDetailBody"></div>
           </aside>
           <div class="author-monitor-status-bar">
-            <span class="${scholarPauseApplies ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPauseApplies ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}">${escapeHtml(scholarPauseApplies ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}</span>
-            <span class="${authorMonitorActivityStatusClass("secondary")}" id="authorMonitorSecondaryActivityStatus" title="${escapeAttr(state.authorMonitorSecondaryActivityText || "")}">${escapeHtml(state.authorMonitorSecondaryActivityText || "")}</span>
+            <span class="${scholarPauseApplies ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPauseApplies ? scholarGlobalCooldownText() : (authorMonitorDisplayedActivity().detail || authorMonitorDisplayedActivity().text))}">${escapeHtml(scholarPauseApplies ? scholarGlobalCooldownText() : authorMonitorDisplayedActivity().text)}</span>
+            <span class="${authorMonitorActivityStatusClass("secondary")}" id="authorMonitorSecondaryActivityStatus" title="${escapeAttr(authorMonitorDisplayedActivity("secondary").text)}">${escapeHtml(authorMonitorDisplayedActivity("secondary").text)}</span>
           </div>
         </div>
       `;
@@ -53415,15 +55254,13 @@ INDEX_HTML = """<!doctype html>
       closeAnalysis();
       stopArxivUpdateCountdown();
       setPrimaryView("author");
-      const cacheIsFresh = state.authorMonitorLoaded
-        && Date.now() - Number(state.authorMonitorLoadedAt || 0) < AUTHOR_MONITOR_PAPER_CACHE_TTL_MS
-        && authorMonitorScopeHasExpectedPapers();
-      if (cacheIsFresh) {
+      const hasCachedView = state.authorMonitorLoaded && authorMonitorScopeHasExpectedPapers();
+      if (hasCachedView) {
         renderAuthorMonitor();
-        updateAuthorMonitorActivityStatus("", {live: false});
+        syncAuthorMonitorActivityDisplay();
         refreshAuthorMonitorSummary();
         const pendingImport = state.authorMonitors.find(
-          (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+          authorMonitorIsBackgroundScholarJob
         );
         if (pendingImport) {
           pollAuthorMonitorInitialImport(Number(pendingImport.id));
@@ -53439,7 +55276,7 @@ INDEX_HTML = """<!doctype html>
         const requestedId = Number(state.authorMonitorSelectedId) >= 0
           ? Number(state.authorMonitorSelectedId)
           : initialAuthorMonitorSelectedId();
-        await loadAuthorMonitorScope(requestedId, {force: true});
+        await loadAuthorMonitorScope(requestedId, {force: false});
         updateAuthorMonitorActivityStatus("Author Monitor loaded.", {live: false});
       } catch (error) {
         updateAuthorMonitorActivityStatus(error.message || "Could not load Author Monitor", {live: false});
@@ -53447,8 +55284,9 @@ INDEX_HTML = """<!doctype html>
         state.authorMonitorLoading = false;
       }
       if (state.mode === "author") renderAuthorMonitor();
+      refreshAuthorMonitorSummary();
       const pendingImport = state.authorMonitors.find(
-        (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+        authorMonitorIsBackgroundScholarJob
       );
       if (pendingImport) {
         pollAuthorMonitorInitialImport(Number(pendingImport.id));
@@ -53570,7 +55408,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function fetchAuthorMonitorSnapshot(authorId = 0) {
-      return fetchAuthorMonitorReadSafeJson(`/api/author-monitor?author_id=${Number(authorId || 0)}`);
+      return fetchAuthorMonitorReadSafeJson(`/api/author-monitor?author_id=${Number(authorId || 0)}&cards_only=1`);
     }
 
     async function reconcileAddedAuthorMonitor(profile) {
@@ -53614,7 +55452,7 @@ INDEX_HTML = """<!doctype html>
           updateAuthorMonitorTopDot();
           syncAuthorMonitorBackgroundScholarStatus();
         }
-        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+        if (state.mode === "author") refreshAuthorMonitorInPlace();
         const author = state.authorMonitors.find((item) => Number(item.id) === Number(authorId));
         if (!author) {
           updateAuthorMonitorActivityStatus("The imported author is no longer monitored.", {
@@ -53635,6 +55473,18 @@ INDEX_HTML = """<!doctype html>
           );
           return;
         }
+        if (["idle", "ready"].includes(author.status)) {
+          syncAuthorMonitorBackgroundScholarStatus();
+          return;
+        }
+        if (author.status === "partial") {
+          updateAuthorMonitorActivityStatus(
+            author.message || "Refresh completed; some publications need identity review.",
+            {live: false, clear: false, channel: "secondary", kind: "scholar-background"}
+          );
+          if (options.enrichOnSuccess !== false) scheduleAuthorMonitorIdleEnrichment(authorId);
+          return;
+        }
         if (author.status === "success") {
           updateAuthorMonitorActivityStatus(
             options.useAuthorMessage && author.message
@@ -53642,7 +55492,7 @@ INDEX_HTML = """<!doctype html>
               : `${author.name || "Author"} imported successfully · ${Number(author.paper_count || 0)} papers.`,
             {live: false, channel: "secondary", kind: "scholar-background", delay: 4000}
           );
-          if (options.enrichOnSuccess !== false) startAuthorMonitorEnrichment(authorId);
+          if (options.enrichOnSuccess !== false) scheduleAuthorMonitorIdleEnrichment(authorId);
           return;
         }
         updateAuthorMonitorActivityStatus(
@@ -54186,6 +56036,7 @@ INDEX_HTML = """<!doctype html>
       const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
       article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}${inLibrary ? " in-library" : ""}${selected ? " report-selected" : ""}`;
       article.dataset.paperId = paper.paper_id;
+      article._monitorPaper = paper;
       article.tabIndex = -1;
       article.setAttribute("role", "option");
       article.setAttribute("aria-selected", selected ? "true" : "false");
@@ -54257,7 +56108,7 @@ INDEX_HTML = """<!doctype html>
       });
       article.querySelector('[data-action="download"]').addEventListener("click", () => downloadReportPaper(article, paper.paper_id));
       const pdfButton = article.querySelector('[data-action="open-pdf"]');
-      if (pdfButton) pdfButton.addEventListener("click", () => openPdf(article, paper));
+      if (pdfButton) pdfButton.addEventListener("click", () => openPdf(article, monitorPaperForId(paper.paper_id) || paper));
       const analysisButton = article.querySelector('[data-action="view-analysis"]');
       if (analysisButton) analysisButton.addEventListener("click", () => viewAnalysis(article, paper.paper_id));
       const deletePdfButton = article.querySelector('[data-action="delete-pdf"]');
@@ -54274,6 +56125,7 @@ INDEX_HTML = """<!doctype html>
       } else if (reserveFigure && !paper.image_url) {
         queuePaperFigureHydration(paper.paper_id);
       }
+      syncMonitorPaperActions(article, paper);
       return article;
     }
 
@@ -54467,7 +56319,9 @@ INDEX_HTML = """<!doctype html>
       try {
         if (state.websiteLinkBrowser === "system") return openSystemWebsite(url);
         if (!window.gewuBrowser?.openURL) throw new Error("Browser is not ready. Please retry.");
-        return window.gewuBrowser.openURL(url, {paper_id:paper?.paper_id || ""});
+        const selected = state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id) : null;
+        return window.gewuBrowser.openURL(url, {paper_id:paper?.paper_id || "",
+          library_item_id:selected?.paper_id === paper?.paper_id ? selected?.id || 0 : 0});
       } catch (error) {
         showMonitorStatusMessage(error.message || "Could not open website");
         return null;
@@ -54757,6 +56611,87 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function monitorPaperForId(paperId) {
+      return [state.papers, state.themePapers, state.authorMonitorPapers,
+        ...Object.values(state.reportCache).map(report => report?.papers),
+        ...Object.values(state.themePapersByDate)]
+        .filter(Array.isArray).flat().find(paper => paper.paper_id === paperId);
+    }
+
+    function setMonitorPaperOperation(paperId, kind, operation) {
+      const operations = state.monitorPaperOperations.get(paperId) || {};
+      if (operation) operations[kind] = operation;
+      else delete operations[kind];
+      if (Object.keys(operations).length) state.monitorPaperOperations.set(paperId, operations);
+      else state.monitorPaperOperations.delete(paperId);
+      refreshMonitorPaperActions(paperId);
+    }
+
+    function syncMonitorPaperActions(article, paper) {
+      if (!article || !paper) return;
+      const operations = state.monitorPaperOperations.get(paper.paper_id) || {};
+      const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
+      article.classList.toggle("in-library", inLibrary);
+      const library = article.querySelector('[data-action="add-library"]');
+      if (library) {
+        // Leave an unrelated open folder picker and its focus intact.
+        if (inLibrary && library.dataset.libraryState !== "show") setReportLibraryButtonShowState(library);
+        else if (!inLibrary && (library.dataset.libraryState !== "add" || (!operations.library?.busy && library.classList.contains("is-busy")))) setReportLibraryButtonAddState(library);
+        if (operations.library?.busy) {
+          library.disabled = true;
+          library.classList.add("is-busy");
+          library.textContent = "Adding...";
+        }
+      }
+      const download = article.querySelector('[data-action="download"]');
+      if (download) download.disabled = Boolean(operations.download?.busy);
+      const actions = article.querySelector(".actions");
+      if (actions && paper.merged_pdf_path) {
+        for (const [action, label, title] of [["open-pdf", "PDF", "Open merged PDF in Preview"], ["delete-pdf", "Delete PDF", "Delete local PDF and reset download status"]]) {
+          if (article.querySelector(`[data-action="${action}"]`)) continue;
+          const button = document.createElement("button");
+          button.className = action === "delete-pdf" ? "action danger" : "action";
+          button.dataset.action = action;
+          button.textContent = label;
+          button.title = title;
+          button.addEventListener("click", () => action === "open-pdf"
+            ? openPdf(article, monitorPaperForId(paper.paper_id) || paper)
+            : deletePaperAsset(article, paper.paper_id, "delete-pdf"));
+          actions.insertBefore(button, article.querySelector('[data-role="status"]'));
+        }
+      }
+      const deletion = article.querySelector('[data-action="delete-pdf"]');
+      if (deletion) deletion.disabled = Boolean(operations.download?.busy);
+      const status = article.querySelector('[data-role="status"]');
+      if (status) {
+        status.textContent = [operations.download?.busy ? "Downloading..." : operations.download?.error,
+          operations.library?.error].filter(Boolean).join(" · ");
+        status.className = operations.download?.error || operations.library?.error ? "status err" : "status";
+      }
+      // Keep the retained monitor DOM cache valid without replacing its cards.
+      const fields = ["merged_pdf_path", "download_status", "in_library", "library_item_count"];
+      article._monitorPaper = {...(article._monitorPaper || paper)};
+      fields.forEach(key => { article._monitorPaper[key] = paper[key]; });
+    }
+
+    function refreshMonitorPaperActions(paperId) {
+      const paper = monitorPaperForId(paperId);
+      if (!paper) return;
+      const root = $("papers");
+      const surfaces = [[root, root?.dataset.monitorMode],
+        ...Object.entries(state.monitorPaperDomCache).map(([mode, cache]) => [cache?.fragment, mode])];
+      for (const [surface, mode] of surfaces) {
+        if (!surface) continue;
+        surface.querySelectorAll(`.paper[data-paper-id="${CSS.escape(paperId)}"]`)
+          .forEach(article => syncMonitorPaperActions(article, paper));
+        const cards = [...surface.querySelectorAll(".paper")];
+        if (!cards.length) continue;
+        const signature = monitorPaperSignature(cards.map(card => card._monitorPaper), mode);
+        if (surface === root) root.dataset.monitorSignature = signature;
+        else state.monitorPaperDomCache[mode].signature = signature;
+      }
+    }
+
     function captureMonitorViewport(article) {
       const mode = state.mode;
       const root = $("papers");
@@ -54797,7 +56732,7 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "library") renderActiveLibraryTab();
       else if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
       else if (state.mode === "theme") renderThemeMonitor();
-      else renderReport();
+      else if (state.mode === "report") renderReport();
       restoreMonitorViewport(options.monitorViewport);
     }
 
@@ -54830,20 +56765,19 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function downloadReportPaper(article, paperId) {
-      const buttons = article.querySelectorAll("button");
-      const status = article.querySelector('[data-role="status"]');
-      buttons.forEach((button) => button.disabled = true);
-      status.textContent = "Downloading...";
-      status.className = "status";
+      if (state.monitorPaperOperations.get(paperId)?.download?.busy) return;
+      setMonitorPaperOperation(paperId, "download", {busy: true});
       try {
         const data = await requestPaperPdfDownload({paper_id: paperId});
-        const monitorViewport = captureMonitorViewport(article);
         updatePaperState(paperId, data.paper);
-        renderCurrentPaperSurface({monitorViewport});
+        setMonitorPaperOperation(paperId, "download", null);
       } catch (error) {
-        status.textContent = error.message;
-        status.className = "status err";
-        buttons.forEach((button) => button.disabled = false);
+        setMonitorPaperOperation(paperId, "download", {error: error.message});
+      } finally {
+        // A Library view opened mid-download may have cached an empty file list.
+        // Invalidate it without redrawing the user's current workspace.
+        delete state.paperFilesByPaperId?.[paperId];
+        delete state.paperFileRequests?.[paperId];
       }
     }
 
@@ -55166,6 +57100,93 @@ INDEX_HTML = """<!doctype html>
       saveQuickLookSettings("builtin_all");
     }
 
+    function setLibraryDestinationSettingsBusy(busy) {
+      state.libraryDestinationSettingsBusy = busy;
+      ["chooseLibraryDestination", "saveLibraryDestinationSettings", "resetLibraryDestinationSettings"].forEach(id => {
+        $(id).disabled = busy || !state.libraryDestinationSettingsLoaded;
+      });
+    }
+
+    function applyLibraryDestinationSettings(settings) {
+      state.libraryDefaultAddFolderId = Number(settings.folder_id || 0);
+      state.libraryDestinationDraftId = state.libraryDefaultAddFolderId;
+      $("libraryDestinationPath").textContent = settings.title || "Library / unsorted";
+    }
+
+    async function openLibraryDestinationSettings() {
+      const backdrop = $("libraryDestinationSettingsBackdrop");
+      if (!backdrop || state.libraryDestinationSettingsBusy) return;
+      closeLibraryAddMenus();
+      state.libraryDestinationSettingsLoaded = false;
+      setLibraryDestinationSettingsBusy(true);
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
+      const status = $("libraryDestinationSettingsStatus");
+      status.textContent = "Loading folders...";
+      status.className = "citation-settings-status";
+      try {
+        const settings = await fetchJson("/api/settings/add-to-library");
+        if (!backdrop.classList.contains("open")) return;
+        applyLibraryDestinationSettings(settings);
+        state.libraryDestinationSettingsLoaded = true;
+        status.textContent = settings.fallback ? "The saved folder is unavailable. Using Library / unsorted." : "Choose a folder, then Save.";
+      } catch (error) {
+        status.textContent = error.message || "Could not load the default folder";
+        status.className = "citation-settings-status err";
+      } finally {
+        setLibraryDestinationSettingsBusy(false);
+      }
+    }
+
+    function closeLibraryDestinationSettings() {
+      closeLibraryAddMenus();
+      $("libraryDestinationSettingsBackdrop").classList.remove("open");
+      $("libraryDestinationSettingsBackdrop").setAttribute("aria-hidden", "true");
+    }
+
+    async function chooseLibraryDestination(event) {
+      event?.preventDefault();
+      event?.stopPropagation();
+      if (state.libraryDestinationSettingsBusy || !state.libraryDestinationSettingsLoaded) return;
+      const backdrop = $("libraryDestinationSettingsBackdrop");
+      await openLibraryAddMenu(backdrop, "", $("chooseLibraryDestination"), null, {
+        selectedFolderId: state.libraryDestinationDraftId,
+        portalRoot: backdrop,
+        onSelect: ({folderId, path}) => {
+          state.libraryDestinationDraftId = folderId;
+          $("libraryDestinationPath").textContent = path;
+          $("libraryDestinationSettingsStatus").textContent = "Click Save to use this folder.";
+          $("libraryDestinationSettingsStatus").className = "citation-settings-status";
+        }
+      });
+    }
+
+    async function saveLibraryDestinationSettings(reset = false) {
+      if (state.libraryDestinationSettingsBusy || !state.libraryDestinationSettingsLoaded) return;
+      closeLibraryAddMenus();
+      const folder_id = reset ? 0 : Number(state.libraryDestinationDraftId || 0);
+      setLibraryDestinationSettingsBusy(true);
+      const status = $("libraryDestinationSettingsStatus");
+      status.textContent = "Saving default folder...";
+      status.className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/add-to-library", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({folder_id})
+        });
+        const settings = await res.json();
+        if (!res.ok) throw new Error(settings.error || "Could not save the default folder");
+        applyLibraryDestinationSettings(settings);
+        status.textContent = "Default folder saved.";
+        status.className = "citation-settings-status ok";
+      } catch (error) {
+        status.textContent = error.message || "Could not save the default folder";
+        status.className = "citation-settings-status err";
+      } finally {
+        setLibraryDestinationSettingsBusy(false);
+      }
+    }
+
     function applyWebsiteLinkSettings(settings = {}) {
       state.websiteLinkBrowser = settings.browser === "system" ? "system" : "builtin";
       state.browserCaptureDetailsExpanded = settings.capture_details_expanded === true;
@@ -55462,7 +57483,7 @@ INDEX_HTML = """<!doctype html>
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
       focusDialogSurface(backdrop);
-      $("citationSettingsStatus").textContent = "Loading open source settings...";
+      $("citationSettingsStatus").textContent = "Loading literature data source settings...";
       $("citationSettingsStatus").className = "citation-settings-status";
       $("openalexCitationSettingsStatus").textContent = "Loading OpenAlex settings...";
       $("openalexCitationSettingsStatus").className = "citation-settings-status";
@@ -55478,7 +57499,7 @@ INDEX_HTML = """<!doctype html>
       try {
         const res = await fetch("/api/settings/citation");
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not load open source settings");
+        if (!res.ok) throw new Error(data.error || "Could not load literature data source settings");
         updateCitationSettingsUi(data.ads || {});
         updateOpenalexSettingsUi(data.openalex || {});
         updateSemanticScholarSettingsUi(data.semantic_scholar || {});
@@ -55489,7 +57510,7 @@ INDEX_HTML = """<!doctype html>
         $("semanticScholarCitationSettingsStatus").textContent = semanticScholarSettingsStatusText(data.semantic_scholar || {});
         $("semanticScholarCitationSettingsStatus").className = `citation-settings-status${data.semantic_scholar?.configured ? " ok" : ""}`;
       } catch (error) {
-        $("citationSettingsStatus").textContent = error.message || "Could not load open source settings";
+        $("citationSettingsStatus").textContent = error.message || "Could not load literature data source settings";
         $("citationSettingsStatus").className = "citation-settings-status err";
         $("openalexCitationSettingsStatus").textContent = error.message || "Could not load OpenAlex settings";
         $("openalexCitationSettingsStatus").className = "citation-settings-status err";
@@ -57546,13 +59567,12 @@ INDEX_HTML = """<!doctype html>
       renderAutoMonitorStatus();
     }
 
-    function captureBrowserWorkspaceReturn() {
+    function captureBrowserWorkspaceReturn(context = {}) {
       const mode = state.mode;
       if (!["library", "report", "theme", "author"].includes(mode)) return null;
       const view = mode === "library" && state.libraryTab === "my-publications" ? "my-publications" : mode;
       const focus = document.activeElement;
-      // Snapshot only workspace viewport geometry, once per outbound link. Do
-      // not copy paper data, rebuild DOM, fetch records, or inspect web pages.
+      // Retain geometry and stable source IDs, never a stale copy of paper data.
       const selector = "#papers, .sidebar, .library-columns, .library-column-body, .library-table-body, "
         + ".library-detail, .library-resource-body, .library-tab-scroll, .library-search-results-body, "
         + ".my-publications-table-wrap, .my-publications-stat-list, .author-monitor-authors, "
@@ -57562,6 +59582,11 @@ INDEX_HTML = """<!doctype html>
         if (state.mode !== "browser") return;
         state.mode = mode;
         setPrimaryView(view, {preserveViewport:true});
+        if (mode === "library" && view !== "my-publications" && context.paper_id
+            && (state.librarySelection?.type !== "item" || Number(state.librarySelection.id) !== Number(context.library_item_id))) {
+          navigateToPaperInLibrary(context.paper_id, context.library_item_id || 0).catch(error => showMonitorStatusMessage(error.message));
+          return;
+        }
         if (focus?.isConnected) focus.focus({preventScroll:true});
         for (const {element, top, left} of scroll) {
           if (element.isConnected) { element.scrollTop = top; element.scrollLeft = left; }
@@ -57624,39 +59649,44 @@ INDEX_HTML = """<!doctype html>
       const region = $("windowDragRegion");
       const handler = window.webkit?.messageHandlers?.windowDrag;
       if (!region || !handler) return;
-      let dragging = false;
+      let pending = null;
       const post = (type, event) => {
-        handler.postMessage({type, screenX: event.screenX, screenY: event.screenY});
+        handler.postMessage({type, clientX: event.clientX, clientY: event.clientY});
       };
       region.addEventListener("pointerdown", (event) => {
         if (event.button !== 0 || event.target !== region) return;
-        dragging = true;
+        pending = {pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY};
         region.setPointerCapture?.(event.pointerId);
-        post("begin", event);
         event.preventDefault();
       });
       region.addEventListener("pointermove", (event) => {
-        if (!dragging) return;
-        post("move", event);
+        if (!pending || event.pointerId !== pending.pointerId) return;
+        // A click stays in WebKit so double-click zoom/restore is unchanged.
+        if (Math.hypot(event.clientX - pending.clientX, event.clientY - pending.clientY) < 3) return;
+        const start = pending;
+        pending = null;
+        region.releasePointerCapture?.(event.pointerId);
+        post("begin", start);
         event.preventDefault();
       });
       const stop = (event) => {
-        if (!dragging) return;
-        dragging = false;
-        post("end", event);
+        if (!pending || event.pointerId !== pending.pointerId) return;
+        pending = null;
         region.releasePointerCapture?.(event.pointerId);
       };
       region.addEventListener("pointerup", stop);
       region.addEventListener("pointercancel", stop);
+      region.addEventListener("lostpointercapture", stop);
       region.addEventListener("dblclick", (event) => {
         if (event.button !== 0 || event.target !== region) return;
-        dragging = false;
+        pending = null;
         post("toggleFill", event);
         event.preventDefault();
         event.stopPropagation();
       });
     }
 
+    $("primaryViewSwitcher").addEventListener("click", focusClickedPrimaryTab, true);
     $("reportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
       showMonitorStatusMessage(error.message);
     }));
@@ -57806,19 +59836,14 @@ INDEX_HTML = """<!doctype html>
       if (Number(event.button || 0) !== 0) return;
       const input = $("librarySearchBox");
       if (!input) return;
-      event.preventDefault();
       event.stopPropagation();
+      // Let the input handle native caret placement, double-click and drag selection.
+      if (event.target === input) return;
+      event.preventDefault();
       input.focus({preventScroll: true});
       const caret = searchInputCaretIndexFromPoint(input, event.clientX);
       input.setSelectionRange?.(caret, caret);
     }, {capture: true});
-    $("librarySearchBox").addEventListener("click", (event) => {
-      const input = event.currentTarget;
-      input.focus({preventScroll: true});
-      if (Number(event.detail || 0) > 1) return;
-      const caret = searchInputCaretIndexFromPoint(input, event.clientX);
-      input.setSelectionRange?.(caret, caret);
-    });
     $("librarySearchBox").addEventListener("input", (event) => {
       scheduleLibrarySearch(event.target.value);
     });
@@ -57892,6 +59917,13 @@ INDEX_HTML = """<!doctype html>
     });
     $("saveQuickLookSettings").addEventListener("click", () => saveQuickLookSettings());
     $("resetQuickLookSettings").addEventListener("click", resetQuickLookSettings);
+    $("closeLibraryDestinationSettings").addEventListener("click", closeLibraryDestinationSettings);
+    $("libraryDestinationSettingsBackdrop").addEventListener("click", event => {
+      if (event.target === $("libraryDestinationSettingsBackdrop")) closeLibraryDestinationSettings();
+    });
+    $("chooseLibraryDestination").addEventListener("click", chooseLibraryDestination);
+    $("saveLibraryDestinationSettings").addEventListener("click", () => saveLibraryDestinationSettings());
+    $("resetLibraryDestinationSettings").addEventListener("click", () => saveLibraryDestinationSettings(true));
     $("closeWebsiteLinkSettings").addEventListener("click", closeWebsiteLinkSettings);
     $("websiteLinkSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("websiteLinkSettingsBackdrop")) closeWebsiteLinkSettings();
@@ -58003,6 +60035,12 @@ INDEX_HTML = """<!doctype html>
         closeQuickLookSettings();
         return;
       }
+      if ($("libraryDestinationSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryDestinationSettings();
+        return;
+      }
       if ($("websiteLinkSettingsBackdrop").classList.contains("open")) {
         event.preventDefault();
         event.stopPropagation();
@@ -58106,6 +60144,7 @@ INDEX_HTML = """<!doctype html>
       if (!event.target.closest?.(".publication-export-menu")) closePublicationExportMenu();
     });
     window.addEventListener("resize", () => {
+      if (state.libraryQuickLookOpen && $("libraryQuickLook")?.classList.contains("markdown-preview")) applyLibraryQuickLookFrame();
       if (state.mode === "library") resizeLibraryViewport();
       if (state.mode === "report") {
         revealActiveReportTab();
@@ -58191,6 +60230,8 @@ INDEX_HTML = """<!doctype html>
     window.addEventListener("storage", handleLibraryRefreshSignal);
     window.handleNativeFinderDrop = handleNativeFinderDrop;
     window.handleNativeLibraryItemDrop = handleNativeLibraryItemDrop;
+    window.handleNativeLibraryManagedDrop = handleNativeLibraryManagedDrop;
+    window.clearNativeLibraryDrag = clearNativeLibraryDrag;
     window.handleNativePaperFileSelection = handleNativePaperFileSelection;
     window.updateNativeFinderDropTarget = updateNativeFinderDropTarget;
     window.clearNativeFinderDropTarget = clearLibraryFinderDropTarget;
@@ -58198,15 +60239,20 @@ INDEX_HTML = """<!doctype html>
     window.openArxivSettings = openArxivSettings;
     window.openFieldSettings = openFieldSettings;
     window.openQuickLookSettings = openQuickLookSettings;
+    window.openLibraryDestinationSettings = openLibraryDestinationSettings;
     window.openWebsiteLinkSettings = openWebsiteLinkSettings;
     window.openFontSizeSettings = openFontSizeSettings;
     window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;
+    window.revealLoaderPaper = revealLoaderPaper;
+    window.finishLoaderPaperReveal = finishLoaderPaperReveal;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;
     window.openIdentifierRecoveryWindow = openIdentifierRecoveryWindow;
     window.setLibraryContentView = setLibraryContentViewFromMenu;
     window.toggleLibraryContentView = toggleLibraryContentViewFromMenu;
     wireWorkspaceWebsiteLinks();
+    window.setTimeout(pollMetadataJobs, 2500);
+    window.setInterval(pollMetadataJobs, 5000);
 
     if (IS_STANDALONE_LOADER_WINDOW) {
       document.body.classList.add("loader-window-body");

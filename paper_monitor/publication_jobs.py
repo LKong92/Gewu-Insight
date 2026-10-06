@@ -14,6 +14,7 @@ from .storage import Storage
 from .time_utils import now_iso
 from .workflow_store import publication_work_snapshot, PUBLICATION_REMOVED_BY_USER
 from .publication_errors import report_publication_error
+from . import scholar_access
 
 MUTATION_LOCK = threading.RLock()
 _WORKERS_LOCK = threading.Lock()
@@ -145,6 +146,7 @@ def source_key(candidate):
     return hashlib.sha256(json.dumps(values,ensure_ascii=False).encode()).hexdigest()
 
 
+@scholar_access.for_storage
 def run_import_step(storage):
     from . import ui_server as ui
     row = storage.conn.execute("SELECT * FROM publication_import_jobs WHERE status IN ('queued','running') ORDER BY id LIMIT 1").fetchone()

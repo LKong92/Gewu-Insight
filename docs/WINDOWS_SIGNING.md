@@ -1,6 +1,10 @@
 # Windows signing and local installation recovery
 
-## Current direction: 0.1.20 desktop shell with local source (2026-09-29)
+## Current delivery: 0.1.21 source desktop (2026-09-29)
+
+The requested Mac alignment is deployed at `dist/windows-preview-0.1.21`, using local source and `.venv`. The original Library reopened successfully with schema 22 and preserved protected records/files. No installer, signing enrollment or system security change was involved. Formal signed-release gates remain separate and unchanged. See [delivery and validation](WINDOWS_MAC_PARITY_0.1.21.md). Do not reinstate the removed 0.1.19 installation.
+
+## Earlier source delivery: 0.1.20 desktop shell with local source (2026-09-29)
 
 The user clarified that Gewu must retain its independent desktop window and
 match 0.1.20. The default CMD launcher now starts the existing complete 0.1.20
@@ -8,7 +12,12 @@ build with this checkout's Python service. About confirms 0.1.20; Library and
 embedded Browser/history render, and normal close/service exit/lock release and
 CMD reopening pass. The 0.1.20 Nature Python and C# fixes are both included.
 See [Desktop from Source](WINDOWS_SOURCE_DESKTOP.md). Source Web is optional
-through `--web`; the installed 0.1.19 and its verified recovery backup remain.
+through `--web`. The user subsequently requested uninstalling 0.1.19 to avoid
+version confusion: its original uninstaller exited 0 on 2026-09-29, and the old
+installation, registration and shortcuts are gone. The 0.1.20 source desktop
+remained running with protected-file, Library and API checks passing. The verified
+0.1.19 recovery backup remains archived and must not be treated as an active App.
+Uninstall evidence: `tmp/uninstall-0.1.19-20260929/`.
 
 The exact formerly blocked 0.1.20 DLL now passes isolated source startup and
 the original-Library launch; why Windows allows it now is unknown. All 2,266

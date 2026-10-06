@@ -31,7 +31,7 @@ internal sealed partial class WorkspaceWindow
                     string target = scenario == "redirect" ? "https://www.w3.org/__gewu_fixture/final" : scenario == "private" ? "http://127.0.0.1/private" : "https://unverified.example/file.pdf";
                     headers = "Location: " + target + "\r\n";
                 }
-                headers += "Content-Length: " + (scenario == "oversized" ? (65L * 1024 * 1024).ToString() : expected.Length.ToString()) + "\r\n";
+                headers += "Content-Length: " + (scenario == "oversized" ? (129L * 1024 * 1024).ToString() : expected.Length.ToString()) + "\r\n";
                 e.Response = remoteEnvironment!.CreateWebResourceResponse(new MemoryStream(expected), code, code == 200 ? "OK" : "Found", headers);
             };
             string url = scenario is "unverified" or "spoof-pdf" ? "https://unverified.example/start" : "https://www.w3.org/__gewu_fixture/start";

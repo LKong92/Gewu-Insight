@@ -1,7 +1,9 @@
 """Capture-to-Library behavior with temporary SQLite/files and synthetic PDFs."""
 import io
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +13,59 @@ from pypdf import PdfWriter
 from paper_monitor import ui_server as ui
 from paper_monitor.browser_capture import BrowserCaptureService, identifier, normalize_snapshot
 from paper_monitor.storage import Storage
+
+
+class BrowserCaptureImportCompatibilityTests(unittest.TestCase):
+    def test_lazy_capture_import_with_pre_update_science_module_keeps_identifier_review(self):
+        # Use a fresh interpreter: this test module otherwise imports capture
+        # during collection, hiding the lazy-import failure seen in an open App.
+        probe = textwrap.dedent('''
+            import sys
+            import tempfile
+            from pathlib import Path
+            from unittest.mock import patch
+            from paper_monitor import ui_server, science_pdf
+            from paper_monitor.storage import Storage
+
+            for name in ('is_science_first_release_text', 'is_science_first_release_pdf'):
+                delattr(science_pdf, name)
+            sys.modules.pop('paper_monitor.science_version', None)
+            assert 'paper_monitor.browser_capture' not in sys.modules
+            from paper_monitor.browser_capture import BrowserCaptureService
+            from paper_monitor.science_version import is_science_first_release_text
+            assert is_science_first_release_text(
+                'First release: 17 September 2026 science.org '
+                '(Page numbers not final at time of first release) 1')
+
+            service = BrowserCaptureService()
+            with tempfile.TemporaryDirectory() as folder:
+                db = Path(folder) / 'capture.sqlite'
+                storage = Storage(db)
+                try:
+                    for kind, value, url in [
+                        ('arxiv', '2609.24843', 'https://arxiv.org/pdf/2609.24843'),
+                        ('doi', '10.1126/science.fixture', 'https://www.science.org/doi/10.1126/science.fixture'),
+                    ]:
+                        capture = service.begin(db, {'url': url})
+                        first = service.review(capture, storage, {'resolve': False})
+                        assert first['identifier'] == value
+                        candidate = {'paper_id': kind + '-fixture', 'title': 'Synthetic article',
+                                     'doi': value if kind == 'doi' else '',
+                                     'raw': {'arxiv_id': value} if kind == 'arxiv' else {}}
+                        with patch.object(service, 'resolve', return_value=candidate) as resolver:
+                            reviewed = service.review(capture, storage, {})
+                            resolver.assert_called_once_with(kind, value)
+                        assert reviewed['can_save'] and reviewed['identifier'] == value
+                        assert reviewed['paper']['title'] == 'Synthetic article'
+                        service.cancel(db, capture.token)
+                    for table in ('papers', 'resources', 'library_items'):
+                        assert storage.conn.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0] == 0
+                finally:
+                    storage.close()
+        ''')
+        result = subprocess.run([sys.executable, '-c', probe], cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class BrowserCaptureTests(unittest.TestCase):
@@ -66,6 +121,111 @@ class BrowserCaptureTests(unittest.TestCase):
     def count(self, table):
         return self.storage.conn.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]
 
+    def test_long_publisher_filename_remains_a_readable_pdf_after_save(self):
+        names = [
+            'Adv Funct Materials - 2026 - Wang - Physics%E2%80%90Grounded Materials Artificial Intelligence for Reliable Materials Discovery.pdf',
+            '材料发现与人工智能' * 30 + '.PDF',
+        ]
+        for index, name in enumerate(names):
+            with self.subTest(filename=name):
+                capture = self.begin(doi='10.1234/long-name-' + str(index))
+                content = self.pdf()
+                with patch.object(ui, 'extract_identifier_from_pdf_or_title', return_value={}), patch.object(ui, 'pdf_layout_title_candidates', return_value=[]):
+                    self.service.upload(capture, content, filename=name)
+                self.review(capture)
+                result = self.save(capture, include_pdf=True, file_type='published_version')
+                self.assertTrue(result['ok'], result)
+                files = self.storage.list_paper_resources(result['paper_id'])
+                self.assertEqual(len(files), 1)
+                resource = files[0]
+                path = Path(self.storage.resource_local_path(resource))
+                self.assertEqual(path.suffix.lower(), '.pdf')
+                self.assertEqual(resource['kind'], 'pdf')
+                self.assertEqual(resource['mime_type'], 'application/pdf')
+                self.assertTrue(self.storage.resource_is_pdf(resource))
+                self.assertEqual(path.read_bytes(), content)
+                self.assertEqual(self.storage.resolve_default_paper_resource(result['paper_id'])['id'], resource['id'])
+                self.assertEqual(ui.canonical_pdf_path_for_paper(self.storage.get_paper(result['paper_id'])), path)
+                self.assertLessEqual(len(path.name), 120)
+                self.assertLessEqual(len(path.name.encode('utf-8')), 220)
+
+    def test_long_attachment_names_keep_type_and_validate_pdf_before_writing(self):
+        self.paper()
+        with self.assertRaisesRegex(ValueError, 'not a valid PDF'):
+            ui.attach_file_to_paper(self.storage, paper_id='first', filename='Long title ' * 30 + '.pdf', content=b'<html>Sign in</html>')
+        self.assertEqual(self.count('resources'), 0)
+        for suffix in ['.md', '.csv']:
+            content = ('content for ' + suffix).encode()
+            resource = ui.attach_file_to_paper(self.storage, paper_id='first',
+                filename='分析数据' * 60 + suffix, content=content, added_via='browser_capture')
+            path = Path(self.storage.resource_local_path(resource))
+            self.assertEqual(path.suffix, suffix)
+            self.assertEqual(resource['kind'], suffix.lstrip('.'))
+            self.assertEqual(resource['mime_type'], ui.mimetypes.guess_type('file' + suffix)[0] or 'application/octet-stream')
+            self.assertFalse(self.storage.resource_is_pdf(resource))
+            self.assertEqual(path.read_bytes(), content)
+
+    def test_filename_policy_preserves_short_names_and_existing_folder_policy(self):
+        for name in ['Article.PDF', 'Notes.md', 'data.tar.gz', '100%20literal.pdf']:
+            self.assertEqual(ui.finder_safe_name(name, preserve_extension=True), name)
+        folder = 'A long folder name ' * 15 + '.pdf'
+        self.assertEqual(ui.finder_safe_name(folder), folder[:120])
+
+    def test_uploaded_original_is_parsed_once_and_metadata_is_recomputed(self):
+        from paper_monitor import pdf_utils
+        first = self.begin()
+        second = self.begin()
+        for capture, title in ((first, 'First original document'), (second, 'Second original document')):
+            content = self.pdf(title)
+            with patch.object(pdf_utils, 'PdfReader', wraps=pdf_utils.PdfReader) as parse, patch.object(ui, 'PdfReader', side_effect=AssertionError('reparsed PDF')):
+                self.service.upload(capture, content)
+            self.assertEqual(parse.call_count, 1)
+            self.assertEqual(capture.pdf_metadata_title, title)
+            self.assertEqual(capture.path.read_bytes(), content)
+        self.assertNotEqual(first.pdf_metadata_title, second.pdf_metadata_title)
+
+    def test_reused_reader_preserves_identifier_and_first_page_title(self):
+        from reportlab.pdfgen import canvas
+        from paper_monitor.pdf_utils import validated_pdf_reader
+        content = io.BytesIO()
+        writer = canvas.Canvas(content)
+        writer.setTitle('Quantum sensing using synthetic photons')
+        writer.setFont('Helvetica-Bold', 18)
+        writer.drawString(72, 740, 'Quantum sensing using synthetic photons')
+        writer.setFont('Helvetica', 12)
+        writer.drawString(72, 700, 'doi: 10.1234/fixture')
+        writer.showPage()
+        writer.setFont('Helvetica-Bold', 30)
+        writer.drawString(72, 740, 'Supplementary document for another study')
+        writer.save()
+        path = self.root / 'evidence.pdf'
+        path.write_bytes(content.getvalue())
+        expected = ui.extract_identifier_from_pdf_or_title(path, {}, title_lookup=lambda _: {})
+        first_page = {}
+        reader = validated_pdf_reader(content.getvalue())
+        titles = ui.pdf_layout_title_candidates(path, reader=reader, first_page_result=first_page)
+        metadata, texts = ui.pdf_identifier_page_texts(path, reader=reader)
+        self.assertEqual(ui.extract_identifier_from_pdf_or_title(path, {}, title_lookup=lambda _: {}, pdf_evidence=(metadata, texts, titles)), expected)
+        self.assertEqual(expected['identifier'], '10.1234/fixture')
+        self.assertEqual(first_page['titles'], ui.pdf_layout_title_candidates(path, page_limit=1))
+
+    def test_science_first_release_uses_full_first_page_and_resets_on_reupload(self):
+        from tests.test_science_download_integrity import FIRST_RELEASE, pdf_bytes
+        doi = '10.1126/science.fixture'
+        url = 'https://www.science.org/doi/pdf/' + doi
+        capture = self.begin(doi=doi, pdf_urls=[url])
+        found = {'kind': 'doi', 'identifier': doi}
+        # The footer is beyond the short heading used by the capture card.
+        self.upload(capture, found=found, content=pdf_bytes('Research article. ' * 40 + FIRST_RELEASE), source_url=url)
+        self.assertNotIn('First release', capture.pdf_heading)
+        capture.paper = {'doi': doi}
+        self.assertEqual(self.service.suggested_file_type(capture)[0], 'accepted_manuscript')
+        capture.paper = {'doi': '10.1126/science.other'}
+        self.assertEqual(self.service.suggested_file_type(capture)[0], 'unknown')
+        self.upload(capture, found=found, content=pdf_bytes('Final published article'), source_url=url)
+        capture.paper = {'doi': doi}
+        self.assertEqual(self.service.suggested_file_type(capture)[0], 'published_version')
+
     def test_review_cancel_never_creates_papers_placements_or_resources(self):
         capture = self.begin()
         review = self.review(capture)
@@ -80,7 +240,7 @@ class BrowserCaptureTests(unittest.TestCase):
         folder = self.storage.ensure_library_folder(parent_id=1, name='Reading')
         capture = self.begin()
         review = self.review(capture)
-        result = self.service.save(capture, self.storage, {'folder_id':folder['id']})
+        result = self.service.save(capture, self.storage, {'folder_id':folder['id'], 'folder_selection_explicit':True})
         self.assertTrue(result['ok'])
         self.assertEqual(result['gewu_key'], review['paper']['gewu_key'])
         self.assertEqual(result['folder_id'], folder['id'])
@@ -98,16 +258,248 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(self.count('papers'), 1)
         self.assertEqual(self.storage.get_paper('first')['title'], before['title'])
         self.assertEqual(self.storage.get_paper('first')['doi'], before['doi'])
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
 
-    def test_open_website_origin_is_a_hint_not_automatic_attachment(self):
+    def test_custom_default_is_shared_but_existing_placement_and_explicit_choice_win(self):
+        from paper_monitor.library_destination import save_default_add_folder
+        inbox = self.storage.create_library_folder(parent_id=1, name='Inbox')
+        space = self.storage.create_library_root_folder(name='Reading Space')
+        save_default_add_folder(self.storage, inbox['id'])
+        capture = self.begin()
+        before = self.count('library_items')
+        self.assertEqual(self.review(capture)['destination']['folder_id'], inbox['id'])
+        self.assertEqual(self.count('library_items'), before)
+        # Preference changes between Review and Save are resolved on Save.
+        save_default_add_folder(self.storage, space['id'])
+        saved = self.save(capture)
+        self.assertEqual(saved['folder_id'], space['id'])
+        save_default_add_folder(self.storage, inbox['id'])
+        again = self.begin()
+        self.upload(again)
+        self.assertEqual(self.review(again)['destination']['folder_id'], space['id'])
+        retained = self.save(again, include_pdf=True)
+        self.assertEqual(retained['item_id'], saved['item_id'])
+        self.assertEqual(retained['gewu_key'], saved['gewu_key'])
+        self.assertEqual(self.count('library_items'), 1)
+        explicit = self.begin()
+        self.review(explicit)
+        result = self.service.save(explicit, self.storage, {'folder_id':inbox['id'], 'folder_selection_explicit':True})
+        self.assertEqual(result['folder_id'], inbox['id'])
+        self.assertEqual(self.count('library_items'), 2)
+
+    def test_custom_default_in_recycled_parent_falls_back_without_review_writes(self):
+        from paper_monitor.library_destination import save_default_add_folder
+        parent = self.storage.create_library_folder(parent_id=1, name='Reading')
+        inbox = self.storage.create_library_folder(parent_id=parent['id'], name='Inbox')
+        save_default_add_folder(self.storage, inbox['id'])
+        capture = self.begin()
+        self.assertEqual(self.review(capture)['destination']['folder_id'], inbox['id'])
+        recycle = self.storage.ensure_library_folder(parent_id=1, name='Recycle')
+        self.storage.move_library_folder_to_trash(folder_id=parent['id'], recycle_folder_id=recycle['id'])
+        changes = self.storage.conn.total_changes
+        destination = self.service.destination(capture, self.storage, '', self.service.folders(self.storage))
+        self.assertEqual(destination['title'], 'Library / unsorted')
+        self.assertEqual(self.storage.conn.total_changes, changes)
+        result = self.save(capture)
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
+
+    def test_new_article_defaults_to_unsorted_without_writing_during_review(self):
+        capture = self.begin()
+        before = self.count('library_folders')
+        review = self.review(capture)
+        self.assertEqual(self.count('library_folders'), before)
+        self.assertEqual(review['destination']['title'], 'Library / unsorted')
+        result = self.save(capture)
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['parent_id'], 1)
+        self.assertEqual(self.count('library_items'), 1)
+
+    def test_existing_nested_article_pdf_reuses_placement_on_save_and_retry(self):
+        before = self.paper()
+        unsorted = self.storage.ensure_library_folder(parent_id=1, name='unsorted')
+        folder = self.storage.ensure_library_folder(parent_id=unsorted['id'], name='New Folder')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        self.storage.rename_library_item(item_id=item['id'], name='My existing name')
+        placements = [tuple(row) for row in self.storage.conn.execute('SELECT * FROM library_items')]
+        for retry in (False, True):
+            capture = self.begin()
+            self.upload(capture)
+            review = self.review(capture)
+            self.assertEqual(review['destination']['item_id'], item['id'])
+            result = self.save(capture, include_pdf=True)
+            self.assertTrue(result['ok'])
+            self.assertEqual(result['duplicate_file'], retry)
+            self.assertEqual(result['folder_id'], folder['id'])
+            self.assertEqual(result['item_id'], item['id'])
+            self.assertEqual(result['gewu_key'], before['storage_key'])
+            self.assertEqual([tuple(row) for row in self.storage.conn.execute('SELECT * FROM library_items')], placements)
+        self.assertEqual(len(self.storage.list_paper_resources('first')), 1)
+
+    def test_existing_placement_preference_is_scoped_to_the_identified_paper(self):
+        self.paper()
+        first_folder = self.storage.ensure_library_folder(parent_id=1, name='First')
+        second_folder = self.storage.create_library_root_folder(name='Space')
+        first = self.storage.add_library_item(paper_id='first', folder_id=first_folder['id'])
+        second = self.storage.add_library_item(paper_id='first', folder_id=second_folder['id'])
+        self.paper(key='other', doi='10.1234/other', title='Different paper')
+        unrelated = self.storage.add_library_item(paper_id='other', folder_id=1)
+        for preferred, expected in [(second['id'], second), (unrelated['id'], first), (999999, first)]:
+            capture = self.begin(origin_library_item_id=preferred)
+            self.assertEqual(self.review(capture)['destination']['item_id'], expected['id'])
+            result = self.save(capture)
+            self.assertEqual(result['item_id'], expected['id'])
+        self.assertEqual(self.count('library_items'), 3)
+
+    def test_only_confirmed_destination_adds_another_existing_article_placement(self):
+        self.paper()
+        folder = self.storage.ensure_library_folder(parent_id=1, name='Reading')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        capture = self.begin(); self.review(capture)
+        result = self.save(capture, folder_selection_explicit=True)
+        self.assertEqual(result['folder_id'], 1)
+        self.assertNotEqual(result['item_id'], item['id'])
+        self.assertEqual(self.count('library_items'), 2)
+
+    def test_recycle_placement_is_not_reused_and_stale_reviews_recheck_locations(self):
+        self.paper()
+        recycle = self.storage.ensure_library_folder(parent_id=1, name='Recycle')
+        child = self.storage.ensure_library_folder(parent_id=recycle['id'], name='Discarded')
+        self.storage.add_library_item(paper_id='first', folder_id=child['id'])
+        capture = self.begin()
+        self.assertFalse(self.review(capture)['destination']['reused'])
+        folder = self.storage.ensure_library_folder(parent_id=1, name='Added while reviewing')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        result = self.save(capture)
+        self.assertEqual(result['item_id'], item['id'])
+        self.assertEqual(result['folder_id'], folder['id'])
+        self.assertEqual(self.count('library_items'), 2)
+
+    def test_reviewed_placement_removed_before_save_is_not_a_dangling_target(self):
+        self.paper()
+        folder = self.storage.ensure_library_folder(parent_id=1, name='Reading')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        capture = self.begin(); self.review(capture)
+        self.storage.delete_library_item(item_id=item['id'])
+        result = self.save(capture)
+        self.assertTrue(result['ok'])
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
+        self.assertEqual(self.count('library_items'), 1)
+
+    def test_open_website_origin_reuses_source_unless_page_identifies_another_article(self):
         origin = self.paper(url='https://example.org/source')
         capture = self.begin(doi='', origin_url=origin['url'])
         review = self.review(capture)
-        self.assertIsNone(review['paper'])
+        self.assertEqual(review['paper']['paper_id'], 'first')
+        self.assertTrue(review['paper']['existing'])
         self.assertEqual(review['origin']['gewu_key'], origin['storage_key'])
         self.assertEqual(self.review(capture, use_origin=True)['paper']['paper_id'], 'first')
         other = self.begin(doi='10.1234/second', origin_paper_id='first')
         self.assertNotEqual(self.review(other, use_origin=True)['paper']['paper_id'], 'first')
+
+    def corrected_paper(self):
+        paper = self.paper(doi='10.1109/iccv51701.2025.00828')
+        self.storage.conn.execute('UPDATE papers SET raw_json=? WHERE paper_id=?',
+            ('{"arxiv_id":"2025.00828","manual_preprint_identifier_override":true,"manual_preprint_identifier":"2503.19940"}', paper['paper_id']))
+        self.storage.conn.commit()
+        from paper_monitor import paper_identity
+        paper = self.storage.get_paper(paper['paper_id'])
+        paper_identity.register(self.storage, paper); self.storage.conn.commit()
+        return paper
+
+    def test_manual_arxiv_correction_reused_in_review_save_and_pdf_identity(self):
+        paper = self.corrected_paper()
+        folder = self.storage.ensure_library_folder(parent_id=1, name='AI')
+        item = self.storage.add_library_item(paper_id=paper['paper_id'], folder_id=folder['id'])
+        capture = self.service.begin(self.db, {'url':'https://arxiv.org/pdf/2503.19940v2','is_pdf':True})
+        self.upload(capture, {'kind':'arxiv','identifier':'2503.19940'}, source_url=capture.snapshot['url'])
+        review = self.review(capture)
+        self.assertEqual(review['paper']['gewu_key'], paper['storage_key'])
+        self.assertTrue(review['paper']['existing'])
+        self.assertEqual(review['destination']['item_id'], item['id'])
+        self.assertTrue(self.service.same_identity(self.storage, ('doi',paper['doi']), ('arxiv','2503.19940')))
+        self.assertIsNone(self.service.existing(self.storage, 'arxiv','2025.00828'))
+        result = self.save(capture, include_pdf=True)
+        self.assertEqual(result['gewu_key'], paper['storage_key']); self.assertEqual(self.count('papers'), 1)
+        self.assertEqual(result['folder_id'], folder['id'])
+        file = self.storage.list_paper_resources(paper['paper_id'])[0]
+        self.assertEqual(file['file_type'],'preprint')
+
+    def test_cleared_arxiv_cannot_match_stale_source_or_old_paper_id(self):
+        paper = self.corrected_paper()
+        self.storage.conn.execute("UPDATE papers SET raw_json=? WHERE paper_id=?", ('{"arxiv_id":"2503.19940","manual_preprint_identifier_override":true,"manual_preprint_identifier":""}', paper['paper_id']))
+        self.storage.conn.commit()
+        self.assertIsNone(self.service.existing(self.storage,'arxiv','2503.19940'))
+
+    def test_manual_target_key_moves_review_to_existing_location_without_metadata_edits(self):
+        target = self.paper(key='target',doi='10.1234/correct',title='A different target article')
+        folder = self.storage.ensure_library_folder(parent_id=1,name='Target folder')
+        self.storage.add_library_item(paper_id=target['paper_id'],folder_id=folder['id'])
+        capture = self.begin()
+        review = self.review(capture,target_key=target['storage_key'])
+        self.assertTrue(review['target_conflict']); self.assertFalse(review['can_save'])
+        self.assertEqual(review['destination']['folder_id'],folder['id'])
+        with self.assertRaises(ValueError): self.save(capture)
+        self.review(capture,target_key=target['storage_key'],confirm_target=True)
+        before = self.storage.get_paper('target')
+        result = self.save(capture)
+        self.assertEqual(result['gewu_key'], target['storage_key'])
+        after = self.storage.get_paper('target')
+        for field in ('title','doi','storage_key','preferred_resource_id','preferred_resource_manual'):
+            self.assertEqual(before.get(field),after.get(field),field)
+        import json
+        old_raw,new_raw=json.loads(before['raw_json']),json.loads(after['raw_json'])
+        old_raw.pop('_paper_monitor_sources',None);new_raw.pop('_paper_monitor_sources',None)
+        self.assertEqual(old_raw,new_raw)
+        self.assertEqual(self.count('papers'),1)
+
+    def test_invalid_key_revokes_previous_review_and_does_not_create_record(self):
+        target = self.paper()
+        capture = self.begin()
+        self.review(capture)
+        for key in ('gw_0000000000','bad key'):
+            with self.assertRaises(ValueError): self.review(capture,target_key=key)
+            with self.assertRaises(ValueError): self.save(capture)
+        self.assertEqual(self.count('papers'),1)
+        self.assertEqual(self.review(capture)['paper']['gewu_key'],target['storage_key'])
+
+    def test_manual_key_alias_resolves_to_current_key(self):
+        from paper_monitor import paper_identity
+        target = self.paper()
+        paper_identity.add_alias(self.storage, 'gw_abcdef0123', target['paper_id'])
+        self.storage.conn.commit()
+        capture = self.begin()
+        review = self.review(capture, target_key='gw_abcdef0123')
+        self.assertEqual(review['target_key'], target['storage_key'])
+        self.assertTrue(review['can_save'])
+        self.assertEqual(self.save(capture)['gewu_key'], target['storage_key'])
+
+    def test_embedded_ieee_pdf_resolves_identity_and_published_type(self):
+        target = self.corrected_paper()
+        url = 'https://ieeexplore.ieee.org/stamppdf/getPDF.jsp?arnumber=11443405'
+        capture = self.service.begin(self.db, {'url':'https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=11443405',
+            'pdf_urls':[url], 'loaded_pdf_urls':[url], 'metadata':{}})
+        self.assertIsNone(self.review(capture)['paper'])
+        self.upload(capture, {'kind':'doi','identifier':target['doi']}, source_url=url)
+        review = self.review(capture)
+        self.assertEqual(review['paper']['gewu_key'], target['storage_key'])
+        self.assertEqual(review['suggested_file_type'], 'published_version')
+        self.assertTrue(review['can_save'])
+
+    def test_target_identifier_changed_after_review_requires_fresh_review(self):
+        target = self.paper()
+        capture = self.begin(); self.review(capture)
+        self.storage.conn.execute('UPDATE papers SET doi=? WHERE paper_id=?',('10.1234/new',target['paper_id']))
+        self.storage.conn.commit()
+        with self.assertRaisesRegex(ValueError,'identifiers changed'): self.save(capture)
+
+    def test_arxiv_parser_rejects_publisher_doi_suffixes_and_arbitrary_urls(self):
+        from paper_monitor.text import normalize_arxiv_identifier
+        for value in ('10.1109/iccv51701.2025.00828','https://doi.org/10.1109/x.2025.00828','https://publisher.org/2503.19940','2025.00828','https://publisher.org/doi/10.1234/2503.19940'):
+            self.assertEqual(normalize_arxiv_identifier(value),'',value)
+        for value in ('2503.19940v2','arXiv:2503.19940','https://arxiv.org/pdf/2503.19940v2','https://doi.org/10.48550/arXiv.2503.19940'):
+            self.assertEqual(normalize_arxiv_identifier(value),'2503.19940')
+        self.assertEqual(normalize_arxiv_identifier('https://arxiv.org/abs/cond-mat/0101234v2'),'cond-mat/0101234')
+        self.assertEqual(ui.arxiv_identifier_for_paper({'doi':'10.1109/x.2025.00828','url':'https://doi.org/10.1109/x.2025.00828'}),'')
 
     def test_pdf_page_mismatch_and_wrong_manual_identifier_block_save(self):
         self.paper()
@@ -297,7 +689,7 @@ class BrowserCaptureTests(unittest.TestCase):
         self.storage.conn.commit()
         failed = self.save(capture, include_pdf=True)
         self.assertFalse(failed['ok'])
-        self.assertIsNone(self.storage.resolve_default_paper_resource('first'))
+        self.assertIsNone(self.storage.get_paper('first')['primary_resource_id'])
         first = self.storage.list_paper_resources('first')[0]
         self.assertEqual(Path(first['stored_path']).read_bytes(), capture.path.read_bytes())
         self.storage.conn.execute('DROP TRIGGER fail_primary'); self.storage.conn.commit()
@@ -315,7 +707,7 @@ class BrowserCaptureTests(unittest.TestCase):
             content=content, file_type='unknown', added_via='browser_capture')
         old_path = Path(original['stored_path'])
         self.assertTrue(old_path.resolve().is_relative_to(ui.ASSOCIATED_FILES_ROOT.resolve()))
-        self.assertIsNone(self.storage.resolve_default_paper_resource('first'))
+        self.assertIsNone(self.storage.get_paper('first')['primary_resource_id'])
         capture = self.begin(); self.upload(capture, content=content); self.review(capture)
         result = self.save(capture, include_pdf=True)
         self.assertTrue(result['ok']); self.assertTrue(result['duplicate_file'])
@@ -573,7 +965,7 @@ class BrowserCaptureTests(unittest.TestCase):
         capture = self.begin()
         review = self.review(capture)
         self.assertIn({'id':child['id'], 'title':'Reading Space / Quantum'}, review['folders'])
-        result = self.service.save(capture, self.storage, {'folder_id':child['id']})
+        result = self.service.save(capture, self.storage, {'folder_id':child['id'], 'folder_selection_explicit':True})
         self.assertEqual(result['folder_id'], child['id'])
         self.assertEqual(self.storage.get_library_item(result['item_id'])['folder_id'], child['id'])
 
@@ -595,7 +987,7 @@ class BrowserCaptureTests(unittest.TestCase):
         folder = self.storage.ensure_library_folder(parent_id=1, name='Recycle')
         child = self.storage.ensure_library_folder(parent_id=folder['id'],name='Discarded')
         capture = self.begin(); self.review(capture)
-        with self.assertRaises(ValueError): self.service.save(capture,self.storage,{'folder_id':child['id']})
+        with self.assertRaises(ValueError): self.service.save(capture,self.storage,{'folder_id':child['id'], 'folder_selection_explicit':True})
         self.assertEqual(self.count('papers'),0)
 
     def test_concurrent_reviews_recheck_canonical_doi_before_save(self):

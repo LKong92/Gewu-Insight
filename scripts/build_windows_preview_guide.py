@@ -8,85 +8,123 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
 root = Path(__file__).resolve().parents[1] / "windows"
-sections = [
-    ("Updates in Preview 0.1.17", [
-        "AI Access now hides revoked connections while keeping their audit activity. Recent Activity is always visible, shows up to 50 recent requests, and scrolls independently. Revoking a newly created connection also clears its displayed token and MCP configuration.",
-        "The MCP get_paper_file tool delivers an authorized read-only copy of an original PDF or other registered file to the local AI client. The client can read figures, render pages or run OCR on that copy with its own tools. Copies are limited to 64 MiB each and 256 MiB / 64 files per connection process; normal exit removes them. Windows copies use private temporary storage, support repeat retrieval, and follow the App's current port after restart. Previously delivered bytes cannot be recalled by revocation.",
-        "save_analysis appends a new Markdown note with File type Other, Annotation Unannotated and Source Other, including the AI connection name. It cannot edit existing Paper Files or earlier analyses, change Default, or override classification. Use the delivered file ID, SHA-256 and page references when saving an analysis.",
-        "A supported publisher's single PDF button can now open one hidden download window. Direct PDF popup requests retain the original POST body, opener and Browser session. Unverified destinations, unrelated or extra popups and unsupported routes stop; transfers retain the existing time and size limits. Complex authentication and all real publisher routes still need broader acceptance."]),
-    ("Updates in Preview 0.1.16", [
-        "File > Library Loader opens Folder Loader in its own window. Closing hides it; reopening retains the current source, draft and job. Metadata Refresh and Find Missing Identifiers use the same window. Completed imports refresh the main Library. A local-service restart preserves the Loader document and reconnects job progress.",
-        "Settings > Clear Monitor Cache clears the local Monitor network cache. It preserves the Library, local storage and cookies, and does not clear the separate Browser profile or its signed-in sessions.",
-        "Publisher fallback downloads recognize reviewed ACS, Elsevier and Oxford PDF delivery hosts and a single unambiguous PDF button, including PDF responses delivered by JavaScript Fetch or XHR. Unknown hosts and redirects stop. Supported single-window PDF controls are additionally handled in Preview 0.1.17.",
-        "DOC/DOCX supplements can be converted with an installed LibreOffice or Microsoft Word. Word uses a separate hidden process with macros disabled, read-only document access and no recent-file entry; conversion times out if Office cannot finish. PDF validation and the existing supplement-merge rules still apply.",
-        "Apple Passwords/AutoFill, Safari synchronization and macOS system Quick Look are outside the requested Windows scope. Windows built-in reading and existing default-application opening remain available."]),
-    ("Development status", [
-        "This is a Windows Preview for a NEW test Library. It is not the completed macOS-equivalent release. Existing macOS Library databases must not be moved into this build.",
-        "The shared Python service, SQLite model and research interface are reused. Native Windows integrations are still being connected and accepted separately. A visible control or a successful service test does not establish full workflow parity. Help opens this Windows guide in HTML or PDF."]),
-    ("Install and start", [
-        "Run the Windows Preview x64 Setup executable. Installation is per user and does not request administrator rights. The app includes Python and .NET; no developer environment is required.",
-        "Windows 11 x64 is the current test machine. The package targets Windows 10 version 2004 or later on x64, but Windows 10 and ARM64 have not passed real-device acceptance. Microsoft Edge WebView2 Evergreen Runtime must already be installed.",
-        "Open Gewu Insight Preview from the Start menu. The first start creates a new Library. The local server listens only on 127.0.0.1. Research discovery, publisher downloads and API providers may require Internet access and provider settings."]),
-    ("Files and Library locations", [
-        "File > Open Data Folder shows the actual Library location. New Libraries use %USERPROFILE%\\Gewu Insight Preview. Existing Libraries use the verified physical folder recorded in %USERPROFILE%\\.gewu-insight\\preview-workspace.txt. If that selected database is missing, startup stops instead of creating an empty replacement. SQLite is authoritative.",
-        "Windows file opening uses the associated default application. Open in File Explorer or Show in File Explorer opens the file location. Additional Library/Space placements use managed .lnk shortcuts to the same real file; they are not independent PDF copies. Open the shortcuts to work with the same annotations.",
-        "Paper Files can remove a non-default attachment to the Windows Recycle Bin. A verified temporary backup and a private SQLite recovery journal protect database failures and interrupted deletion; startup completes pending recovery without overwriting a changed file. Shared files and external originals are retained. Restore a successfully deleted file from Windows Recycle Bin, then add it to Paper Files again to restore its association. Cross-drive moves still need acceptance."]),
-    ("Library Recycle in Preview 0.1.15", [
-        "Inside Library Recycle, permanently remove a paper, multiple selected Recycle entries or a folder and its descendants, or use Clear Recycle. Review and confirm the existing deletion dialog. Unreferenced paper records are removed; managed local files go to Windows Recycle Bin. Clear Recycle also includes unreferenced local copies in that folder. The Recycle folder itself remains.",
-        "A selection entirely inside Recycle commits together. If a file cannot be recycled or the database cannot commit, the records and already-recycled files are restored. Startup recovers an interrupted operation from verified copies. Successfully committed deletions remain deleted after restart. Restoring files from Windows Recycle Bin does not recreate deleted paper metadata or Library placements.",
-        "Papers retained by another Library, Space, Shortcut or My Publications placement keep their records and files. Files shared by a different paper and external originals are retained. Retained files keep their existing stored paths, including paths inside the physical Recycle folder. Only managed shortcuts are removed from deleted placements; unknown files in a deleted subfolder remain unless explicitly included by Clear Recycle. Cross-drive, concurrent external editing and full real-user acceptance remain pending."]),
-    ("Browser and native controls", [
-        "Browser uses separate WebView2 views and a profile separate from the trusted Library interface. Home is local Favorites. Remote pages do not receive the workspace message bridge.",
-        "File, Edit, View, Loader, Settings and Help expose the shared workflows. Settings includes Naming Rule, PDF Rename Settings, Preview Settings, Website Links, AI Access, arXiv Scope Settings, Open Source Settings, Field Settings and Font Size. Preview Settings shows Windows-supported choices only. Click the workspace or press Esc to dismiss an open menu. Clear Monitor Cache is available in 0.1.16.",
-        "Space opens the built-in preview; Up/Down follows the selected Paper File and Esc closes it. Scroll continuously through PDF pages with a mouse wheel or two fingers on the touchpad. Pinch or Ctrl+wheel zooms the PDF; horizontal scrolling pans the enlarged page. Page Up/Page Down scroll, Home/End reach the first/last page, and thumbnails jump to a page. The additional Windows page/zoom/Text toolbar has been removed. Pages render on demand with bounded caching. Use Open in Default App for text selection, full PDF search, links, printing and annotations. This uses Windows file associations; Gewu has no separate default-reader setting.",
-        "Get PDF is inside Browser > Save to Gewu > Details, beside PDF link. It retrieves a discovered PDF with the current Browser profile and website session. The source page stays open. Only a readable PDF up to 64 MB is staged; Save to Library adds it after identity, file type and destination review. Show in Library locates the result. Sign-in means your authorized publisher or institution account; it never bypasses a subscription. Downloads accept reviewed publisher/repository hosts and check redirects; unverified sources are stopped, not assumed pirated. Authorized preprints are allowed. No piracy services are used. If an authorized download fails, retry on the website or choose an authorized local PDF.",
-        "Browser History supports choosing a time range and confirming Clear History. Bookmarks, files and website sign-ins are kept. Import accepts a bookmarks HTML file exported from your browser. Sync from Safari and Open Passwords are hidden on Windows. Ordinary webpage-initiated downloads use the Windows Save dialog; publisher and session behavior still need broader verification.",
-        "Loader > Import Folder opens a Windows folder picker. For an offline import select Skip metadata. Destination Folder shows where files will be copied within the current Library workspace. Drag a Paper Files icon or filename to File Explorer or a compatible application to copy/open the real file; the app never offers moving or deleting the owned source. File Explorer file drops into Library reuse the existing import workflow. Drag a Library folder's file handle to copy its exported real files, associated files and manifest. A Library item's file handle can relay a drop into another paper's Paper Files. Different target applications and cross-window drops still require broader acceptance.",
-        "Images, text and Markdown retain their existing built-in preview. The original file is not rewritten. PDF text extraction, large scanned PDFs, complex publishers and rapid repeated use still need broader real-document acceptance. macOS Passwords, Keychain AutoFill and WebKit sign-in profiles are not migrated."]),
-    ("Publisher and Library updates in Preview 0.1.14", [
-        "When Download returns a supported publisher browser fallback, a hidden Browser session now retrieves the main PDF or discovers supplementary PDF/Word links. It shares the Browser profile and returns the result to the same paper through the existing Paper Files validation, classification and duplicate handling. Existing supplementary PDF merging and manual Default choices are retained. No Browser tab is replaced.",
-        "Transfers are limited to 64 MB and 80 seconds, and require the reviewed source policy plus the requested publisher's supported hosts. Unverified redirects stop. Sign in or complete website verification yourself in Browser, then retry Download. External authentication routes and unreviewed CDN hosts remain unsupported; this does not establish acceptance for every publisher or subscribed account."]),
-    ("Browser updates in Preview 0.1.13", [
-        "Home participates in each tab's Back/Forward history. Returning to the retained webpage preserves its draft when the browser still holds that document. A new destination keeps Favorites visible until the webpage commits; Stop or a failed departure leaves Home available. New navigations replace the forward branch. Tabs and these local Home entries last for the current app session.",
-        "With the webpage focused, use Ctrl+L for the address field, Ctrl+F for Find, Ctrl+D for Add Bookmark, Ctrl+T for New Tab, Ctrl+W to close the current tab and Ctrl+R to reload. Ctrl+[ returns to the research workspace that opened the website. At the top/left page boundary, an unmodified Up/Left arrow can return focus to webpage tabs/the sidebar; inputs, embedded documents and custom widgets keep their arrows. Physical IME and full accessibility acceptance remain pending.",
-        "Share and page actions offers Add Bookmark, Copy Link, Save Download and Open in Default Browser. Save Download retrieves the current address using the Browser profile, then asks where to save the original response, up to 64 MB. It keeps the webpage open and does not import into Library. PDF and binary responses require a verified publisher or repository; unsupported redirects stop. To download a paper linked from an article, open its PDF address or use Save to Gewu > Details > Get PDF."]),
-    ("Browser updates in Preview 0.1.12", [
-        "Typing in the address field shows local history suggestions above the webpage. Use Up/Down and Enter, or click a candidate, to navigate. Esc dismisses the list. Bookmarks and Favorites can display website icons; anonymous, bounded HTTPS requests fetch icons without your workspace token or website cookies. Icon caching lasts for the current app session.",
-        "Bookmarks menu > Sync from Chrome asks you to select the Bookmarks file from your chosen Chrome profile, then one source folder. Only that folder and its subfolders are synced. Repeat the action to refresh. Existing matches are reused, local edits and source deletions are kept, and Chrome is never modified. Ordinary HTML Import remains available.",
-        "Save to Gewu uses a single blurred snapshot of the current visible webpage behind its review panel. The image stays in the dialog's memory, is excluded from article metadata, and is released on close. If capturing the image is unavailable or slow, the review panel still opens."]),
-    ("Research updates in Preview 0.1.11", [
-        "Subject Monitor keeps saved results and calendar counts when keywords change. New keywords apply to future retrieval. An explicit successful Refresh replaces only its selected window; failed retrieval keeps earlier results. Calendar counts now show numbers without incomplete-discovery asterisks. Discovery, Updates and Errors still explain source progress.",
-        "In My Publications, search for an author and use Add All Publications inside the search/add panel. Import follows source pages and saves progress in SQLite. Pause, Continue and Retry recover interrupted work; DOI/arXiv identifier checks have their own progress. Details reopens progress from the bottom bar. Import history is separate from a new author search. PDF downloads remain explicit.",
-        "Deleting a My Publications entry keeps its paper and files when Library, Space, Shortcut or Recycle still references them. Removing its last placement removes the canonical record and recycles private managed files with recovery protection. Shared bytes and external originals are retained. Ordinary import continuation does not recreate deleted entries; an explicit recheck can add them again.",
-        "Choosing a Default PDF or changing file type keeps the selected PDF in its managed main location. Older versions remain in Associated Files. Browser Save can establish the first article PDF as Default even when its version is Unknown. Manual choices remain sticky. Drop exactly one PDF on the Download PDF/Download button in Library or My Publications to attach or replace it. A missed My Publications drop does not import into an unrelated Library folder."]),
-    ("AI Access and MCP", [
-        "Open Settings > AI Access. Access is off by default. Enable it and create a named connection for saved papers, a folder and descendants, or specific Gewu Keys. Metadata access is standard; reading file contents and adding Markdown analyses are separate permissions. Choose an expiry. Revoke ends a connection; disabling AI Access pauses all connections.",
-        "Copy MCP Configuration into your AI client's local STDIO server settings. Use the generated command, the single script argument, and each environment name/value exactly as provided. Installed Windows builds use their bundled Python and adapter, so no Python installation is needed. Paths may contain spaces and remain single fields. Keep the connection token out of chats and shared files; it is shown only when created.",
-        "The Windows configuration includes GEWU_API_URL_FILE, which follows the app's current loopback port after restart. Keep Gewu running on the same PC. If the installation or Library location changes, generate a new configuration. MCP and the local HTTP API use the same collection and operation permissions. Neither enabling access nor opening this panel automatically uploads papers or runs a model.",
-        "Identify the paper by Gewu Key, read its permitted PDF pages or text, then explicitly ask the AI client to save a Chinese Markdown analysis to Paper Files. Include source file, SHA-256 and page references. Saved notes append without replacing the PDF, Default or existing notes. A repeated identical request reuses its saved result. Later AI sessions can explicitly retrieve the same paper and note. Gewu does not automatically synchronize conversation memory.",
-        "Interface grants control API/MCP access. They are separate from operating-system file permissions held by other software. Revoke a connection in AI Access when it is no longer needed. Review generated analyses against the original paper."]),
-    ("Updates, uninstall and recovery", [
-        "If the local service exits unexpectedly, the app attempts to restart it and reconnect the Library. Existing Browser tabs and unsent webpage forms are retained. Three restart attempts are allowed within one minute; repeated failures stop with a message and a log location. This does not recover an operating-system crash or restore unsaved Library forms.",
-        "Close the application before installing an update. The installer updates application files only. Uninstall removes the app and preserves its separate Library, database, reports and browser profiles. Existing personal research data is never included in the installer.",
-        "Until backup/restore and old-Library migration pass acceptance, use disposable research files only. The retained data folder is not itself a validated backup. Do not replace a database with an older file or bulk-edit stored paths.",
-        "Development payloads remain unsigned; building a new installer requires publisher signing credentials. If Windows policy blocks a build, do not disable Windows protection. Startup errors are shown in the app; service diagnostics are under the workspace logs folder."]),
-]
+sections = [('Start the source desktop',
+  ['Double-click Start Gewu Insight.cmd in the repository. Windows Preview 0.1.21 uses '
+   'dist/windows-preview-0.1.21 and the local .venv Python environment. Close the Gewu window to stop its '
+   'service. Native code changes require a matching shell; Python and interface changes load after '
+   'restarting.',
+   'Your existing Library remains at %USERPROFILE%\\Gewu Insight Preview. Its selection is recorded in '
+   '%USERPROFILE%\\.gewu-insight\\preview-workspace.txt. File > Open Data Folder shows the actual location. '
+   'A missing selected database stops startup instead of silently creating an empty replacement. SQLite is '
+   'authoritative.',
+   'This local source delivery does not use an installer. Installed Preview 0.1.19 has been removed; its '
+   'archived copy is for recovery only. Windows 11 x64 and WebView2 are the validated environment. New '
+   'computers require a compatible shell, Python dependencies and WebView2.']),
+ ('Library and Paper Files',
+  ['The shared product now includes the macOS updates through 8a27895: canonical paper identities and '
+   'old-key aliases, publication notices, resource deduplication, unified metadata tasks and 20 Paper Files '
+   'types. Corrections, retractions and related notices keep their own identifiers and links to the original '
+   'research paper.',
+   'Library, Spaces and Shortcuts share the same managed files. Additional placements use Windows .lnk '
+   'shortcuts, not duplicate PDFs. Paper Files offers Move to Another Paper and Create Paper from File. '
+   'Identical bytes are reused while import sources remain recorded; different versions and annotations '
+   'remain distinct. Manual Default choices are preserved.',
+   'Use column headers to sort Title, Authors, Year, Journal or Time added. Settings > Add to Library '
+   'chooses the default destination. File and folder moves update their references together; interrupted '
+   'moves are recovered from a journal. Startup does not scan or reorganize the whole historical Library.',
+   'Library Recycle and removal of private managed files use Windows Shell recovery with a verified backup. '
+   'Other active Library, Space and Publications references and external originals are retained. The '
+   'operating-system Recycle Bin can restore successfully deleted bytes; add a restored file again to '
+   'reattach it.']),
+ ('Refresh Info and research monitors',
+  ['Refresh Info is shared by individual papers, folders, the whole Library and imports. Quick and Full '
+   'refresh use persistent progress with Pause, Continue, Stop and history. Manual DOI/arXiv corrections '
+   'record their history. Network failures remain visible and can be retried.',
+   'Author Monitor shows cached papers immediately and refreshes in the background. Metadata work is limited '
+   'to the author scope and rotates through unfinished papers. Temporary access failures back off and '
+   'recover without treating an abnormal response as an empty publication list.',
+   'Subject Monitor preserves earlier results when settings change; an explicit successful refresh replaces '
+   'its window. Calendar counts use numbers only. My Publications import remains resumable, and deleting a '
+   'placement protects papers still referenced elsewhere. PDF downloads remain explicit.']),
+ ('Loader and file handling',
+  ['File > Library Loader opens an independent window. Closing hides it and retains the source, draft and '
+   'task. Refresh Info and identifier recovery use the same window. Show in Library in a log locates the '
+   'paper in the main window while retaining the task result.',
+   'Drag a Paper Files icon or name to File Explorer or a compatible app to copy/open the real file. Drop '
+   'files into Library to import them. Paper Files accepts drops across its column; internal managed-file '
+   'drops use the move/ownership workflow and duplicate gestures are ignored. Cross-application behavior '
+   'depends on the receiving application.',
+   'Folder renames, managed shortcuts, long filenames, copy races and interrupted transactions have '
+   'Windows-specific handling. Open in Default App follows Windows file associations; Show in File Explorer '
+   'reveals the file. There is no separate default-reader setting.']),
+ ('Browser and PDFs',
+  ['Browser keeps its own website session. Home is local Favorites; tabs and Back/Forward retain '
+   'browser-owned documents where available. Ctrl+L focuses the address bar, Ctrl+F opens Find, Ctrl+T '
+   'creates a tab, Ctrl+W closes it, Ctrl+R reloads and Ctrl+[ returns to the research workspace. Address '
+   'suggestions use local history.',
+   'Save to Gewu reviews metadata, identity, file type and destination. A loaded PDF, including an embedded '
+   'PDF, can be saved from its original response bytes. Use Loaded PDF never silently requests the file '
+   'again. If those bytes are no longer available, reopen the PDF or explicitly use Get PDF. Supported '
+   'download-type PDFs preview in the same tab.',
+   'PDF capture supports up to 128 MB. Save Download uses retained bytes for a loaded PDF; other explicit '
+   'downloads use the current Browser session. The original publisher filename and main/supplement '
+   'classification are retained. Science main-text validation and First Release classification are shared '
+   'with macOS.',
+   'Only verified publisher or authorized repository sources are accepted for paper downloads; every '
+   'redirect is checked. Sign in with your own publisher or institution account in Browser. Unknown sources '
+   'and unsupported routes stop. These features do not bypass subscriptions or website verification.',
+   'Bookmarks supports HTML import/export and manual Sync from Chrome for one selected subtree. Existing '
+   'local changes and source deletions are preserved and Chrome is not modified. Clear Monitor Cache affects '
+   'the local research view, not Browser cookies or sign-ins.']),
+ ('Reading and AI Access',
+  ['Space opens the built-in preview; Up/Down follows Paper Files and Esc closes it. PDFs scroll '
+   'continuously, Ctrl+wheel zooms, and thumbnails jump to pages. Open in Default App provides the reader '
+   'associated with Windows. Markdown supports collapsed YAML/source properties, wide tables/code and '
+   'offline mathematical formulas without changing the original file.',
+   'Settings > AI Access is off by default. Create a named connection with explicit collection and operation '
+   'permissions. The MCP adapter defines 24 tools, including folder browsing, read-only file delivery, '
+   'delivery release, separately authorized uploads/imports, metadata and file/folder organization. Tools '
+   'available to a connection depend on its grant.',
+   'Copy the generated MCP Configuration into your local AI client. The source desktop uses its .venv and '
+   'local adapter; keep the App running. The URL file follows port changes after restart. Tokens are '
+   'displayed only at creation and should not be shared.',
+   'get_paper_file supplies an authorized read-only client copy, never direct Library or SQLite access. Use '
+   'delivery status/release to manage quotas. save_analysis appends a classified Markdown note and cannot '
+   'edit earlier files or analyses. New write operations require separate permissions and writable folders. '
+   'Upgrading does not expand an existing grant.',
+   'External authorized changes refresh the visible Library while preserving selection and reading position '
+   'where possible. Gewu does not run an AI model or upload papers merely because AI Access is enabled. '
+   'Review generated notes against the original sources.']),
+ ('Updates, recovery and platform scope',
+  ['Before updating, close the App and retain a verified SQLite/file backup plus the matching source and '
+   'shell. This upgrade preserves the existing Windows Library while adding schema 22. Do not open an '
+   'upgraded Library with an older shell/source or substitute an older database.',
+   'The local service and workspace renderer have bounded recovery. Browser tabs and unsent website forms '
+   'are kept when their separate browser process remains alive. Repeated failures stop and show a recovery '
+   'message. An operating-system crash and unsaved research-form edits cannot be guaranteed recoverable.',
+   'Apple Passwords/AutoFill, Safari sync and macOS system Quick Look are outside the requested Windows '
+   'scope. Real institution-authenticated publisher routes, every third-party drag target and other Windows '
+   'hardware still require field validation.',
+   'Help > Contact Us opens info@gewu-insight.com; Help also links the product website. Logs are under the '
+   'Library logs folder. This source desktop is a local development delivery; formal installer signing and '
+   'distribution remain separate.'])]
+
 title = "Gewu Insight - Windows Preview Guide"
 body = "\n".join("<h2>" + escape(heading) + "</h2>" + "".join("<p>" + escape(text) + "</p>" for text in paragraphs) for heading, paragraphs in sections)
-html = f'<!doctype html><html lang="en"><meta charset="utf-8"><title>{title}</title><style>body{{font:16px/1.6 Segoe UI,Arial,sans-serif;max-width:850px;margin:48px auto;padding:0 24px;color:#243247}}h1{{font-size:30px}}h2{{margin-top:28px;font-size:20px;color:#286095}}.status{{background:#fff1d5;padding:14px;border-left:4px solid #b87c19}}</style><h1>{title}</h1><p class="status">Experimental / Preview - functional parity is not yet accepted.</p>{body}</html>'
+html = f'<!doctype html><html lang="en"><meta charset="utf-8"><title>{title}</title><style>body{{font:16px/1.6 Segoe UI,Arial,sans-serif;max-width:850px;margin:48px auto;padding:0 24px;color:#243247}}h1{{font-size:30px}}h2{{margin-top:28px;font-size:20px;color:#286095}}.status{{background:#fff1d5;padding:14px;border-left:4px solid #b87c19}}</style><h1>{title}</h1><p class="status">Windows Preview 0.1.21 - desktop from local source.</p>{body}</html>'
 (root / "Windows_Preview_Guide.html").write_text(html, encoding="utf-8")
 styles = getSampleStyleSheet()
 styles.add(ParagraphStyle(name="GuideBody", fontName="Helvetica", fontSize=10, leading=14, spaceAfter=8, textColor=colors.HexColor("#243247")))
 styles["Heading2"].textColor = colors.HexColor("#286095")
 styles["Heading2"].keepWithNext = True
-story = [Paragraph(title, styles["Title"]), Paragraph("Experimental / Preview - functional parity is not yet accepted.", styles["GuideBody"]), Spacer(1, 8)]
+story = [Paragraph(title, styles["Title"]), Paragraph("Windows Preview 0.1.21 - desktop from local source.", styles["GuideBody"]), Spacer(1, 8)]
 for heading, paragraphs in sections:
     story.append(Paragraph(heading, styles["Heading2"]))
     story.extend(Paragraph(escape(text), styles["GuideBody"]) for text in paragraphs)
 def footer(canvas, doc):
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(colors.HexColor("#64748b"))
-    canvas.drawString(44, 27, "Gewu Insight | Windows Preview 0.1.17 | 2026-09-10")
+    canvas.drawString(44, 27, "Gewu Insight | Windows Preview 0.1.21 | 2026-09-29")
     canvas.drawRightString(551, 27, str(doc.page))
 doc = SimpleDocTemplate(str(root / "Windows_Preview_Guide.pdf"), pagesize=(595, 842), leftMargin=44, rightMargin=44, topMargin=38, bottomMargin=45, title=title)
 doc.build(story, onFirstPage=footer, onLaterPages=footer)

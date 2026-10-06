@@ -46,13 +46,19 @@ int main(void) {
         check(GewuBrowserHomeFitZoom(1, 0, 0, 0, 0) == 1, @"ignore unavailable geometry");
         check(GewuBrowserHomeFitZoom(1, 1000, NAN, 1000, 600) == 1, @"ignore nonfinite geometry");
         check(GewuBrowserResponsePolicy(response(@"application/pdf", nil), YES, NO) == WKNavigationResponsePolicyAllow, @"inline PDF");
-        check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment; filename=paper.pdf"), YES, NO) == WKNavigationResponsePolicyAllow, @"attachment PDF stays inline");
-        check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment"), YES, YES) == WKNavigationResponsePolicyAllow, @"download attribute PDF stays inline after MIME is known");
-        check(GewuBrowserResponsePolicy(response(@"application/pdf; charset=binary", nil), YES, YES) == WKNavigationResponsePolicyAllow, @"extensionless PDF with MIME parameters");
-        check(GewuBrowserResponsePolicy(response(@"application/x-pdf", @"attachment"), YES, NO) == WKNavigationResponsePolicyAllow, @"viewable PDF alias");
+        check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment; filename=paper.pdf"), YES, NO) == WKNavigationResponsePolicyDownload, @"attachment PDF transfers once for inline preview");
+        check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment"), YES, YES) == WKNavigationResponsePolicyDownload, @"download attribute PDF transfers for preview");
+        check(GewuBrowserResponsePolicy(response(@"application/pdf; charset=binary", nil), YES, YES) == WKNavigationResponsePolicyDownload, @"extensionless PDF download with MIME parameters");
+        check(GewuBrowserResponsePolicy(response(@"application/x-pdf", @"attachment"), YES, NO) == WKNavigationResponsePolicyDownload, @"PDF alias attachment transfers for preview");
         check(GewuBrowserResponsePolicy(response(@"application/pdf", nil), NO, NO) == WKNavigationResponsePolicyDownload, @"unsupported PDF remains downloadable");
         check(GewuBrowserResponsePolicy(response(@"application/zip", @"attachment"), NO, NO) == WKNavigationResponsePolicyDownload, @"archive download preserved");
         check(GewuBrowserResponsePolicy(response(@"text/html", nil), YES, NO) == WKNavigationResponsePolicyAllow, @"HTML navigation preserved");
+        check(GewuBrowserResponsePolicy(response(@"text/html", nil), YES, YES) == WKNavigationResponsePolicyAllow, @"download sign-in or consent page remains visible");
+        NSURL *creator = [NSURL URLWithString:@"https://example.org/article"];
+        check(GewuBrowserBlobURL([NSURL URLWithString:@"blob:https://example.org/generated-pdf"], creator), @"same-origin public blob file accepted");
+        for (NSString *url in @[@"blob:https://other.example/file", @"blob:http://example.org/file", @"blob:https://example.org:444/file", @"blob:null/file", @"blob:file:///tmp/private.pdf", @"blob:http://127.0.0.1:8765/private", @"data:application/pdf,x"])
+            check(!GewuBrowserBlobURL([NSURL URLWithString:url], creator), @"blob exception rejects foreign, opaque and private origins");
+        check(!GewuBrowserBlobURL([NSURL URLWithString:@"blob:https://example.org/file"], [NSURL URLWithString:@"about:blank"]), @"opaque creator is not assumed to be public");
         check(GewuBrowserResponsePolicy(response(@"text/plain", @" Attachment; filename=notes.txt"), YES, NO) == WKNavigationResponsePolicyDownload, @"non-PDF attachment preserved");
         check(GewuBrowserResponsePolicy(response(@"text/plain", nil), YES, YES) == WKNavigationResponsePolicyDownload, @"non-PDF explicit link download preserved");
 

@@ -10,6 +10,38 @@ internal sealed partial class WorkspaceWindow
     bool workspaceReady;
     bool recoveringService;
 
+    readonly Queue<DateTime> rendererRestarts = new();
+    bool recoveringRenderer;
+    void ConnectWorkspaceRecovery()
+    {
+        workspace.CoreWebView2.ProcessFailed += (_, e) => {
+            if (e.ProcessFailedKind != CoreWebView2ProcessFailedKind.RenderProcessExited || stopping || recoveringService || recoveringRenderer) return;
+            BeginInvoke(new Action(async () => {
+                if (recoveringRenderer || stopping) return;
+                recoveringRenderer = true;
+                try {
+                    while (rendererRestarts.Count > 0 && DateTime.UtcNow - rendererRestarts.Peek() > TimeSpan.FromMinutes(1)) rendererRestarts.Dequeue();
+                    if (rendererRestarts.Count >= 3) {
+                        startup.Text = "The workspace renderer could not recover. Close and reopen Gewu Insight.";
+                        startup.Show(); startup.BringToFront(); return;
+                    }
+                    rendererRestarts.Enqueue(DateTime.UtcNow);
+                    CancelCapture(); suggestions.Hide();
+                    var core = workspace.CoreWebView2;
+                    var loaded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    void Completed(object? sender, CoreWebView2NavigationCompletedEventArgs args) => loaded.TrySetResult(args.IsSuccess);
+                    core.NavigationCompleted += Completed;
+                    try {
+                        core.NavigateWithWebResourceRequest(core.Environment.CreateWebResourceRequest(origin!.AbsoluteUri, "GET", null, "X-Gewu-Workspace: " + workspaceToken + "\r\n"));
+                        if (!await loaded.Task.WaitAsync(TimeSpan.FromSeconds(30), applicationLifetime.Token)) throw new IOException("Workspace reload failed.");
+                        await SendStateAsync();
+                    } finally { core.NavigationCompleted -= Completed; }
+                } catch (Exception error) { log?.WriteLine("Renderer recovery: " + error.Message); }
+                finally { recoveringRenderer = false; }
+            }));
+        };
+    }
+
     void RefreshWorkspaceSession()
     {
         workspaceToken = File.ReadAllText(Path.Combine(dataRoot, "data", ".gewu-workspace-token")).Trim();

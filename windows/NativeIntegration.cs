@@ -9,6 +9,7 @@ internal sealed partial class WorkspaceWindow
     string activeDragId = "";
     long activeDragItem;
     bool activeItemHandled;
+    JsonElement? activeDragPayload;
     int dragArmGeneration;
 
     void ArmLibraryItemDrag(JsonElement payload)
@@ -20,6 +21,7 @@ internal sealed partial class WorkspaceWindow
     {
         string path = TextValue(payload, "path");
         string cleanup = TextValue(payload, "cleanup_path");
+        JsonElement? managed = payload.TryGetProperty("library_payload", out var libraryPayload) && libraryPayload.ValueKind == JsonValueKind.Object ? libraryPayload.Clone() : null;
         long item = pendingLibraryItem; pendingLibraryItem = 0;
         int generation = ++dragArmGeneration;
         Point start = Cursor.Position;
@@ -32,7 +34,7 @@ internal sealed partial class WorkspaceWindow
                 while (!stopping && generation == dragArmGeneration && (Control.MouseButtons & MouseButtons.Left) != 0) {
                     var point = Cursor.Position;
                     if (Math.Abs(point.X - start.X) >= SystemInformation.DragSize.Width / 2 || Math.Abs(point.Y - start.Y) >= SystemInformation.DragSize.Height / 2) {
-                        await DragFileAsync(path, item); break;
+                        await DragFileAsync(path, item, managed); break;
                     }
                     await Task.Delay(20);
                 }
@@ -56,12 +58,12 @@ internal sealed partial class WorkspaceWindow
         return data;
     }
 
-    async Task DragFileAsync(string path, long item)
+    async Task DragFileAsync(string path, long item, JsonElement? managed = null)
     {
         if (fileDragging || stopping || (Control.MouseButtons & MouseButtons.Left) == 0) return;
         var data = FileDragData(path);
         if (data == null) return;
-        activeDragId = Guid.NewGuid().ToString("N"); activeDragItem = item; activeItemHandled = false;
+        activeDragId = Guid.NewGuid().ToString("N"); activeDragItem = item; activeItemHandled = false; activeDragPayload = managed;
         await WorkspaceScriptAsync("window.gewuNativeDragId=" + JsonSerializer.Serialize(activeDragId));
         if (stopping || (Control.MouseButtons & MouseButtons.Left) == 0) return;
         fileDragging = true;
@@ -77,11 +79,14 @@ internal sealed partial class WorkspaceWindow
     async Task<bool> HandleLibraryItemFileDropAsync(JsonElement payload)
     {
         string id = TextValue(payload, "drag_id");
-        if (id.Length == 0 || id != activeDragId || activeDragItem <= 0) return false;
+        if (id.Length == 0 || id != activeDragId || (activeDragItem <= 0 && activeDragPayload == null)) return false;
         if (activeItemHandled) return true;
         activeItemHandled = true;
         double x = payload.GetProperty("x").GetDouble(), y = payload.GetProperty("y").GetDouble();
         if (!double.IsFinite(x) || !double.IsFinite(y)) return true;
+        if (activeDragPayload is JsonElement resource) {
+            await WorkspaceScriptAsync("window.handleNativeLibraryManagedDrop?.(" + resource.GetRawText() + "," + JsonSerializer.Serialize(new { x, y }) + ")"); return true;
+        }
         await WorkspaceScriptAsync("window.handleNativeLibraryItemDrop?.(" + activeDragItem + "," + JsonSerializer.Serialize(new { x, y }) + ")");
         return true;
     }

@@ -70,7 +70,9 @@ class PublicationDeletionTests(TestCase):
                 result = delete_publications(self.storage, [publication['id']])
                 self.assertEqual(result['retained_paper_ids'], [publication['paper_id']])
                 self.assertEqual(self.storage.get_paper(publication['paper_id'])['storage_key'], key)
-                self.assertTrue(path.exists())
+                canonical = ui.canonical_pdf_path_for_paper(self.storage.get_paper(publication['paper_id']))
+                self.assertEqual(canonical.read_bytes(), b'fixture file')
+                self.assertEqual(canonical.parent, ui.local_copy_dir_for_library_folder(self.storage, folder['id']).resolve())
         self.move.assert_not_called()
 
     def test_external_original_and_bytes_shared_with_another_paper_are_preserved(self):

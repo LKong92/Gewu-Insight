@@ -46,6 +46,13 @@ internal sealed partial class WorkspaceWindow
         Check(true, "independent Loader imports a generated folder with metadata lookup skipped");
         await UntilJS("state.libraryItems.some(x=>x.display_name?.includes('Loader fixture') || x.paper?.title?.includes('Loader fixture'))");
         Check(true, "Loader completion refreshes the main Library through the shared storage signal");
+        string paper = await workspace.CoreWebView2.ExecuteScriptAsync("state.libraryItems.find(x=>x.display_name?.includes('Loader fixture') || x.paper?.title?.includes('Loader fixture')).paper_id");
+        await view.CoreWebView2.ExecuteScriptAsync("window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type:'show-paper',paper_id:" + paper + "})");
+        await Until(() => !window.Visible);
+        Check(await view.CoreWebView2.ExecuteScriptAsync("state.libraryImportJob?.status==='completed'") == "true", "Loader Show in Library preserves the completed job document");
+        await UntilJS("state.mode==='library' && selectedLibraryPaper()?.paper_id===" + paper);
+        Check(true, "Loader Show in Library selects the generated paper in the main window");
+        await ShowLibraryLoaderAsync();
         string messageReceived = "none";
         view.CoreWebView2.WebMessageReceived += (_, e) => messageReceived = e.WebMessageAsJson;
         string closeResult = await view.CoreWebView2.ExecuteScriptAsync("(()=>{try{closeLibraryLoader();return 'sent:'+IS_STANDALONE_LOADER_WINDOW+':'+Boolean(window.webkit?.messageHandlers?.libraryLoaderWindow)}catch(e){return e.message}})()");

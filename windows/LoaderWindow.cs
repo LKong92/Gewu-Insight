@@ -69,6 +69,21 @@ internal sealed partial class WorkspaceWindow
                         string channel = TextValue(doc.RootElement, "channel");
                         var payload = doc.RootElement.GetProperty("payload");
                         if (channel == "libraryLoaderWindow" && TextValue(payload, "type") == "close") window.Hide();
+                        else if (channel == "libraryLoaderWindow" && TextValue(payload, "type") == "show-paper") {
+                            string errorMessage = "";
+                            try {
+                                var paper = TextValue(payload, "paper_id");
+                                var item = payload.TryGetProperty("library_item_id", out var value) ? value.Clone() : (object?)null;
+                                using var reveal = JsonDocument.Parse(await workspace.CoreWebView2.CallDevToolsProtocolMethodAsync("Runtime.evaluate", JsonSerializer.Serialize(new {
+                                    expression = "window.revealLoaderPaper(" + JsonSerializer.Serialize(paper) + "," + JsonSerializer.Serialize(item) + ")",
+                                    awaitPromise = true, returnByValue = true
+                                })).WaitAsync(TimeSpan.FromSeconds(30)));
+                                if (reveal.RootElement.TryGetProperty("exceptionDetails", out var exceptionDetails)) throw new IOException("The paper could not be revealed. Refresh Library and retry.");
+                                if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+                                Show(); Activate(); workspace.Focus(); window.Hide();
+                            } catch (Exception error) { errorMessage = error.Message; }
+                            await core.ExecuteScriptAsync("window.finishLoaderPaperReveal?.(" + JsonSerializer.Serialize(errorMessage) + ")");
+                        }
                         else if (channel == "choosePath") await ChoosePathAsync(payload, view, window);
                         else if (channel == "fileDrop" && paths.Length > 0)
                             await core.ExecuteScriptAsync("window.handleNativeFinderDrop?.(" + JsonSerializer.Serialize(paths) + "," + payload.GetRawText() + ")");
@@ -95,7 +110,7 @@ internal sealed partial class WorkspaceWindow
         if (loaderView?.CoreWebView2 == null || loaderView.IsDisposed) return;
         // Both local views share the refreshed workspace cookie. Preserve all
         // unsaved controls and let the shared progress reader report job state.
-        try { await loaderView.CoreWebView2.ExecuteScriptAsync("if(state.libraryImportJobId){refreshLibraryImportJob().then(resumeLibraryImportPollingIfNeeded)}"); }
+        try { await loaderView.CoreWebView2.ExecuteScriptAsync("if(state.libraryImportJobId && !['completed','failed','cancelled','stopped'].includes(state.libraryImportJob?.status)){refreshLibraryImportJob().then(resumeLibraryImportPollingIfNeeded)}"); }
         catch (Exception error) { log?.WriteLine("Folder Loader reconnect: " + error.Message); }
     }
 

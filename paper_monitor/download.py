@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import mimetypes
+import os
+import tempfile
+import threading
+import weakref
 import re
 import shutil
 import subprocess
@@ -19,6 +24,7 @@ from .pdf_utils import is_valid_pdf_file as structurally_valid_pdf_file, merge_p
 from .pdf_sources import approved_pdf_source, UNVERIFIED_PDF_SOURCE
 from .sources.openalex import openalex_request
 from .sources.publisher import request_aps_page
+from .science_pdf import is_science_supplement_reference, science_main_pdf_rejection, merge_science_pdfs
 from .storage import Storage
 from .text import safe_slug
 
@@ -46,6 +52,36 @@ def document_request(url: str, *, aps: bool = False, **options):
     raise ValueError("Too many PDF source redirects")
 
 
+_DOWNLOAD_LOCKS = weakref.WeakValueDictionary()
+_DOWNLOAD_LOCKS_GUARD = threading.Lock()
+
+
+def _paper_download_mutex(db_path: Path, paper_id: str):
+    key = (str(Path(db_path).expanduser().resolve()), str(paper_id))
+    with _DOWNLOAD_LOCKS_GUARD:
+        lock = _DOWNLOAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _DOWNLOAD_LOCKS[key] = lock
+        return lock
+
+
+@contextmanager
+def paper_download_lock(db_path: Path, paper_id: str, *, blocking: bool = True):
+    """Serialize one paper's download and registration within this process.
+
+    Waiting callers retain a strong reference; unused locks are released.
+    Distinct papers and unrelated Library additions remain independent.
+    """
+    lock = _paper_download_mutex(db_path, paper_id)
+    if not lock.acquire(blocking=blocking):
+        raise ValueError('A paper download is still running. Retry identity reconciliation after it finishes.')
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def download_paper(
     *,
     storage: Storage,
@@ -54,21 +90,41 @@ def download_paper(
     target_dir: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
+    with paper_download_lock(storage.db_path, paper_id):
+        resolved = storage.resolve_paper_id(paper_id)
+        if resolved != paper_id:
+            return download_paper(storage=storage,paper_id=resolved,pdf_dir=pdf_dir,target_dir=target_dir,force=force)
+        destination = target_dir if target_dir is not None else pdf_dir / paper_id
+        destination.mkdir(parents=True, exist_ok=True)
+        # Never share main.pdf or supplement intermediates in a Library folder.
+        with tempfile.TemporaryDirectory(prefix=".gewu-download-", dir=destination) as temporary:
+            return _download_paper_into(storage=storage, paper_id=paper_id,
+                                        target_dir=destination, work_dir=Path(temporary), force=force)
+
+
+def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
+                         work_dir: Path, force: bool) -> dict[str, Any]:
     paper = storage.get_paper(paper_id)
     if not paper:
         raise ValueError(f"Unknown paper id: {paper_id}")
 
-    if paper.get("download_status") in {"success", "partial"} and not force:
+    # Older overlapping requests could reset status after bytes were saved.
+    # A valid local PDF is the authority for an ordinary Download click.
+    existing = existing_downloaded_pdf_path(paper) if not force else None
+    if existing:
+        if paper.get("download_status") not in {"success", "partial"} or str(existing) != paper.get("merged_pdf_path"):
+            storage.update_download_status(paper_id, status="partial",
+                message="existing PDF reused; use --force to refresh",
+                main_pdf_path=str(existing), merged_pdf_path=str(existing))
         return {
             "status": "skipped",
             "message": "already downloaded; use --force to retry",
-            "merged_pdf_path": paper.get("merged_pdf_path"),
+            "merged_pdf_path": str(existing),
         }
 
-    target_dir = target_dir if target_dir is not None else pdf_dir / paper_id
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     candidates = collect_pdf_candidates(paper)
+    is_science = normalize_doi(paper.get("doi") or "").startswith("10.1126/")
     preserved_main_pdf_path = existing_science_main_only_pdf_path(paper) if force else None
     main_pdf_path: Path | None = preserved_main_pdf_path
     main_pdf_url = ""
@@ -77,26 +133,29 @@ def download_paper(
 
     if not main_pdf_path:
         for index, url in enumerate(candidates["main"]):
-            path = target_dir / "main.pdf"
-            if try_download_pdf(url, path, messages):
+            path = work_dir / "main.pdf"
+            response_metadata: dict[str, str] = {}
+            options = {"science_main": True, "response_metadata": response_metadata} if is_science else {}
+            if try_download_pdf(url, path, messages, **options):
                 main_pdf_path = path
-                main_pdf_url = url
+                main_pdf_url = response_metadata.get("url") or url
                 break
+    main_messages = list(messages)
 
     for index, url in enumerate(candidates["supplements"], start=1):
-        path = target_dir / f"supplement_{index}.pdf"
+        path = work_dir / f"supplement_{index}.pdf"
         if try_download_pdf(url, path, messages):
             supplement_paths.append(path)
 
     for index, url in enumerate(candidates.get("supplement_documents") or [], start=1):
         source_path = try_download_word_supplement(
             url,
-            target_dir / f"supplement_document_{index}",
+            work_dir / f"supplement_document_{index}",
             messages,
         )
         if not source_path:
             continue
-        converted_path = target_dir / f"supplement_document_{index}.pdf"
+        converted_path = work_dir / f"supplement_document_{index}.pdf"
         try:
             convert_word_document_to_pdf(source_path, converted_path)
             supplement_paths.append(converted_path)
@@ -107,7 +166,7 @@ def download_paper(
 
     if not main_pdf_path:
         status = "failed"
-        failure_detail = "; ".join(messages[-5:]) or "no downloadable main PDF found"
+        failure_detail = "; ".join(main_messages[-5:]) or "no downloadable main PDF found"
         if supplement_paths:
             message = (
                 f"main PDF unavailable; downloaded {len(supplement_paths)} PDF supplement(s); "
@@ -145,27 +204,34 @@ def download_paper(
         # untouched until the resource layer has archived or de-duplicated it.
         current_path="" if force else current_merged_path,
     )
-    working_merged_path = merged_path
-    replacing_existing_pdf = merged_path.exists()
-    if replacing_existing_pdf or (preserved_main_pdf_path and merged_path == preserved_main_pdf_path):
-        working_merged_path = merged_path.with_name(f".{merged_path.stem}-download-merge.pdf")
-        working_merged_path.unlink(missing_ok=True)
+    working_merged_path = work_dir / "merged.pdf"
+    replacing_existing_pdf = bool(
+        not force and current_merged_path and merged_path.exists()
+        and merged_path.resolve() == Path(current_merged_path).expanduser().resolve()
+    )
     downloaded_pdf_replaced = False
     try:
         merge_inputs = [main_pdf_path] + supplement_paths
-        merge_pdfs(merge_inputs, working_merged_path)
+        if is_science:
+            merged_count = merge_science_pdfs(main_pdf_path, supplement_paths, working_merged_path)
+        else:
+            merge_pdfs(merge_inputs, working_merged_path)
+            merged_count = len(supplement_paths)
         if not structurally_valid_pdf_file(working_merged_path):
             raise ValueError("merged output is not a complete PDF")
-        if working_merged_path != merged_path:
+        if replacing_existing_pdf:
             working_merged_path.replace(merged_path)
+        else:
+            merged_path = publish_new_download(working_merged_path, merged_path)
         downloaded_pdf_replaced = True
-        status = "success" if supplement_paths else "partial"
-        message = "downloaded and merged; temporary PDFs removed" if supplement_paths else "main PDF saved as merged PDF; no PDF supplement found"
+        status = "success" if merged_count else "partial"
+        message = "downloaded and merged; temporary PDFs removed" if merged_count else "main PDF saved as merged PDF; no PDF supplement found"
     except Exception as exc:
         if working_merged_path != merged_path:
             working_merged_path.unlink(missing_ok=True)
-        if not replacing_existing_pdf and main_pdf_path != merged_path:
-            shutil.copyfile(main_pdf_path, merged_path)
+        if not replacing_existing_pdf:
+            shutil.copyfile(main_pdf_path, working_merged_path)
+            merged_path = publish_new_download(working_merged_path, merged_path)
         status = "partial"
         if replacing_existing_pdf:
             message = f"existing PDF kept; refreshed PDF merge failed: {exc}"
@@ -196,6 +262,34 @@ def download_paper(
     }
 
 
+def existing_downloaded_pdf_path(paper: dict[str, Any]) -> Path | None:
+    for key in ("merged_pdf_path", "main_pdf_path"):
+        value = str(paper.get(key) or "").strip()
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        if structurally_valid_pdf_file(path):
+            return path
+    return None
+
+
+def publish_new_download(source: Path, requested: Path) -> Path:
+    """Publish complete bytes without racing another paper with the same title.
+
+    The staging directory is on the destination filesystem. An exclusive hard
+    link is atomic; unlike rename it cannot overwrite another download's file.
+    """
+    candidate = requested
+    while True:
+        try:
+            os.link(source, candidate)
+        except FileExistsError:
+            candidate = unique_download_path(requested)
+            continue
+        source.unlink()
+        return candidate
+
+
 def existing_science_main_only_pdf_path(paper: dict[str, Any]) -> Path | None:
     doi = normalize_doi(paper.get("doi") or "")
     if not doi.startswith("10.1126/"):
@@ -210,6 +304,8 @@ def existing_science_main_only_pdf_path(paper: dict[str, Any]) -> Path | None:
         path = Path(raw).expanduser()
         try:
             if not structurally_valid_pdf_file(path):
+                continue
+            if science_main_pdf_rejection(path):
                 continue
             return path.resolve()
         except OSError:
@@ -306,7 +402,7 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
                 marker = f"{href} {label}".lower()
                 if is_probable_word_supplement(marker):
                     supplement_documents.append(href)
-                elif is_probable_supplement(marker):
+                elif is_probable_supplement(marker) or (doi.startswith("10.1126/") and is_science_supplement_reference(marker)):
                     supplements.append(href)
                 elif is_probable_non_article_pdf(marker):
                     continue
@@ -316,6 +412,9 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
             pass
 
     main = [url for url in dedup(main) if approved_pdf_source(url)]
+    if doi.startswith("10.1126/"):
+        supplements.extend(url for url in main if is_science_supplement_reference(url))
+        main = [url for url in main if not is_science_supplement_reference(url)]
     if doi.startswith("10.1038/"):
         main = [url for url in main if not is_nature_reference_pdf_url(url)] + [
             url for url in main if is_nature_reference_pdf_url(url)
@@ -674,6 +773,8 @@ def try_download_pdf(
     messages: list[str],
     *,
     request_max_retries: int | None = None,
+    science_main: bool = False,
+    response_metadata: dict[str, str] | None = None,
 ) -> bool:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.part")
     response = None
@@ -684,6 +785,10 @@ def try_download_pdf(
         if request_max_retries is not None:
             request_options["max_retries"] = max(1, int(request_max_retries))
         response = document_request(url, **request_options)
+        if science_main and is_science_supplement_reference(response.url):
+            messages.append(f"main PDF redirected to supplementary material: {url} -> {response.url}")
+            response.close()
+            return False
         content_type = response.headers.get("content-type", "").lower()
         guessed_type = mimetypes.guess_type(urlparse(response.url).path)[0] or ""
         if "pdf" not in content_type and "pdf" not in guessed_type and not response.url.lower().endswith(".pdf"):
@@ -697,6 +802,17 @@ def try_download_pdf(
             messages.append(f"invalid or incomplete PDF payload: {url}")
             temporary.unlink(missing_ok=True)
             return False
+        if science_main:
+            rejection = science_main_pdf_rejection(
+                temporary, url=response.url,
+                filename=response.headers.get("content-disposition", ""),
+            )
+            if rejection:
+                messages.append(f"{rejection}: {response.url}")
+                temporary.unlink(missing_ok=True)
+                return False
+        if response_metadata is not None:
+            response_metadata["url"] = response.url
         temporary.replace(path)
         return True
     except Exception as exc:

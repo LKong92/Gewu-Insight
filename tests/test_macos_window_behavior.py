@@ -75,7 +75,9 @@ class MacosWindowBehaviorTests(unittest.TestCase):
             info = plistlib.load(handle)
 
         self.assertEqual(info["CFBundleIconFile"], expected_name)
-        self.assertEqual(info["CFBundleVersion"], expected_build)
+        from paper_monitor import __build__, __version__
+        self.assertEqual(info["CFBundleVersion"], str(__build__))
+        self.assertEqual(info["CFBundleShortVersionString"], __version__)
         self.assertTrue((resources / f"{expected_name}.icns").is_file())
         self.assertEqual(
             (resources / f"{expected_name}.png").read_bytes(),
@@ -87,7 +89,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         )
 
         build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()
-        self.assertIn('APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_BUILD_VERSION"', build_script)
+        self.assertIn('APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_CACHE_KEY"', build_script)
         self.assertIn('touch "$APP"', build_script)
 
     def test_native_about_panel_uses_bundle_identity_and_explicit_credits(self) -> None:
@@ -118,7 +120,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         )
         self.assertIn("taglineLabel.maximumNumberOfLines = 2", source)
         self.assertIn("const CGFloat width = 336.0", source)
-        self.assertIn("const CGFloat height = 340.0", source)
+        self.assertIn("const CGFloat height = 380.0", source)
         self.assertIn("self.aboutWindow.titleVisibility = NSWindowTitleVisible", source)
         self.assertIn("self.aboutWindow.titlebarAppearsTransparent = NO", source)
         self.assertIn("aboutLinkButtonWithTitle", source)
@@ -143,6 +145,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
 
         self.assertIn("NSHumanReadableCopyright", build_script)
 
+    @__import__("unittest").skipIf(__import__("sys").platform == "win32", "macOS application bundle packaging")
     def test_repository_license_and_readme_match_about_attribution(self) -> None:
         license_text = (ROOT / "LICENSE").read_text()
         readme = (ROOT / "README.md").read_text()
@@ -156,24 +159,19 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[LICENSE](LICENSE)", readme)
         self.assertNotIn("Licensed under the MIT License", readme)
 
-        heading = "# Gewu Insight\n\n"
-        self.assertTrue(readme.startswith(heading))
-        introduction = readme[len(heading):]
-        windows_branch = introduction.startswith("> This is the independent Windows Preview branch ")
-        if windows_branch:
-            branch_notice, separator, introduction = introduction.partition("\n\n")
-            self.assertEqual(separator, "\n\n")
-            self.assertTrue(all(line.startswith("> ") for line in branch_notice.splitlines()))
-            self.assertIn("The macOS product continues on `main`", branch_notice)
-        self.assertTrue(introduction.startswith("**Keep research objects visible"))
+        resources = ROOT / "Gewu Insight.app" / "Contents" / "Resources"
+        self.assertEqual((resources / "LICENSE.txt").read_bytes(), (ROOT / "LICENSE").read_bytes())
+        self.assertEqual(
+            (resources / "THIRD_PARTY_NOTICES.md").read_bytes(),
+            (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes(),
+        )
+
+        self.assertTrue(readme.startswith("# Gewu Insight\n"))
+        self.assertIn("**Keep research objects visible", readme)
         self.assertIn("## Platform support", readme)
         self.assertIn("the current native desktop release", readme)
-        if windows_branch:
-            self.assertIn("an experimental x64 installer", readme)
-            self.assertIn("not feature complete or accepted as equivalent to macOS", readme)
-        else:
-            self.assertIn("planned as an experimental desktop release", readme)
-            self.assertIn("not yet a supported distribution", readme)
+        self.assertIn("developed separately on the experimental Windows branch", readme)
+        self.assertIn("do not establish Windows feature parity", readme)
         self.assertIn("## Name and Chinese origin", readme)
         self.assertGreater(readme.index("格物洞见"), readme.index("## Name and Chinese origin"))
 
@@ -283,7 +281,9 @@ class MacosWindowBehaviorTests(unittest.TestCase):
 
         self.assertIn("@interface GewuInsightWindow : NSWindow", source)
         self.assertIn('setObject:@"None" forKey:@"AppleActionOnDoubleClick"', source)
-        self.assertNotIn("- (void)sendEvent:(NSEvent *)event", source)
+        event_dispatch = source.split("- (void)sendEvent:(NSEvent *)event", 1)[1].split("- (void)beginNativeWindowDrag", 1)[0]
+        self.assertIn("[super sendEvent:event]", event_dispatch)
+        self.assertNotIn("performWindowDragWithEvent", event_dispatch)
         self.assertNotIn("handleTitlebarDoubleClickAction", source)
         self.assertNotIn("titlebarDoubleClickHandler", source)
         self.assertNotIn("distanceFromTop <= 40.0", source)

@@ -150,3 +150,25 @@ def reveal_windows_file(path: Path) -> None:
         shell.SHOpenFolderAndSelectItems(item, [], 0)
     finally:
         pythoncom.CoUninitialize()
+
+
+def create_exact_placement(canonical: Path, path: Path) -> Path:
+    """Write one exact Windows shortcut name, including journal staging names."""
+    import pythoncom
+    canonical, path = Path(canonical).absolute(), Path(path).absolute()
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(str(path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(suffix='.lnk', prefix='.gewu-placement-', dir=path.parent)
+    os.close(descriptor)
+    try:
+        with shell_link() as link:
+            link.SetPath(str(canonical))
+            link.SetWorkingDirectory(str(canonical.parent))
+            link.SetDescription(LINK_DESCRIPTION)
+            link.QueryInterface(pythoncom.IID_IPersistFile).Save(temporary, 1)
+        os.rename(temporary, path)
+        _link_target.cache_clear()
+        return path
+    finally:
+        Path(temporary).unlink(missing_ok=True)

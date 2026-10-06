@@ -36,6 +36,16 @@ internal sealed partial class WorkspaceWindow
             if (page?.View?.CoreWebView2 == null || page.Home || page.Loading || !PublicUrl(url))
                 throw new InvalidOperationException("Wait for a public article page to finish loading.");
             var core = page.View.CoreWebView2;
+            if (LoadedPdfFor(page, url) is { } loadedDocument) {
+                articleSnapshot = new ArticleSnapshot(Guid.NewGuid().ToString("N"), page, generation, url, [url]);
+                await EmitAsync(new { @event = "capture-metadata", request_id = requestId, snapshot = new {
+                    snapshot_id = articleSnapshot.Id, tab_id = page.Id, url,
+                    metadata = new { title = "", authors = Array.Empty<string>() }, pdf_urls = new[] { url }, is_pdf = true,
+                    loaded_pdf_urls = new[] { url }, origin_paper_id = page.OriginPaperId,
+                    origin_url = page.OriginUrl, origin_library_item_id = page.OriginLibraryItemId
+                }});
+                return;
+            }
             _ = CaptureBackdropAsync(page, requestId, requestGeneration);
             using var tree = JsonDocument.Parse(await core.CallDevToolsProtocolMethodAsync("Page.getFrameTree", "{}"));
             string frameId = tree.RootElement.GetProperty("frameTree").GetProperty("frame").GetProperty("id").GetString()!;
@@ -49,14 +59,18 @@ internal sealed partial class WorkspaceWindow
             if (stopping || captureGeneration != requestGeneration || selected != page || page.Generation != generation || page.Url != url || page.Home)
                 throw new InvalidOperationException("The page changed. Close Save to Gewu and try again.");
             var value = evaluated.RootElement.GetProperty("result").GetProperty("value");
+            try { await Task.WhenAll(readingPdfs.ToArray()).WaitAsync(TimeSpan.FromSeconds(30)); } catch (TimeoutException) { }
+            if (page.Generation != generation || page.Url != url || selected != page) throw new IOException("The article changed. Try again.");
             bool isPdf = value.TryGetProperty("is_pdf", out var pdf) && pdf.GetBoolean();
             var candidates = value.GetProperty("pdf_urls").EnumerateArray().Select(item => item.GetString() ?? "").Where(candidate => PublicUrl(candidate) && PdfSources.Approved(candidate)).Take(8).ToList();
+            isPdf |= LoadedPdfFor(page, url) != null;
             if (isPdf && PdfSources.Approved(url) && !candidates.Contains(url)) candidates.Insert(0, url);
             articleSnapshot = new ArticleSnapshot(Guid.NewGuid().ToString("N"), page, generation, url, candidates.Take(8).ToArray());
             await EmitAsync(new { @event = "capture-metadata", request_id = requestId, snapshot = new {
                 snapshot_id = articleSnapshot.Id, tab_id = page.Id, url,
                 metadata = value.GetProperty("metadata").Clone(), pdf_urls = candidates.Take(8).ToArray(), is_pdf = isPdf,
-                origin_paper_id = page.OriginPaperId, origin_url = page.OriginUrl
+                origin_paper_id = page.OriginPaperId, origin_url = page.OriginUrl, origin_library_item_id = page.OriginLibraryItemId,
+                loaded_pdf_urls = candidates.Where(candidate => LoadedPdfFor(page, candidate) != null).ToArray()
             }});
         } catch (Exception error) {
             if (!stopping && captureGeneration == requestGeneration) await EmitAsync(new { @event = "capture-metadata", request_id = requestId, error = error.Message });
@@ -108,6 +122,20 @@ internal sealed partial class WorkspaceWindow
             await EmitAsync(new { @event = "capture-pdf", token, error = "The article changed. Close Save to Gewu and try again." });
             return;
         }
+        var loaded = LoadedPdfFor(snapshot.Page, url);
+        bool allowDownload = command.TryGetProperty("allow_download", out var allowed) && allowed.ValueKind == JsonValueKind.True;
+        if (loaded != null || !allowDownload) {
+            try {
+                if (loaded == null) throw new IOException("Original PDF bytes are unavailable for this document. Choose Get PDF to request a new download.");
+                using var cancel = CancellationTokenSource.CreateLinkedTokenSource(applicationLifetime.Token);
+                cancel.CancelAfter(TimeSpan.FromMinutes(5)); captureDownload?.Cancel(); captureDownload = cancel;
+                try { await UploadLoadedPdfAsync(loaded, uploadToken, cancel.Token); }
+                finally { if (captureDownload == cancel) captureDownload = null; }
+                if (!CurrentSnapshot(snapshot)) throw new IOException("The article changed. Try again.");
+                await EmitAsync(new { @event = "capture-pdf", token });
+            } catch (Exception error) { if (!stopping && articleSnapshot == snapshot) await EmitAsync(new { @event = "capture-pdf", token, error = error.Message }); }
+            return;
+        }
         captureDownload?.Cancel();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         captureDownload = cancellation;
@@ -119,7 +147,7 @@ internal sealed partial class WorkspaceWindow
         Directory.CreateDirectory(directory);
         string destination = Path.Combine(directory, "Article.pdf");
         CoreWebView2DownloadOperation? operation = null;
-        const long limit = 64L * 1024 * 1024;
+        const long limit = 128L * 1024 * 1024;
         var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var navigations = new HashSet<string>(StringComparer.Ordinal) { url };
         bool copying = false;
@@ -150,12 +178,12 @@ internal sealed partial class WorkspaceWindow
                 e.Handled = true;
                 if (!CurrentSnapshot(snapshot) || operation != null || copying || !PublicUrl(e.DownloadOperation.Uri) || !PdfSources.Approved(e.DownloadOperation.Uri) ||
                     e.DownloadOperation.TotalBytesToReceive > limit) {
-                    e.Cancel = true; completion.TrySetException(new IOException("Choose one readable PDF up to 64 MB.")); return;
+                    e.Cancel = true; completion.TrySetException(new IOException("Choose one readable PDF up to 128 MB.")); return;
                 }
                 e.ResultFilePath = destination; operation = e.DownloadOperation;
                 operation.BytesReceivedChanged += (_, _) => {
                     if (operation.BytesReceived > limit || cancellation.IsCancellationRequested || !CurrentSnapshot(snapshot)) {
-                        operation.Cancel(); completion.TrySetException(new IOException("PDF retrieval was cancelled or exceeded 64 MB."));
+                        operation.Cancel(); completion.TrySetException(new IOException("PDF retrieval was cancelled or exceeded 128 MB."));
                     }
                 };
                 operation.StateChanged += (_, _) => {
@@ -186,7 +214,7 @@ internal sealed partial class WorkspaceWindow
                     string type = Header("content-type");
                     if (!type.Contains("application/pdf", StringComparison.OrdinalIgnoreCase) && !type.Contains("application/octet-stream", StringComparison.OrdinalIgnoreCase))
                         throw new IOException("The website returned a webpage instead of a PDF. Open its PDF link or finish signing in, then retry.");
-                    if (long.TryParse(Header("content-length"), out long length) && length > limit) throw new IOException("Choose a PDF up to 64 MB.");
+                    if (long.TryParse(Header("content-length"), out long length) && length > limit) throw new IOException("Choose a PDF up to 128 MB.");
                     if (copying || operation != null || completion.Task.IsCompleted) throw new IOException("A PDF transfer is already in progress.");
                     copying = true;
                     // Read the network body before Chromium replaces an inline
@@ -201,7 +229,7 @@ internal sealed partial class WorkspaceWindow
                             var value = chunk.RootElement;
                             byte[] bytes = value.TryGetProperty("base64Encoded", out var encoded) && encoded.GetBoolean()
                                 ? Convert.FromBase64String(TextValue(value,"data")) : System.Text.Encoding.UTF8.GetBytes(TextValue(value,"data"));
-                            total += bytes.Length; if (total > limit) throw new IOException("Choose a PDF up to 64 MB.");
+                            total += bytes.Length; if (total > limit) throw new IOException("Choose a PDF up to 128 MB.");
                             await file.WriteAsync(bytes, cancellation.Token);
                             if (value.TryGetProperty("eof", out var eof) && eof.GetBoolean()) break;
                         }
@@ -229,11 +257,11 @@ internal sealed partial class WorkspaceWindow
             string file = await completion.Task;
             CheckCurrent();
             var info = new FileInfo(file);
-            if (info.Length is <= 0 or > limit) throw new IOException("Choose a PDF up to 64 MB.");
+            if (info.Length is <= 0 or > limit) throw new IOException("Choose a PDF up to 128 MB.");
             // Upload capabilities are loopback-only, never sent through the
             // browser or through a redirect. Backend performs structural and
             // identity validation before the review can become PDF-ready.
-            using var uploader = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+            using var uploader = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(5) };
             await using var input = File.OpenRead(file);
             using var content = new StreamContent(input);
             content.Headers.ContentType = new("application/pdf");

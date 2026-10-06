@@ -41,8 +41,14 @@ internal sealed partial class WorkspaceWindow
         cancel.CancelAfter(TimeSpan.FromMinutes(2));
         try {
             await EmitAsync(new { @event = "download", message = "Preparing Save Download with this website session…" });
-            await view.EnsureCoreWebView2Async(remoteEnvironment);
-            string name = await ReadBrowserDownloadAsync(view.CoreWebView2, url, destination, cancel.Token);
+            string name;
+            var loaded = LoadedPdfFor(page, url);
+            if (loaded != null) { await File.WriteAllBytesAsync(destination, loaded.Bytes, cancel.Token); name = loaded.Name; }
+            else {
+                if (new Uri(url).AbsolutePath.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)) throw new IOException("Original PDF bytes are unavailable. Reload the PDF before saving.");
+                await view.EnsureCoreWebView2Async(remoteEnvironment);
+                name = await ReadBrowserDownloadAsync(view.CoreWebView2, url, destination, cancel.Token);
+            }
             if (stopping) return;
             using var save = new SaveFileDialog { Title = "Save Download", FileName = name, Filter = "All files|*.*" };
             if (save.ShowDialog(this) != DialogResult.OK) { await EmitAsync(new { @event = "download", message = "Save Download cancelled." }); return; }
@@ -65,7 +71,7 @@ internal sealed partial class WorkspaceWindow
     {
         if (!PublicUrl(url)) throw new IOException("Use a public HTTP(S) download address.");
         if (publisher != null && !publisher.Allowed(url)) throw new IOException(PdfSources.Unverified);
-        const long limit = 64L * 1024 * 1024;
+        const long limit = 128L * 1024 * 1024;
         bool approvedChain = PdfSources.Approved(url), takingBody = false;
         int redirects = 0;
         var finished = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -196,10 +202,13 @@ internal sealed partial class WorkspaceWindow
                     bool supported = mime.Contains("pdf", StringComparison.OrdinalIgnoreCase) || mime.Contains("octet-stream", StringComparison.OrdinalIgnoreCase) ||
                         (publisher.Supplement && (mime.Contains("msword", StringComparison.OrdinalIgnoreCase) || mime.Contains("wordprocessingml", StringComparison.OrdinalIgnoreCase)));
                     if (!supported) throw new IOException("The publisher did not return a supported PDF or Word supplement.");
+                    if (!publisher.Supplement && (publisher.Publisher == "aaas" || publisher.Kind.StartsWith("aaas-")) &&
+                        System.Text.RegularExpressions.Regex.IsMatch(responseUrl, @"suppl|supplement|supinfo|supdata", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                        throw new IOException("Science returned supplementary material instead of the main article PDF.");
                     publisher.FileUrl = responseUrl;
                     publisher.FileMime = mime;
                 }
-                if (long.TryParse(Header("content-length"), out long length) && length > limit) throw new IOException("Save Download supports files up to 64 MB.");
+                if (long.TryParse(Header("content-length"), out long length) && length > limit) throw new IOException("Save Download supports files up to 128 MB.");
                 if (takingBody) throw new IOException("A download is already being read.");
                 takingBody = true;
                 using var body = JsonDocument.Parse(await core.CallDevToolsProtocolMethodAsync("Fetch.takeResponseBodyAsStream", JsonSerializer.Serialize(new { requestId })));
@@ -216,7 +225,7 @@ internal sealed partial class WorkspaceWindow
                             prefix.Write(bytes, 0, Math.Min(bytes.Length, 1024 - (int)prefix.Length));
                             if (Encoding.ASCII.GetString(prefix.ToArray()).Contains("%PDF-")) throw new IOException(PdfSources.Unverified);
                         }
-                        total += bytes.Length; if (total > limit) throw new IOException("Save Download supports files up to 64 MB.");
+                        total += bytes.Length; if (total > limit) throw new IOException("Save Download supports files up to 128 MB.");
                         await file.WriteAsync(bytes, cancellation);
                         if (part.TryGetProperty("eof", out var eof) && eof.GetBoolean()) break;
                     }

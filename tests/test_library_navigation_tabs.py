@@ -17,12 +17,19 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.storage = Storage(self.root / "paper_monitor.sqlite")
         self.original_spaces_root = ui_server.SPACES_LOCAL_COPY_ROOT
         self.original_library_root = ui_server.LIBRARY_LOCAL_COPY_ROOT
+        self.extra_roots = [patch.object(ui_server, name, self.root / subdir) for name, subdir in (
+            ('ASSOCIATED_FILES_ROOT', 'Associated Files'),
+            ('MY_PUBLICATIONS_LOCAL_COPY_ROOT', 'My Publications'), ('DEFAULT_PDF_DIR', 'pdfs'))]
+        for active_patch in self.extra_roots:
+            active_patch.start()
         ui_server.SPACES_LOCAL_COPY_ROOT = self.root / "Spaces"
         ui_server.LIBRARY_LOCAL_COPY_ROOT = self.root / "Library"
 
     def tearDown(self) -> None:
         ui_server.SPACES_LOCAL_COPY_ROOT = self.original_spaces_root
         ui_server.LIBRARY_LOCAL_COPY_ROOT = self.original_library_root
+        for active_patch in reversed(self.extra_roots):
+            active_patch.stop()
         self.storage.close()
         self.tmp.cleanup()
 
@@ -291,17 +298,14 @@ class LibraryNavigationTabTests(unittest.TestCase):
 
     def test_space_add_and_library_location_ui_contract(self) -> None:
         html = ui_server.INDEX_HTML
-        workspace = html.split("function workspaceToolsMarkup()", 1)[1].split(
+        context = html.split("function activeLibraryNavigationToolContext()", 1)[1].split(
             "function updateToolbarLibraryImport()", 1
         )[0]
-        context = html.split("function activeLibraryNavigationToolContext()", 1)[1].split(
-            "function workspaceToolsMarkup()", 1
-        )[0]
-        add_paper = html.split("async function addLibraryNavigationPaper(tabType, index)", 1)[1].split(
-            "function wireWorkspaceTools()", 1
-        )[0]
-        wire_tools = html.split("function wireWorkspaceTools()", 1)[1].split(
+        add_paper = html.split("async function submitLibraryInlineAddPaper()", 1)[1].split(
             "function renderMyPublications", 1
+        )[0]
+        menu = html.split("function showLibraryTabContextMenu", 1)[1].split(
+            "function hideLibraryTabContextMenu", 1
         )[0]
         search_row = html.split("function librarySearchResultRowMarkup", 1)[1].split(
             "function libraryRowMarkup", 1
@@ -319,31 +323,18 @@ class LibraryNavigationTabTests(unittest.TestCase):
             "function fileNameFromPath", 1
         )[0]
 
-        self.assertIn('placeholder="DOI, arXiv ID, or title"', workspace)
+        self.assertNotIn("workspaceToolsMarkup", html)
         self.assertIn('type: "shortcut"', context)
         self.assertIn('type: "workspace"', context)
-        self.assertIn('context.type === "workspace"', workspace)
-        self.assertIn("Move Space to Library", workspace)
-        self.assertIn(
-            "const currentFolderId = Number(state.libraryCurrentFolderId || rootFolderId)",
-            add_paper,
-        )
-        self.assertIn(
-            "libraryFolderIsWithin(currentFolderId, rootFolderId)",
-            add_paper,
-        )
-        self.assertIn('fetch("/api/library/navigation-tabs/add-paper"', add_paper)
-        self.assertIn("tab_type: tabType", add_paper)
+        self.assertIn('"/api/library/navigation-tabs/add-paper"', add_paper)
+        self.assertIn("tab_type: context.tab_type", add_paper)
         self.assertIn("folder_id: targetFolderId", add_paper)
-        self.assertIn("const addedFolderId = Number(data.folder_id || targetFolderId", add_paper)
-        self.assertIn("state.workspaceAddPaperBusy = true", add_paper)
-        self.assertIn("state.workspaceAddPaperBusy = false", add_paper)
-        self.assertIn("updateLibraryActivityStatus(", add_paper)
+        self.assertIn("state.libraryInlineAddBusy = true", add_paper)
+        self.assertIn("state.libraryInlineAddBusy = false", add_paper)
         self.assertIn("Finding paper and adding it to", add_paper)
         self.assertIn("Add Paper failed:", add_paper)
-        self.assertIn("renameLibraryShortcutTab(context.index, label)", wire_tools)
-        self.assertIn("renameLibraryWorkspace(context.index, label)", wire_tools)
-        self.assertIn("addLibraryNavigationPaper(context.type, context.index)", wire_tools)
+        self.assertIn("renameLibraryShortcutTab(i)", menu)
+        self.assertIn("renameLibraryWorkspaceFromTab(i)", menu)
         self.assertIn('data-action="show-library-search-result"', search_row)
         self.assertIn(">Show in Library</button>", search_row)
         self.assertNotIn("paper.journal", search_row)
@@ -361,7 +352,7 @@ class LibraryNavigationTabTests(unittest.TestCase):
     def test_main_library_inline_add_paper_ui_contract(self) -> None:
         html = ui_server.INDEX_HTML
         inline = html.split("function beginLibraryInlineAddPaper(folderId)", 1)[1].split(
-            "function wireWorkspaceTools()", 1
+            "function renderMyPublications", 1
         )[0]
         markup = html.split("function libraryInlineAddPaperMarkup(folderId", 1)[1].split(
             "function libraryColumnMarkup", 1
@@ -371,14 +362,14 @@ class LibraryNavigationTabTests(unittest.TestCase):
         )[0]
 
         self.assertIn('data-action="add-paper">Add Paper</button>', html)
-        self.assertIn('fetch("/api/library/add-paper"', inline)
+        self.assertIn('"/api/library/add-paper"', inline)
         self.assertIn("folder_id: targetFolderId", inline)
         self.assertIn("state.libraryInlineAddBusy = true", inline)
         self.assertIn("state.libraryInlineAddError = error.message", inline)
         self.assertIn("resetLibraryInlineAddPaper()", inline)
         self.assertIn('placeholder="DOI, arXiv ID, or title"', markup)
         self.assertIn("data-library-inline-add-paper-submit", markup)
-        self.assertIn('state.libraryTab === "library"', context_menu)
+        self.assertIn("libraryInlineAddAllowed(targetFolderId)", context_menu)
         self.assertIn("!hasEntry", context_menu)
         self.assertIn("beginLibraryInlineAddPaper(targetFolderId)", context_menu)
 
@@ -442,7 +433,7 @@ class LibraryNavigationTabTests(unittest.TestCase):
         target = ui_server.SPACES_LOCAL_COPY_ROOT / "Occupied"
         (target / "untracked.txt").write_text("keep", encoding="utf-8")
 
-        with self.assertRaisesRegex(ValueError, "Finder"):
+        with self.assertRaisesRegex(ValueError, "Finder|local files"):
             ui_server.remove_library_workspace_tab(self.storage, {"tab_id": tab["tab_id"]})
 
         self.assertIsNotNone(self.storage.get_library_folder(folder_id))
@@ -528,9 +519,10 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.assertEqual(Path(paper["source_path"]).resolve(), (target_dir / "paper.pdf").resolve())
         self.assertEqual(
             [Path(path).resolve() for path in json.loads(paper["supplement_pdf_paths"])],
-            [(target_dir / "supplement.pdf").resolve()],
+            [Path(resource["stored_path"]).resolve()],
         )
-        self.assertEqual(Path(resource["stored_path"]).resolve(), (target_dir / "supplement.pdf").resolve())
+        self.assertTrue(Path(resource["stored_path"]).resolve().is_relative_to(ui_server.ASSOCIATED_FILES_ROOT.resolve()))
+        self.assertEqual(Path(resource["stored_path"]).read_bytes(), b"%PDF-1.4\n")
         self.assertTrue((target_dir / "paper.pdf").exists())
 
 

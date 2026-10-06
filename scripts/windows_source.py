@@ -11,7 +11,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_SHELL_VERSION = (0, 1, 20)
+SOURCE_SHELL_VERSION = (0, 1, 21)
 
 
 def workspace_path(explicit: Path | None, *, create: bool = False) -> Path:
@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, help="Existing Library root (contains data/paper_monitor.sqlite).")
     parser.add_argument("--new-workspace", action="store_true", help="Create an empty Library at --workspace.")
-    parser.add_argument("--desktop-exe", type=Path, help="Existing desktop shell; prefers local 0.1.20, then the installed Preview (minimum 0.1.20).")
+    parser.add_argument("--desktop-exe", type=Path, help="Existing desktop shell; prefers local 0.1.21, then the installed Preview (minimum 0.1.21).")
     parser.add_argument("--web", action="store_true", help="Use the optional external-browser interface instead of the desktop shell.")
     parser.add_argument("--port", type=int, default=0, help="Loopback port; 0 chooses an available port.")
     parser.add_argument("--no-open", action="store_true", help="Do not open the default browser (diagnostics).")

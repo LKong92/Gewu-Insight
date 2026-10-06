@@ -8,25 +8,25 @@ does not need to stay open. Close another Gewu instance or Source Web first.
 
 ## Current local delivery
 
-On 2026-09-29, the launcher was verified with the complete existing build at
-`dist/windows-preview-0.1.20/Gewu Insight.exe` and the local `.venv` interpreter.
-About displays **Windows Preview 0.1.20**. Both the Python and native Nature
-download fixes from 0.1.20 are present; updating Python alone with the old
-0.1.19 shell would omit the native fix, so the launcher rejects older shells.
+On 2026-09-29, Windows Preview **0.1.21** was built and deployed at
+`dist/windows-preview-0.1.21/Gewu Insight.exe`. It loads this checkout with the
+existing `.venv`; the launcher requires a matching 0.1.21 or newer shell.
+The shared product includes macOS changes through `8a27895` with Windows
+file, browser, PDF, drag/drop and recovery adapters.
 
-The original Library remains at `%USERPROFILE%\Gewu Insight Preview`, outside
-the checkout. Its protected database tables and 19 research files were verified
-unchanged, with SQLite integrity OK and no foreign-key errors. Library and the
-embedded Browser/history render in the actual desktop window. Normal close,
-service exit, lock release and reopening through the CMD entry were checked.
-This run did not repeat a real institution-authenticated publisher download.
+The original Library remains at `%USERPROFILE%\Gewu Insight Preview`. Its
+schema is now 22. After normal close/reopen, all protected original rows and
+19 research-file hashes remained unchanged, with integrity OK and no foreign-key
+errors. A verified database/file/source backup is in
+`tmp/windows-parity-0.1.21/delivery-backup/`. Do not open the upgraded Library
+with older source. See [scope and validation](WINDOWS_MAC_PARITY_0.1.21.md).
 
-The installed Preview remains 0.1.19. Its old shortcuts still start that version;
-use **Start Gewu Insight.cmd** for the source desktop. A verified recovery backup
-is retained. No installer, certificate enrollment or Windows security change was
-used. The same 0.1.20 DLL that was previously blocked now starts locally; the
-reason for the changed Windows decision is unknown. This does not establish
-signed-release acceptance or guarantee execution on another computer.
+Installed Preview 0.1.19 remains uninstalled. Its archive and the old 0.1.20
+payload are recovery material, not active apps. This delivery creates no
+installer and changes no Windows trust settings. The current shell's 279
+files were hash-verified and its actual delivery path passed isolated startup.
+Real institution-authenticated downloads and every third-party drop target
+were not comprehensively tested.
 
 ## Source updates
 
@@ -40,7 +40,7 @@ signed-release acceptance or guarantee execution on another computer.
 Python, HTML and JavaScript changes load from source after restart. C# shell
 changes require a matching new desktop build; editing `.cs` files alone cannot
 update the running native code. GitHub source updates do not automatically fetch
-changes or replace this shell. Do not delete `dist/windows-preview-0.1.20` while
+changes or replace this shell. Do not delete `dist/windows-preview-0.1.21` while
 using this configuration.
 
 ## Setup and another Library
@@ -57,8 +57,8 @@ py -3 -m venv .venv
 The existing Python 3.13 environment was used for local verification; a clean
 dependency installation on another machine was not part of this task.
 
-The launcher prefers the local 0.1.20 build, then the installed Preview, and
-checks for version 0.1.20 or later. In PowerShell, use the quoted filename with
+The launcher prefers the local 0.1.21 build, then the installed Preview, and
+checks for version 0.1.21 or later. In PowerShell, use the quoted filename with
 the call operator to choose another build or Library:
 
 ```powershell

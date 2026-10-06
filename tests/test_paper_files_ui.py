@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import shutil
+import subprocess
 from pathlib import Path
 
 from paper_monitor.ui_server import INDEX_HTML
@@ -10,6 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PaperFilesUiTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is needed for the real JavaScript behavior probe')
+    def test_visible_file_order_matches_keyboard_and_adjacent_deletion(self):
+        result = subprocess.run(
+            ['node', str(ROOT / 'tests/paper_files_order_probe.cjs')],
+            input=INDEX_HTML, text=True, capture_output=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_non_pdf_quick_look_uses_the_selected_engine_and_keeps_browser_fallback(self) -> None:
         quicklook = INDEX_HTML.split("function nativeQuickLookBridgeAvailable", 1)[1].split(
             "async function openNativeTarget", 1
@@ -57,7 +67,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('title="Click to edit the arXiv identifier"', metadata)
         self.assertIn('class="preprint-identifier-input"', metadata)
         self.assertIn('main.classList.add("is-editing")', metadata)
-        self.assertIn('fetch("/api/library/preprint-identifier"', metadata)
+        self.assertIn('savePaperIdentifier(paper, root, "arxiv", {finishEditing: true})', metadata)
         self.assertIn('if (event.key === "Enter"', metadata)
         self.assertIn('if (event.key === "Escape"', metadata)
         self.assertNotIn("showPreprintIdentifierContextMenu", metadata)
@@ -329,7 +339,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('fetch("/api/library/items/attach"', INDEX_HTML)
         self.assertIn("async function convertLibraryItemToAttachment", INDEX_HTML)
         self.assertIn('shell.querySelectorAll("[data-library-resource-paper]")', INDEX_HTML)
-        self.assertIn('payload.type !== "item"', INDEX_HTML)
+        self.assertIn('["item", "paper-file"].includes(payload.type)', INDEX_HTML)
         self.assertIn('target.classList.add("library-attachment-drop-target")', INDEX_HTML)
         self.assertIn('event.dataTransfer.dropEffect = "move"', INDEX_HTML)
         self.assertIn('content: "Move into Paper Files"', INDEX_HTML)
@@ -347,7 +357,7 @@ class PaperFilesUiTests(unittest.TestCase):
         launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")
         self.assertIn('addScriptMessageHandler:self name:@"libraryItemDrag"', launcher)
         self.assertIn("pendingLibraryItemDragId", launcher)
-        self.assertIn("handleNativeLibraryItemDrop", launcher)
+        self.assertIn("handleNativeLibraryManagedDrop", launcher)
         self.assertIn("convertPointFromScreen", launcher)
 
     def test_resource_actions_use_explicit_file_endpoints(self) -> None:

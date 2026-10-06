@@ -123,7 +123,7 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertEqual(result["updated_papers"], 0)
         self.assertEqual(result["doi_duplicates"], 1)
         self.assertEqual(result["duplicate_paper_candidates"], 1)
-        self.assertEqual(result["pdf_attachments_to_import"], 1)
+        self.assertEqual(result["pdf_attachments_to_import"], 2)
 
     def test_dry_run_leaves_existing_doi_unchanged(self) -> None:
         self.storage.upsert_paper(

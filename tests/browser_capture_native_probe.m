@@ -2,6 +2,7 @@
 #import "GewuBrowserController.m"
 static int checks=0;
 static void check(BOOL condition, NSString *name) { if(!condition){fprintf(stderr,"FAIL: %s\n",name.UTF8String);exit(1);} checks++; }
+static BOOL spin(BOOL (^done)(void)) { NSDate *end=[NSDate dateWithTimeIntervalSinceNow:5];while(!done()&&end.timeIntervalSinceNow>0)[NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.01]];return done(); }
 @interface CaptureFakeDownload:NSObject
 @property(weak) id delegate;
 @property int cancellations;
@@ -25,6 +26,12 @@ static void check(BOOL condition, NSString *name) { if(!condition){fprintf(stder
 - (void)evaluateJavaScript:(NSString *)script inFrame:(id)frame inContentWorld:(WKContentWorld *)world completionHandler:(void (^)(id,NSError *))done {check([world.name isEqual:@"GewuBrowserCapture"],@"metadata uses isolated world");self.probe=done;}
 - (void)takeSnapshotWithConfiguration:(WKSnapshotConfiguration *)configuration completionHandler:(void (^)(NSImage *,NSError *))done {self.snapshotConfiguration=configuration;self.snapshotCompletion=done;}
 @end
+@interface CaptureLoadedView:CaptureFakeView
+@property(copy) void (^resourceCompletion)(NSData *,NSError *);
+@end
+@implementation CaptureLoadedView
+- (void)_getMainResourceDataWithCompletionHandler:(void (^)(NSData *,NSError *))completion {self.resourceCompletion=completion;}
+@end
 int main(void){@autoreleasepool {
     NSURL *public=[NSURL URLWithString:@"https://example.org/paper.pdf"], *local=[NSURL URLWithString:@"http://127.0.0.1:9876/"];
     CaptureFakeView *view=[CaptureFakeView new];view.URL=[NSURL URLWithString:@"https://example.org/article"];
@@ -44,24 +51,48 @@ int main(void){@autoreleasepool {
     check(lastError.length && view.download.cancellations==1,@"redirect failure finishes and cancels once");
     for(NSString *mime in @[@"text/html",@"application/pdf"]){
         x=start();
-        NSURLResponse *r=[[NSURLResponse alloc] initWithURL:public MIMEType:mime expectedContentLength:[mime isEqual:@"text/html"]?10:70*1024*1024 textEncodingName:nil];
+        NSURLResponse *r=[[NSURLResponse alloc] initWithURL:public MIMEType:mime expectedContentLength:[mime isEqual:@"text/html"]?10:140*1024*1024 textEncodingName:nil];
         [x download:(id)view.download decideDestinationUsingResponse:r suggestedFilename:@"paper.pdf" completionHandler:^(NSURL *dest){check(!dest,@"HTML and oversized response rejected before destination");}];
     }
     x=start(); __block NSURL *destination;
     NSURLResponse *r=[[NSURLResponse alloc] initWithURL:public MIMEType:@"application/pdf" expectedContentLength:-1 textEncodingName:nil];
     [x download:(id)view.download decideDestinationUsingResponse:r suggestedFilename:@"../../paper.pdf" completionHandler:^(NSURL *dest){destination=dest;}];
+    if (!destination) fprintf(stderr,"DESTINATION ERROR: %s TMP: %s\n", lastError.UTF8String, NSTemporaryDirectory().UTF8String);
     check(destination && [destination.lastPathComponent isEqual:@"capture.pdf"],@"temporary destination ignores remote path");
     check([NSFileManager.defaultManager fileExistsAtPath:destination.URLByDeletingLastPathComponent.path],@"temporary staging created");
     [@"synthetic" writeToURL:destination atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [x cancel];check(![NSFileManager.defaultManager fileExistsAtPath:destination.URLByDeletingLastPathComponent.path],@"cancel removes temporary bytes");
     int count=finished; [x downloadDidFinish:(id)view.download];
     check(finished==count,@"late completion cannot deliver a second result");
+    NSURLRequest *previousRequest=view.request;
+    __block BOOL read=NO;__block GewuBrowserPDFFile *loaded;
+    GewuReadLoadedBrowserPDF((id)view,@"Article.pdf",^(GewuBrowserPDFFile *file,NSString *error){check(!file&&error.length,@"unsupported WebKit reports failure");read=YES;});
+    check(read&&view.request==previousRequest,@"unsupported loaded read cannot start a publisher request");
+    NSData *envelope=[@"%PDF-1.7\nscoped original bytes\n%%EOF" dataUsingEncoding:NSUTF8StringEncoding];
+    NSURL *ownedURL;
+    @autoreleasepool {
+        GewuBrowserPDFFile *owned=[GewuBrowserPDFFile fileWithData:envelope filename:@"../../Article.pdf"];
+        ownedURL=owned.URL;
+        check(owned && [owned.filename isEqual:@"Article.pdf"] && [[NSData dataWithContentsOfURL:ownedURL] isEqual:envelope],@"scoped copy preserves bytes and removes remote filename path");
+        owned=nil;
+    }
+    check(![NSFileManager.defaultManager fileExistsAtPath:ownedURL.path],@"last reference cleans its scoped original copy");
+    CaptureLoadedView *loadedView=[CaptureLoadedView new];loadedView.URL=public;
+    read=NO;GewuReadLoadedBrowserPDF((id)loadedView,@"Paper.pdf",^(GewuBrowserPDFFile *file,NSString *error){loaded=file;lastError=error;read=YES;});
+    loadedView.resourceCompletion([@"<html>PDF viewer</html>" dataUsingEncoding:NSUTF8StringEncoding],nil);
+    check(spin(^BOOL{return read;})&&!loaded&&lastError.length&&!loadedView.request,@"HTML wrapper cannot replace original PDF or trigger a download");
     GewuBrowserController *controller=[GewuBrowserController new];controller.active=YES;
     GewuBrowserPage *page=[GewuBrowserPage new];page.view=(id)view;page.captureDocumentID=@"first-document";
     GewuBrowserTab *tab=[GewuBrowserTab new];tab.currentPage=page;tab.contentPage=page;tab.originPaperID=@"existing-paper";
     controller.tabs=[NSMutableArray arrayWithObject:tab];controller.selectedTab=tab;
     __block NSDictionary *event;
     controller.onEvent=^(NSDictionary *value){event=value;};
+    page.view=(id)loadedView;page.documentMIME=@"application/pdf";
+    read=NO;[controller loadedPDFForPage:page URL:public.absoluteString completion:^(GewuBrowserPDFFile *file,NSString *error){loaded=file;lastError=error;read=YES;}];
+    page.captureDocumentID=@"same-URL-new-document";
+    loadedView.resourceCompletion(envelope,nil);
+    check(spin(^BOOL{return read;})&&!loaded&&lastError.length&&!page.capturedPDF,@"same-URL document change rejects a late original");
+    page.view=(id)view;page.documentMIME=nil;
     [controller capturePage:@{@"request_id":@"one"}];
     check(view.probe!=nil,@"collector evaluates once on explicit command");
     page.captureDocumentID=@"second-document";

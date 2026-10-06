@@ -24,7 +24,7 @@ class GuideAuditTests(unittest.TestCase):
         documented = re.findall(r'user_guide\.html#([a-z-]+)\)', audit)
         topics = [article["id"] for article in self.soup.select("article.guide-topic")]
         self.assertCountEqual(documented, topics)
-        self.assertIn("September 9, 2026", self.topic("welcome"))
+        self.assertIn("September 24, 2026", self.topic("welcome"))
         self.assertNotIn("five top-level areas", self.topic("personal-research-workspace"))
         self.assertIn("sixth main tab", self.topic("personal-research-workspace"))
 
@@ -38,9 +38,57 @@ class GuideAuditTests(unittest.TestCase):
         self.assertNotIn("Choose Image, Data, Code", adoption)
         self.assertIn("Supplementary material", adoption)
         self.assertIn("Other", adoption)
-        self.assertIn("Default PDF is kept as the protected main file", self.topic("troubleshooting"))
-        self.assertIn("previous primary PDF into Associated Files", self.topic("troubleshooting"))
-        self.assertIn("Non-PDF defaults keep their existing location", self.topic("versions-current"))
+        self.assertIn("Default is kept as the protected main file", self.topic("troubleshooting"))
+        self.assertIn("old resource remains in Associated Files", self.topic("troubleshooting"))
+        self.assertNotIn("Non-PDF defaults keep their existing location", self.topic("versions-current"))
+        self.assertIn("earliest PDF", self.topic("versions-current"))
+        self.assertIn("Unknown", self.topic("versions-current"))
+        self.assertIn("Other", self.topic("versions-current"))
+
+    def test_background_task_navigation_and_terminal_stop_are_documented(self):
+        refresh = self.topic("loader-maintenance")
+        loader = self.topic("folder-loader")
+        for phrase in ("Show in Library", "Details", "Closing", "log"):
+            self.assertIn(phrase, refresh)
+            self.assertIn(phrase, loader)
+        for phrase in ("stopped tasks cannot be continued", "Stop Import / Stop Search",
+                       "remaining queue", "without a saved paper link", "Refresh tasks"):
+            self.assertIn(phrase, refresh)
+        self.assertIn("starts Folder Loader in the background", loader)
+        self.assertIn("not undo the import", loader)
+        self.assertIn("separate activity indicators", self.topic("library-layout"))
+        self.assertIn("Hover over an indicator", self.topic("library-layout"))
+
+    def test_ownership_alias_and_startup_boundaries_match_current_workflows(self):
+        moves = self.topic("drag-attach")
+        self.assertIn("new Gewu Key", moves)
+        self.assertIn("external copy", moves)
+        self.assertIn("as a group", moves)
+        for topic in ("paper-files", "folder-loader"):
+            self.assertNotIn("Move to Another Paper…", self.topic(topic))
+            self.assertNotIn("Create Paper from File…", self.topic(topic))
+        for phrase in ("native Finder alias", "directory alias", "canonical"):
+            self.assertIn(phrase, self.topic("storage-model"))
+        self.assertIn("exact file contents", self.topic("attachments"))
+        self.assertIn("recorded unfinished operation", self.topic("startup"))
+        self.assertIn("does not reorganize the whole Library", self.topic("startup"))
+
+    def test_contact_and_mcp_quota_location_are_explicit(self):
+        native = (ROOT / "scripts/PaperMonitorApp.m").read_text()
+        for phrase in ("info@gewu-insight.com", "Gewu Insight — Feedback and Support"):
+            self.assertIn(phrase, native)
+            self.assertIn(phrase, self.topic("welcome"))
+        for path in ("README.md", "LICENSE", "CONTRIBUTING.md", "docs/LICENSING.md",
+                     "scripts/build_user_guide_pdf.py", "paper_monitor/user_guide.html"):
+            with self.subTest(contact_source=path):
+                contact_source = (ROOT / path).read_text()
+                addresses = set(re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", contact_source))
+                self.assertEqual(addresses, {"info@gewu-insight.com"})
+        self.assertIsNotNone(self.soup.find("article", id="welcome").find(
+            "a", href="http://gewu-insight.com"))
+        self.assertIn("default email application", self.topic("welcome"))
+        self.assertIn("does not send the message automatically", self.topic("troubleshooting"))
+        self.assertIn("not a separate Library or AI Access status meter", self.topic("ai-access"))
 
     def test_profile_and_loader_instructions_use_real_labels_and_context(self):
         profile_button = BeautifulSoup(ui_server.INDEX_HTML, "html.parser").find(id="findMyPublications")
@@ -91,7 +139,7 @@ class GuideAuditTests(unittest.TestCase):
         caption = figure.find("figcaption").get_text(" ", strip=True)
         self.assertIn("Captured from the original App", caption)
         self.assertIn("Nature Physics PDF", caption)
-        self.assertIn("real bookmark collection", caption)
+        self.assertIn("left bookmark sidebar", caption)
         self.assertIn("not a generated demonstration", caption)
         self.assertNotIn("public sample bookmarks", caption)
         self.assertNotIn("earlier screenshot", caption)

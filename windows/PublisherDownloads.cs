@@ -17,6 +17,7 @@ internal sealed partial class WorkspaceWindow
         public string Target = TextValue(context, "publisher_download_target_url");
         public string FileUrl = "";
         public string FileMime = "";
+        public string FileName = "";
         public string[] SupplementUrls = [];
         public readonly HashSet<string> Visited = new(StringComparer.Ordinal);
         public readonly HashSet<string> ButtonAttemptedPages = new(StringComparer.Ordinal);
@@ -151,6 +152,7 @@ internal sealed partial class WorkspaceWindow
         var payload = JsonSerializer.Deserialize<Dictionary<string, object>>(context.GetRawText())!;
         payload["source_path"] = path;
         payload["preserve_filename"] = false;
+        payload["publisher_download_filename"] = request.FileName;
         payload["publisher_download_target_url"] = request.FileUrl;
         if (request.Discovery) payload["publisher_download_kind"] = request.Kind.StartsWith("aaas-") ? "aaas-supplement-pdf" : "publisher-supplement-file";
         using var response = await client.PostAsync(new Uri(origin!, "api/manual-pdf-path"), new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"), cancellation);
@@ -182,6 +184,7 @@ internal sealed partial class WorkspaceWindow
                 string name = await ReadBrowserDownloadAsync(view.CoreWebView2, url, path, cancellation.Token, request);
                 if (session != workspaceToken || stopping) throw new IOException("The workspace restarted. Retry the publisher download.");
                 if (name.Length == 0) { await Reply(true, new { supplement_urls = request.SupplementUrls }); return; }
+                request.FileName = name;
                 string suffix = Path.GetExtension(name).ToLowerInvariant();
                 if (suffix is not (".pdf" or ".doc" or ".docx")) {
                     suffix = request.Supplement && request.FileMime.Contains("wordprocessingml", StringComparison.OrdinalIgnoreCase) ? ".docx" :

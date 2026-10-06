@@ -1,7 +1,7 @@
 # Windows Source Web
 
 This is the optional external-browser mode. The default launcher now opens
-[Desktop from Source](WINDOWS_SOURCE_DESKTOP.md), using the 0.1.20 native shell.
+[Desktop from Source](WINDOWS_SOURCE_DESKTOP.md), using the 0.1.21 native shell.
 
 Earlier local delivery on 2026-09-29: the real CMD launcher started the existing Library
 in Chrome; service/authenticated API, database integrity, protected-row digests
@@ -74,10 +74,11 @@ limitations. Updating C# files does not update a desktop shell or give Source We
 those features. In particular, the 0.1.20 native Nature download change is not
 delivered in `--web` mode. The default desktop-source mode includes that fix.
 
-The installed Preview 0.1.19 remains separate. To return to it, stop Source Web
-and open the original App; do not use an older App if a future source update has
-made an incompatible schema migration. No installation or uninstallation is
-needed to switch between compatible versions.
+Installed Preview 0.1.19 was explicitly uninstalled on 2026-09-29. To return to
+the current desktop, stop Source Web and run **Start Gewu Insight.cmd** without
+`--web`; this opens the 0.1.20 source desktop. Archived old versions are recovery
+backups, not active installations. Do not reopen an older version against a
+Library with an incompatible schema migration.
 
 ## Future GitHub distribution
 

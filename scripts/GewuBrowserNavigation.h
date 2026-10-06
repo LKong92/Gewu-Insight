@@ -56,15 +56,31 @@ static inline BOOL GewuBrowserPublicURL(NSURL *url) {
     return [host containsString:@"."];
 }
 
-// Decide after the response arrives: publishers may mark a viewable PDF as an
-// attachment or use an extensionless download link. Neither requires saving it.
-static inline WKNavigationResponsePolicy GewuBrowserResponsePolicy(NSURLResponse *response, BOOL canShowMIMEType, BOOL requestedDownload) {
+// Blob URLs are accepted only from their public creating origin, never from the
+// address bar, opaque origins or a local workspace. WebKit still enforces access.
+static inline BOOL GewuBrowserBlobURL(NSURL *url, NSURL *source) {
+    if (![url.scheme.lowercaseString isEqual:@"blob"] || !GewuBrowserPublicURL(source)) return NO;
+    NSURL *origin = [NSURL URLWithString:[url.absoluteString substringFromIndex:5]];
+    if (!GewuBrowserPublicURL(origin)) return NO;
+    NSNumber *originPort = origin.port ?: @([origin.scheme.lowercaseString isEqual:@"https"] ? 443 : 80);
+    NSNumber *sourcePort = source.port ?: @([source.scheme.lowercaseString isEqual:@"https"] ? 443 : 80);
+    return [origin.scheme.lowercaseString isEqual:source.scheme.lowercaseString]
+        && [origin.host.lowercaseString isEqual:source.host.lowercaseString] && [originPort isEqual:sourcePort];
+}
+
+static inline BOOL GewuBrowserPDFResponse(NSURLResponse *response) {
     NSString *mime = [[response.MIMEType componentsSeparatedByString:@";"].firstObject.lowercaseString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-    BOOL pdf = [@[@"application/pdf", @"application/x-pdf"] containsObject:mime ?: @""];
-    if (pdf && canShowMIMEType) return WKNavigationResponsePolicyAllow;
+    return [@[@"application/pdf", @"application/x-pdf"] containsObject:mime ?: @""];
+}
+
+// Keep normal inline documents streaming in WebKit. Attachment/download PDFs
+// use that same WebKit request's download, then the controller displays its bytes.
+static inline WKNavigationResponsePolicy GewuBrowserResponsePolicy(NSURLResponse *response, BOOL canShowMIMEType, BOOL requestedDownload) {
     NSString *disposition = [response isKindOfClass:NSHTTPURLResponse.class]
         ? [(NSHTTPURLResponse *)response valueForHTTPHeaderField:@"Content-Disposition"] : @"";
     BOOL attachment = [[disposition.lowercaseString stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet] hasPrefix:@"attachment"];
+    if (canShowMIMEType && [response.MIMEType.lowercaseString isEqual:@"text/html"] && !attachment)
+        return WKNavigationResponsePolicyAllow; // The download may lead to sign-in or consent first.
     return (!canShowMIMEType || attachment || requestedDownload) ? WKNavigationResponsePolicyDownload : WKNavigationResponsePolicyAllow;
 }
 

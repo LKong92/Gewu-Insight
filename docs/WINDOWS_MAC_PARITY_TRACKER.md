@@ -1,5 +1,11 @@
 # Mac → Windows 迁移基线与功能差异记录
 
+## 当前交付（2026-09-29）：0.1.21 源码桌面已更新并重开
+
+已对齐 macOS `8a27895` 的共享更新并完成 Windows 原生适配。1420 项 Python 回归（1388 通过/32 平台跳过）、132 项出版社/PDF 检查与 106 项工作区检查通过。原库升至 schema 22，4442 篇论文/39 Publications/10 条目/5 文件夹/6 资源及 19 个研究文件保留；4 个接口 200、完整性 OK、外键错误 0。继续 `Start Gewu Insight.cmd` → `dist/windows-preview-0.1.21` + `.venv`；0.1.19 不再安装。已备份，未 commit/push。详见 [本次对齐与验收](WINDOWS_MAC_PARITY_0.1.21.md)。
+
+以下保留 2026-09-10 的历史迁移记录，其“当前/最新”措辞仅指当时。
+
 记录日期：2026-09-10（Asia/Tokyo）。当前实际安装和运行是 **Windows Preview 0.1.17**，原 App 正常重开（PID 41184）、版本/服务/资料核验通过。原库 schema 18、44 papers、全部表摘要与 17 个研究文件保留。Smart App Control ON（1）；本机未签名 Preview。Mac 最新对照已到 `9ea2bb3`；第 13 节记录本輪增量。
 
 用途：固定 Windows 的 Mac 源码起点，记录尚未迁移的功能与验收缺口，并作为后续 Mac 更新同步的台账。**当前 Windows 仍未达到与该 Mac 基线功能一致的验收状态。**

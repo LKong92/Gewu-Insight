@@ -52,7 +52,7 @@ internal sealed partial class WorkspaceWindow
                     }
                     if (scenario == "blocked") { status = 302; headers = "Location: https://unverified.example/paper.pdf\r\n"; }
                     if (scenario == "invalid") bytes = Encoding.UTF8.GetBytes("not a readable PDF");
-                    headers += "Content-Type: " + mime + "\r\nContent-Length: " + (scenario == "oversized" ? 65L*1024*1024 : bytes.Length) + "\r\n";
+                    headers += "Content-Type: " + mime + "\r\nContent-Length: " + (scenario == "oversized" ? 129L*1024*1024 : bytes.Length) + "\r\n";
                     resource.Response = remoteEnvironment!.CreateWebResourceResponse(new MemoryStream(bytes), status, status == 200 ? "OK" : "Found", headers);
                 };
             };

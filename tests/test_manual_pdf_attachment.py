@@ -14,7 +14,7 @@ from paper_monitor.storage import Storage
 class ManualPdfAttachmentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.storage = Storage(self.root / "paper_monitor.sqlite")
         self.library_root = self.root / "data" / "Library"
         self.spaces_root = self.root / "data" / "Spaces"
@@ -293,6 +293,9 @@ class ManualPdfAttachmentTests(unittest.TestCase):
         self.add_paper("paper-science")
         main = self.write_pdf("data/pdfs/paper-science/Main.pdf")
         supplement = self.write_pdf("native-temp/Science Supplement.pdf")
+        writer = PdfWriter()
+        writer.add_blank_page(width=201, height=200)
+        writer.write(str(supplement))
         self.storage.update_download_status(
             "paper-science",
             status="partial",

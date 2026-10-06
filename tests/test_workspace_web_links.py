@@ -33,7 +33,7 @@ class WorkspaceWebLinkTests(unittest.TestCase):
             'openWebsite(author.url)', 'openWebsite(author.homepage_url)',
             'openWebsite(destination)', 'openLibraryWebsite(paper)',
             'openLibraryWebsiteURL(paper.google_scholar_url',
-            'openLibraryWebsiteURL(url)',
+            'openLibraryWebsiteURL(url, paper)',
             'openWebsite("https://www.overleaf.com/project")',
         ]:
             self.assertIn(route, INDEX_HTML)
@@ -52,7 +52,7 @@ const global={open:(...args)=>external.push(args)}, external=[], commands=[];
 const HOME='https://www.google.com/';
 const state={mode:'library', libraryQuickLookOpen:false, librarySelectedId:4,
   authorMonitorSelectedId:7, selectedDate:'2026-09-06', selectedPaper:'example'};
-const data={opened:false, active:false}, root={hidden:true};
+const data={opened:false, active:false,workspaceReturns:new Map()}, root={hidden:true};
 let hasBridge=true;
 const bridge=()=>hasBridge, native=p=>commands.push(p);
 const closeContext=()=>{},closeSuggestions=()=>{},render=()=>{},message=()=>{},fail=e=>{throw e;};
@@ -62,13 +62,13 @@ function setPrimaryView(view) { setActive(view==='browser'); }
 ''' + functions + r'''
 const before={...state};
 assert.equal(openURL('https://www.nature.com/articles/example.pdf'),'Browser');
-assert.deepEqual(commands.filter(c=>c.action!=='layout'),[{action:'navigate',url:'https://www.nature.com/articles/example.pdf'}]);
+assert.deepEqual(commands.filter(c=>c.action!=='layout'),[{action:'navigate',url:'https://www.nature.com/articles/example.pdf',workspace_return_id:'',origin_library_item_id:0}]);
 assert.equal(commands[0].action,'layout'); assert.equal(commands[0].active,true);
 assert.equal(state.mode,'browser');
 for(const mode of ['library','my-publications','report','theme','author']) {
   state.mode=mode; setActive(false); commands.length=0;
   openURL('https://example.org/'+mode);
-  assert.deepEqual(commands.filter(c=>c.action!=='layout'),[{action:'new-tab',url:'https://example.org/'+mode}]);
+  assert.deepEqual(commands.filter(c=>c.action!=='layout'),[{action:'new-tab',url:'https://example.org/'+mode,workspace_return_id:'',origin_library_item_id:0}]);
 }
 for(const key of Object.keys(before).filter(k=>k!=='mode')) assert.deepEqual(state[key],before[key]);
 assert.equal(external.length,0);
@@ -127,7 +127,7 @@ const state={mode:'library',libraryTab:'library',librarySelectedId:17,selectedDa
 const scroller={isConnected:true,scrollTop:0,scrollLeft:0};
 const focus={isConnected:true,focus(options){assert.equal(options.preventScroll,true);this.restored=true;}};
 const document={activeElement:focus,querySelectorAll:()=>[scroller]};
-const data={opened:false,active:false}, root={hidden:true};
+const data={opened:false,active:false,workspaceReturns:new Map()}, root={hidden:true};
 let dialog=false, hasBridge=true, returnedView='';
 const bridge=()=>hasBridge, native=p=>commands.push(p), visibleDialog=()=>dialog;
 const closeContext=()=>{},closeSuggestions=()=>{},render=()=>{},message=()=>{},fail=e=>{throw e;};

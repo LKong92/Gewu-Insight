@@ -72,5 +72,11 @@ def delete_publications(storage, publication_ids):
             ui.remove_symlinks_to(original, ui.local_copy_roots(include_legacy=True))
         except OSError:
             logging.getLogger(__name__).warning('Could not remove obsolete publication aliases', exc_info=True)
+    for paper_id in result['retained_paper_ids']:
+        from .file_layout import reconcile_after_write
+        reconcile_after_write(storage, paper_id)
+        canonical = ui.canonical_file_path_for_paper(storage.get_paper(paper_id))
+        if canonical:
+            ui.remove_direct_symlinks_to(canonical, [ui.MY_PUBLICATIONS_LOCAL_COPY_ROOT])
     result['trashed_file_count'] = len(moved)
     return result

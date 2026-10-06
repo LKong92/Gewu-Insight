@@ -10,6 +10,62 @@ static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
 static const NSTimeInterval GewuInsightServerRecoveryDelay = 0.75;
 static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 
+static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, NSWindow *parentWindow) {
+    NSString *text = message.length ? message : @"Delete this file?";
+    // Keep short confirmations compact; long file lists get a fixed viewport.
+    if (text.length <= 600 && [text componentsSeparatedByString:@"\n"].count <= 8) {
+        alert.informativeText = text;
+        return;
+    }
+    NSRange paragraph = [text rangeOfString:@"\n\n"];
+    if (paragraph.location != NSNotFound && paragraph.location <= 240) {
+        alert.informativeText = [text substringToIndex:paragraph.location];
+        text = [text substringFromIndex:NSMaxRange(paragraph)];
+    } else {
+        alert.informativeText = @"Review the details below before deleting.";
+    }
+    NSScreen *screen = parentWindow.screen ?: NSScreen.mainScreen;
+    NSSize available = screen ? screen.visibleFrame.size : NSMakeSize(1024, 768);
+    if (parentWindow) {
+        available.width = MIN(available.width, NSWidth(parentWindow.frame));
+        available.height = MIN(available.height, NSHeight(parentWindow.frame));
+    }
+    CGFloat width = MAX(180, MIN(520, available.width - 180));
+    CGFloat height = MAX(80, MIN(320, available.height - 260));
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+    scroll.hasVerticalScroller = YES;
+    scroll.hasHorizontalScroller = NO;
+    scroll.autohidesScrollers = NO;
+    scroll.borderType = NSBezelBorder;
+    scroll.accessibilityLabel = @"Deletion details and files";
+    NSSize contentSize = scroll.contentSize;
+    NSTextView *details = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, contentSize.width, contentSize.height)];
+    details.editable = NO;
+    details.selectable = YES;
+    details.richText = NO;
+    details.font = [NSFont systemFontOfSize:13];
+    details.textColor = NSColor.labelColor;
+    details.backgroundColor = NSColor.textBackgroundColor;
+    details.textContainerInset = NSMakeSize(8, 8);
+    details.verticallyResizable = YES;
+    details.horizontallyResizable = NO;
+    details.autoresizingMask = NSViewWidthSizable;
+    details.minSize = NSMakeSize(0, contentSize.height);
+    details.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
+    details.textContainer.containerSize = NSMakeSize(contentSize.width - 16, CGFLOAT_MAX);
+    details.textContainer.widthTracksTextView = YES;
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.lineBreakMode = NSLineBreakByCharWrapping;
+    details.defaultParagraphStyle = style;
+    details.string = text;
+    details.accessibilityLabel = @"Files and deletion effects";
+    scroll.documentView = details;
+    [details.layoutManager ensureLayoutForTextContainer:details.textContainer];
+    [details sizeToFit];
+    [details scrollRangeToVisible:NSMakeRange(0, 0)];
+    alert.accessoryView = scroll;
+}
+
 // This view paints synchronously with the window's first frame. A second
 // WKWebView would itself need an asynchronous first paint before showing this art.
 @interface GewuStartupView : NSView
@@ -84,14 +140,19 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 }
 @end
 
+// WKWebView implements these public AppKit callbacks for its own DOM drags.
+@interface WKWebView (GewuDragLifecycle) <NSDraggingSource>
+@end
+
 @interface GewuInsightWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
 @property(nonatomic, copy) NSString *nativeDragName;
 @property(nonatomic, copy) NSString *nativeDragCleanupPath;
+@property(nonatomic) BOOL nativeFileDragActive;
 @property(nonatomic) BOOL pdfQuickLookActive;
 @property(nonatomic) CGFloat pdfMagnificationAccumulator;
 @property(nonatomic) NSInteger pendingLibraryItemDragId;
-@property(nonatomic, strong) NSDate *pendingLibraryItemDragStartedAt;
+@property(nonatomic, copy) NSDictionary *pendingLibraryDragPayload;
 @end
 
 @implementation GewuInsightWebView
@@ -105,28 +166,44 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 }
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    if ([sender draggingSource] == self && !self.nativeFileDragActive) {
+        return [super draggingEntered:sender];
+    }
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
         [self updateFinderDropTargetForDraggingInfo:sender];
-        return NSDragOperationCopy;
+        return [sender draggingSource] == self ? (self.pendingLibraryDragPayload ? NSDragOperationMove : NSDragOperationNone) : NSDragOperationCopy;
     }
     return [super draggingEntered:sender];
 }
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    if ([sender draggingSource] == self && !self.nativeFileDragActive) {
+        return [super draggingUpdated:sender];
+    }
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
         [self updateFinderDropTargetForDraggingInfo:sender];
-        return NSDragOperationCopy;
+        return [sender draggingSource] == self ? (self.pendingLibraryDragPayload ? NSDragOperationMove : NSDragOperationNone) : NSDragOperationCopy;
     }
     return [super draggingUpdated:sender];
 }
 
 - (void)draggingExited:(id<NSDraggingInfo>)sender {
+    if ([sender draggingSource] == self && !self.nativeFileDragActive) {
+        [super draggingExited:sender];
+        return;
+    }
     [self clearFinderDropTarget];
     [super draggingExited:sender];
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-    if ([sender draggingSource] == self && self.pendingLibraryItemDragId > 0) {
+    if ([sender draggingSource] == self) {
+        // WebKit also uses this view as the source when dragging a row/title.
+        // Only sessions we started from a file icon use the native payload.
+        // Rejecting a DOM session here prevents its JavaScript drop entirely.
+        if (!self.nativeFileDragActive) return [super performDragOperation:sender];
+        if (!self.pendingLibraryDragPayload) return NO;
+        [self dispatchPendingLibraryItemDropAtClientPoint:[self browserClientPointForDraggingInfo:sender]];
         return YES;
     }
     NSArray<NSString *> *paths = [self finderDropPathsFromDraggingInfo:sender];
@@ -157,18 +234,16 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 }
 
 - (void)dispatchPendingLibraryItemDropAtClientPoint:(NSPoint)point {
-    NSInteger libraryItemId = self.pendingLibraryItemDragId;
-    NSDate *startedAt = self.pendingLibraryItemDragStartedAt;
+    NSDictionary *payload = self.pendingLibraryDragPayload;
+    self.pendingLibraryDragPayload = nil;
     self.pendingLibraryItemDragId = 0;
-    self.pendingLibraryItemDragStartedAt = nil;
-    NSTimeInterval age = startedAt ? [[NSDate date] timeIntervalSinceDate:startedAt] : 999.0;
-    if (libraryItemId <= 0 || age < 0.0 || age >= 12.0) return;
+    if (!payload) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    if (!data) return;
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSString *script = [NSString stringWithFormat:
-        @"window.handleNativeLibraryItemDrop && window.handleNativeLibraryItemDrop(%ld, {x:%0.2f,y:%0.2f})",
-        (long)libraryItemId,
-        point.x,
-        point.y
-    ];
+        @"window.handleNativeLibraryManagedDrop && window.handleNativeLibraryManagedDrop(%@, {x:%0.2f,y:%0.2f})",
+        json, point.x, point.y];
     [self evaluateJavaScript:script completionHandler:nil];
 }
 
@@ -303,7 +378,13 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
             NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
             NSRect frame = NSMakeRect(point.x - 24, point.y - 24, 48, 48);
             [draggingItem setDraggingFrame:frame contents:icon];
-            [self beginDraggingSessionWithItems:@[draggingItem] event:event source:self];
+            self.nativeFileDragActive = YES;
+            NSDraggingSession *session = [self beginDraggingSessionWithItems:@[draggingItem] event:event source:self];
+            if (!session) {
+                self.nativeFileDragActive = NO;
+                self.pendingLibraryDragPayload = nil;
+                self.pendingLibraryItemDragId = 0;
+            }
             return;
         }
     }
@@ -323,8 +404,6 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    NSPoint viewPoint = [self convertPoint:event.locationInWindow fromView:nil];
-    NSPoint clientPoint = [self browserClientPointForViewPoint:viewPoint];
     if (self.nativeDragPath.length > 0 && self.nativeDragCleanupPath.length > 0) {
         [self scheduleNativeDragCleanup:self.nativeDragCleanupPath afterDelay:0.5];
     }
@@ -332,31 +411,62 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     self.nativeDragName = nil;
     self.nativeDragCleanupPath = nil;
     [super mouseUp:event];
-    [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
+    if (!self.nativeFileDragActive) {
+        self.pendingLibraryDragPayload = nil;
+        self.pendingLibraryItemDragId = 0;
+    }
 }
 
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    if (!self.nativeFileDragActive) {
+        return [super draggingSession:session sourceOperationMaskForDraggingContext:context];
+    }
     // Finder copies the file; application icons can negotiate opening it.
-    // Never offer Move/Delete for a file managed by the Library.
+    // Moves within Gewu use managed ownership transitions; outside exports stay copies.
     return context == NSDraggingContextOutsideApplication
         ? (NSDragOperationCopy | NSDragOperationGeneric)
-        : NSDragOperationCopy;
+        : (NSDragOperationCopy | NSDragOperationMove);
 }
 
 - (BOOL)ignoreModifierKeysForDraggingSession:(NSDraggingSession *)session {
     return YES;
 }
 
+- (void)draggingSession:(NSDraggingSession *)session willBeginAtPoint:(NSPoint)screenPoint {
+    if (!self.nativeFileDragActive && [WKWebView instancesRespondToSelector:_cmd]) {
+        [super draggingSession:session willBeginAtPoint:screenPoint];
+    }
+}
+
 - (void)draggingSession:(NSDraggingSession *)session
            endedAtPoint:(NSPoint)screenPoint
               operation:(NSDragOperation)operation {
+    if (!self.nativeFileDragActive) {
+        if ([WKWebView instancesRespondToSelector:_cmd]) {
+            [super draggingSession:session endedAtPoint:screenPoint operation:operation];
+        } else {
+            // Older WebKit (including macOS 15) ends DOM drags through this
+            // public legacy callback. It dispatches dragend to the web page.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [super draggedImage:nil endedAt:screenPoint operation:operation];
+#pragma clang diagnostic pop
+        }
+        return;
+    }
     NSPoint windowPoint = [self.window convertPointFromScreen:screenPoint];
     NSPoint viewPoint = [self convertPoint:windowPoint fromView:nil];
     NSPoint clientPoint = [self browserClientPointForViewPoint:viewPoint];
     NSString *cleanupPath = self.nativeDragCleanupPath;
     self.nativeDragCleanupPath = nil;
     [self scheduleNativeDragCleanup:cleanupPath afterDelay:60.0];
-    [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
+    if ((operation & NSDragOperationMove) && NSPointInRect(viewPoint, self.bounds)) {
+        [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
+    }
+    self.pendingLibraryDragPayload = nil;
+    self.pendingLibraryItemDragId = 0;
+    self.nativeFileDragActive = NO;
+    [self evaluateJavaScript:@"window.clearNativeLibraryDrag && window.clearNativeLibraryDrag()" completionHandler:nil];
 }
 
 - (NSArray<NSString *> *)finderDropPathsFromDraggingInfo:(id<NSDraggingInfo>)sender {
@@ -377,10 +487,85 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 
 @end
 
+// macOS WebKit may route file drags to an internal scrolling view instead of
+// the WKWebView subclass. A sibling destination covers the complete workspace
+// without depending on the DOM's composited hit regions. It only registers
+// native file URLs; ordinary clicks and HTML row/sort drags stay with WebKit.
+@interface GewuFinderDropView : NSView <NSDraggingDestination>
+@property(nonatomic, weak) GewuInsightWebView *destinationWebView;
+@end
+
+@implementation GewuFinderDropView
+
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.wantsLayer = YES;
+        [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
+    }
+    return self;
+}
+
+- (NSView *)hitTest:(NSPoint)point { return nil; }
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return [self.destinationWebView draggingEntered:sender];
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return [self.destinationWebView draggingUpdated:sender];
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    [self.destinationWebView clearFinderDropTarget];
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    GewuInsightWebView *webView = self.destinationWebView;
+    if (!webView || [webView finderDropPathsFromDraggingInfo:sender].count == 0) return NO;
+    if (sender.draggingSource == webView) {
+        return webView.nativeFileDragActive && webView.pendingLibraryDragPayload != nil;
+    }
+    return YES;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    if (![self prepareForDragOperation:sender]) return NO;
+    return [self.destinationWebView performDragOperation:sender];
+}
+
+@end
+
 @interface GewuInsightWindow : NSWindow
+@property(nonatomic, strong) NSEvent *pendingWindowDragMouseDown;
+- (void)beginNativeWindowDragAtClientPoint:(NSPoint)point inView:(NSView *)view;
 @end
 
 @implementation GewuInsightWindow
+
+- (void)sendEvent:(NSEvent *)event {
+    // WebKit's message arrives asynchronously. Retain the original AppKit
+    // mouse-down, while leaving all event dispatch and hit testing unchanged.
+    if (event.type == NSEventTypeLeftMouseDown) self.pendingWindowDragMouseDown = event;
+    else if (event.type == NSEventTypeLeftMouseUp) self.pendingWindowDragMouseDown = nil;
+    [super sendEvent:event];
+}
+
+- (void)beginNativeWindowDragAtClientPoint:(NSPoint)point inView:(NSView *)view {
+    NSEvent *event = self.pendingWindowDragMouseDown;
+    self.pendingWindowDragMouseDown = nil;
+    if (!event || event.window != self || view.window != self
+        || event.type != NSEventTypeLeftMouseDown
+        || (self.styleMask & NSWindowStyleMaskFullScreen)) return;
+    NSPoint origin = [view convertPoint:event.locationInWindow fromView:nil];
+    NSPoint clientOrigin = NSMakePoint(origin.x,
+        view.isFlipped ? origin.y : NSHeight(view.bounds) - origin.y);
+    if (!NSPointInRect(origin, view.bounds) || !isfinite(point.x) || !isfinite(point.y)
+        || hypot(clientOrigin.x - point.x, clientOrigin.y - point.y) > 2.0) return;
+    // Window Server owns the drag, including edge tiling and Spaces switching.
+    // It may consume mouse-up, so no application drag loop remains to stop.
+    [self performWindowDragWithEvent:event];
+}
 
 @end
 
@@ -412,16 +597,17 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 @property(nonatomic) BOOL startupFailurePresented;
 @property(nonatomic, strong) NSAlert *startupFailureAlert;
 @property(nonatomic) NSInteger serverRestartAttempts;
+@property(nonatomic, strong) NSDate *workspaceRecoveryWindow;
+@property(nonatomic) NSInteger workspaceRecoveryAttempts;
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, strong) NSMenuItem *titleNamingItem;
 @property(nonatomic, strong) NSMenuItem *citationNamingItem;
 @property(nonatomic, strong) NSMenuItem *listViewItem;
 @property(nonatomic, strong) NSMenuItem *tableViewItem;
-@property(nonatomic) BOOL windowDragging;
-@property(nonatomic) NSPoint windowDragStartPoint;
-@property(nonatomic) NSRect windowDragStartFrame;
 @property(nonatomic) NSRect windowRestoreFrame;
 @property(nonatomic) BOOL trafficLightLayoutScheduled;
+@property(nonatomic) BOOL trafficLightLayoutInProgress;
+@property(nonatomic) BOOL trafficLightFullScreenTransition;
 @property(nonatomic, strong) NSURL *nativeQuickLookURL;
 @property(nonatomic) BOOL nativeQuickLookActive;
 @property(nonatomic) BOOL nativeQuickLookClosingProgrammatically;
@@ -747,6 +933,10 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
                                                                 alpha:1.0];
     }
     [contentView addSubview:self.webView];
+    GewuFinderDropView *finderDropView = [[GewuFinderDropView alloc] initWithFrame:contentView.bounds];
+    finderDropView.destinationWebView = (GewuInsightWebView *)self.webView;
+    finderDropView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [contentView addSubview:finderDropView];
     self.window.contentView = contentView;
     self.window.backgroundColor = [NSColor colorWithRed:244.0/255.0 green:242.0/255.0 blue:237.0/255.0 alpha:1.0];
     [self showLoadingPage];
@@ -797,7 +987,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
         NSInteger itemId = [value respondsToSelector:@selector(integerValue)] ? [value integerValue] : 0;
         GewuInsightWebView *webView = (GewuInsightWebView *)self.webView;
         webView.pendingLibraryItemDragId = itemId > 0 ? itemId : 0;
-        webView.pendingLibraryItemDragStartedAt = itemId > 0 ? [NSDate date] : nil;
+        webView.pendingLibraryDragPayload = itemId > 0 ? @{ @"type": @"item", @"id": @(itemId), @"token": NSUUID.UUID.UUIDString } : nil;
         return;
     }
     if ([message.name isEqualToString:@"publisherPdfDownload"]) {
@@ -838,6 +1028,10 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
         if ([message.body isKindOfClass:[NSDictionary class]]) {
             NSDictionary *payload = (NSDictionary *)message.body;
             type = [payload[@"type"] isKindOfClass:[NSString class]] ? payload[@"type"] : type;
+            if ([type isEqualToString:@"show-paper"] && message.webView == self.loaderWebView) {
+                [self showLoaderPaperInLibrary:payload];
+                return;
+            }
         }
         if ([type isEqualToString:@"open"]) {
             [self showLibraryLoaderWindow];
@@ -858,6 +1052,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
         webView.nativeDragPath = path;
         webView.nativeDragName = name;
         webView.nativeDragCleanupPath = cleanupPath;
+        webView.pendingLibraryDragPayload = [payload[@"library_payload"] isKindOfClass:NSDictionary.class] ? payload[@"library_payload"] : nil;
         return;
     }
     if ([message.name isEqualToString:@"authorPhotoChooser"]) {
@@ -876,38 +1071,20 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     if (![message.name isEqualToString:@"windowDrag"] || ![message.body isKindOfClass:[NSDictionary class]]) {
         return;
     }
+    if (message.webView != self.webView || !message.frameInfo.isMainFrame) return;
     NSDictionary *payload = (NSDictionary *)message.body;
     NSString *type = [payload[@"type"] isKindOfClass:[NSString class]] ? payload[@"type"] : @"";
-    NSNumber *screenXNumber = [payload[@"screenX"] isKindOfClass:[NSNumber class]] ? payload[@"screenX"] : nil;
-    NSNumber *screenYNumber = [payload[@"screenY"] isKindOfClass:[NSNumber class]] ? payload[@"screenY"] : nil;
-    if (!screenXNumber || !screenYNumber) {
-        return;
-    }
-    NSPoint point = NSMakePoint(screenXNumber.doubleValue, screenYNumber.doubleValue);
     if ([type isEqualToString:@"toggleFill"]) {
-        self.windowDragging = NO;
         [self toggleMainWindowFill];
         return;
     }
-    if ([type isEqualToString:@"begin"]) {
-        self.windowDragging = YES;
-        self.windowDragStartPoint = point;
-        self.windowDragStartFrame = self.window.frame;
-        return;
+    if ([type isEqualToString:@"begin"] && [self.window isKindOfClass:GewuInsightWindow.class]) {
+        NSNumber *x = [payload[@"clientX"] isKindOfClass:NSNumber.class] ? payload[@"clientX"] : nil;
+        NSNumber *y = [payload[@"clientY"] isKindOfClass:NSNumber.class] ? payload[@"clientY"] : nil;
+        if (!x || !y) return;
+        [(GewuInsightWindow *)self.window beginNativeWindowDragAtClientPoint:NSMakePoint(x.doubleValue, y.doubleValue)
+            inView:self.webView];
     }
-    if ([type isEqualToString:@"end"] || [type isEqualToString:@"cancel"]) {
-        self.windowDragging = NO;
-        return;
-    }
-    if (![type isEqualToString:@"move"] || !self.windowDragging) {
-        return;
-    }
-    CGFloat dx = point.x - self.windowDragStartPoint.x;
-    CGFloat dy = point.y - self.windowDragStartPoint.y;
-    NSRect frame = self.windowDragStartFrame;
-    frame.origin.x += dx;
-    frame.origin.y -= dy;
-    [self.window setFrame:frame display:YES];
 }
 
 - (void)showAuthorPhotoChooserForAuthorId:(NSNumber *)authorId {
@@ -987,10 +1164,10 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     NSAlert *alert = [[NSAlert alloc] init];
     alert.alertStyle = NSAlertStyleWarning;
     alert.messageText = @"Delete File";
-    alert.informativeText = message.length > 0 ? message : @"Delete this file?";
+    NSWindow *parentWindow = webView.window ?: self.window;
+    GewuConfigureConfirmationDetails(alert, message, parentWindow);
     [alert addButtonWithTitle:@"Delete"];
     [alert addButtonWithTitle:@"Cancel"];
-    NSWindow *parentWindow = webView.window ?: self.window;
     if (parentWindow) {
         [alert beginSheetModalForWindow:parentWindow completionHandler:^(NSModalResponse response) {
             completionHandler(response == NSAlertFirstButtonReturn);
@@ -1161,6 +1338,12 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
         || [kind isEqualToString:@"aaas-published-pdf"];
 }
 
+- (BOOL)isScienceSupplementReference:(NSString *)value {
+    NSString *decoded = value.stringByRemovingPercentEncoding ?: value ?: @"";
+    return [decoded rangeOfString:@"/suppl(?:/|_)|/supplement|[_\\-.]sm\\.(?:pdf|docx?)(?:$|[?#\\s])|supplementary|supporting[ _-]+(?:information|materials)|mdar|reproducibility[ _-]+checklist|reporting[ _-]+(?:summary|checklist)"
+                         options:NSRegularExpressionSearch | NSCaseInsensitiveSearch].location != NSNotFound;
+}
+
 - (void)completeHiddenPublisherSupplementDiscoveryWithURLs:(NSArray<NSString *> *)urls {
     NSString *token = self.hiddenPublisherToken ?: @"";
     [self notifyHiddenPublisherDownloadToken:token
@@ -1326,7 +1509,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
             : @"";
     NSURL *targetURL = [NSURL URLWithString:targetString];
     NSString *targetAbsolute = targetURL.absoluteString ?: @"";
-    if (targetAbsolute.length > 0
+    if (![publisher isEqualToString:@"aaas"] && targetAbsolute.length > 0
         && ![targetAbsolute isEqualToString:current]
         && [self isAllowedPublisherURL:targetURL publisher:publisher]
         && ![self.hiddenPublisherDiscoveryVisitedURLs containsObject:targetAbsolute]) {
@@ -1343,16 +1526,21 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     NSString *script =
         @"(() => {"
          "const urls = [];"
+         "const science = /(?:^|\\.)(?:science|sciencemag)\\.org$/.test(location.hostname);"
+         "const decode = value => { try { return decodeURIComponent(value); } catch (_) { return value; } };"
+         "const secondary = value => /supplement|supporting information|appendix/.test(value) || (science && /\\/suppl(?:\\/|_)|[_\\-.]sm\\.(?:pdf|docx?)(?:$|[?#\\s])|mdar|reproducibility[ _-]+checklist|reporting[ _-]+(?:summary|checklist)/.test(value));"
+         "const blocked = science && (/just a moment|access denied|attention required/i.test(document.title) || !!document.querySelector('#challenge-running, #challenge-stage, form[action*=\"__cf_chl\"]'));"
+         "if (blocked) return {urls: [], clicked: false, blocked: true};"
          "for (const meta of document.querySelectorAll('meta[name=\"citation_pdf_url\"], meta[property=\"citation_pdf_url\"]')) {"
            "const raw = meta.getAttribute('content') || '';"
-           "try { if (raw) urls.push(new URL(raw, location.href).href); } catch (_) {}"
+           "try { if (raw && (!science || !secondary(decode(raw).toLowerCase()))) urls.push(new URL(raw, location.href).href); } catch (_) {}"
          "}"
          "for (const el of document.querySelectorAll('a[href], iframe[src], embed[src]')) {"
            "const raw = el.getAttribute('href') || el.getAttribute('src') || '';"
            "let u; try { u = new URL(raw, location.href); } catch (_) { continue; }"
            "const path = u.pathname.toLowerCase();"
            "const label = `${el.textContent || ''} ${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''}`.toLowerCase();"
-           "const supplementary = /supplement|supporting information|appendix/.test(`${path} ${label}`);"
+           "const supplementary = secondary(`${decode(path)} ${label}`);"
            "const pdfRoute = /\\.pdf$/i.test(path) || path.includes('/doi/pdf') || path.includes('/doi/epdf') || path.includes('/article-pdf/') || path.includes('/pdfft') || path.includes('downloadarticlefile.do');"
            "const pdfLabel = /(^|\\s)(download\\s+|view\\s+|open\\s+)?pdf(\\s|$)/.test(label);"
            "if (!supplementary && (pdfRoute || pdfLabel)) urls.push(u.href);"
@@ -1361,7 +1549,8 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
          "if (!urls.length) {"
            "for (const el of document.querySelectorAll('button, [role=\"button\"], a')) {"
              "const label = `${el.textContent || ''} ${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''}`.trim().toLowerCase();"
-             "if (!/supplement|supporting information/.test(label) && /(^|\\s)(download\\s+|view\\s+|open\\s+)?pdf(\\s|$)/.test(label)) {"
+             "const marker = science ? `${label} ${el.getAttribute('href') || ''}`.toLowerCase() : label;"
+             "if (!(science ? secondary(marker) : /supplement|supporting information/.test(label)) && /(^|\\s)(download\\s+|view\\s+|open\\s+)?pdf(\\s|$)/.test(label)) {"
                "try { el.click(); clicked = true; } catch (_) {}"
                "break;"
              "}"
@@ -1375,14 +1564,27 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
             PaperMonitorDelegate *strongSelf = weakSelf;
             if (!strongSelf || !strongSelf.hiddenPublisherWebView || ![strongSelf isHiddenPublisherMainDownload]) return;
             NSDictionary *payload = [result isKindOfClass:[NSDictionary class]] ? result : @{};
-            NSArray *rawURLs = [payload[@"urls"] isKindOfClass:[NSArray class]] ? payload[@"urls"] : @[];
+            NSMutableArray *rawURLs = [([payload[@"urls"] isKindOfClass:[NSArray class]] ? payload[@"urls"] : @[]) mutableCopy];
             NSString *publisher = [strongSelf publisherNameForContext:strongSelf.hiddenPublisherContext ?: @{}];
             NSString *current = strongSelf.hiddenPublisherWebView.URL.absoluteString ?: @"";
+            // Establish the normal article session first. Never leave a browser
+            // verification page to chase public supplements as a substitute.
+            if ([publisher isEqualToString:@"aaas"] && ![payload[@"blocked"] boolValue]) {
+                NSString *target = strongSelf.hiddenPublisherContext[@"publisher_download_target_url"];
+                if ([target isKindOfClass:[NSString class]] && target.length) {
+                    [rawURLs insertObject:target atIndex:0];
+                    NSURLComponents *alternate = [NSURLComponents componentsWithString:target];
+                    alternate.path = [alternate.path stringByReplacingOccurrencesOfString:@"/doi/pdf/" withString:@"/doi/epdf/"];
+                    alternate.query = nil;
+                    if (alternate.URL) [rawURLs addObject:alternate.URL.absoluteString];
+                }
+            }
             for (id value in rawURLs) {
                 if (![value isKindOfClass:[NSString class]]) continue;
                 NSURL *url = [NSURL URLWithString:(NSString *)value];
                 NSString *absolute = url.absoluteString ?: @"";
                 if (![strongSelf isAllowedPublisherURL:url publisher:publisher]
+                    || ([publisher isEqualToString:@"aaas"] && [strongSelf isScienceSupplementReference:absolute])
                     || [absolute isEqualToString:current]
                     || [strongSelf.hiddenPublisherDiscoveryVisitedURLs containsObject:absolute]) {
                     continue;
@@ -1419,6 +1621,11 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 }
 
 - (void)hiddenPublisherDownloadTimedOut:(NSTimer *)timer {
+    if ([self isHiddenPublisherMainDownload] && [[self publisherNameForContext:self.hiddenPublisherContext ?: @{}] isEqualToString:@"aaas"]) {
+        NSString *detail = self.hiddenPublisherContext[@"publisher_download_response_detail"] ?: @"";
+        [self failHiddenPublisherDownload:[NSString stringWithFormat:@"Science main PDF was not obtained. Open Website to check article access or browser verification, then retry Download. %@", detail]];
+        return;
+    }
     [self failHiddenPublisherDownload:@"The publisher did not provide a PDF before the background download timed out."];
 }
 
@@ -1430,6 +1637,14 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
         return;
     }
     NSString *mimeType = navigationResponse.response.MIMEType.lowercaseString ?: @"";
+    if (navigationResponse.forMainFrame && [self isHiddenPublisherMainDownload]
+        && [navigationResponse.response isKindOfClass:[NSHTTPURLResponse class]]) {
+        NSHTTPURLResponse *response = (NSHTTPURLResponse *)navigationResponse.response;
+        NSMutableDictionary *context = [self.hiddenPublisherContext mutableCopy];
+        context[@"publisher_download_response_detail"] = [NSString stringWithFormat:@"HTTP %ld at %@%@.",
+            (long)response.statusCode, response.URL.host ?: @"", response.URL.path ?: @""];
+        self.hiddenPublisherContext = context;
+    }
     NSString *disposition = @"";
     if ([navigationResponse.response isKindOfClass:[NSHTTPURLResponse class]]) {
         id value = ((NSHTTPURLResponse *)navigationResponse.response).allHeaderFields[@"Content-Disposition"];
@@ -1458,6 +1673,23 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     }
 }
 
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    if (webView != self.webView || self.applicationIsTerminating) return;
+    [self appendLauncherLogMessage:@"Workspace web process terminated; recovering the authenticated UI. The server and refresh jobs remain running."];
+    if (!self.workspaceRecoveryWindow || -self.workspaceRecoveryWindow.timeIntervalSinceNow > 60) {
+        self.workspaceRecoveryWindow = [NSDate date];
+        self.workspaceRecoveryAttempts = 0;
+    }
+    if (++self.workspaceRecoveryAttempts > 3) {
+        [self presentStartupFailure:@"The workspace preview repeatedly stopped. Please reopen Gewu Insight. Your refresh progress remains saved."];
+        return;
+    }
+    [self closeNativeQuickLookNotifyingWeb:NO];
+    [self showLoadingPage];
+    // Do not restart the server or replay any in-flight user/data operations.
+    [self loadApp];
+}
+
 - (void)webView:(WKWebView *)webView
 navigationAction:(WKNavigationAction *)navigationAction
 didBecomeDownload:(WKDownload *)download {
@@ -1484,6 +1716,18 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         completionHandler(nil);
         return;
     }
+    if ([self isHiddenPublisherMainDownload]
+        && [[self publisherNameForContext:self.hiddenPublisherContext ?: @{}] isEqualToString:@"aaas"]
+        && ([self isScienceSupplementReference:response.URL.absoluteString]
+            || [self isScienceSupplementReference:suggestedFilename])) {
+        completionHandler(nil);
+        [self failHiddenPublisherDownload:@"Science returned supplementary material instead of the main article PDF. Open Website to check article access, then retry Download."];
+        return;
+    }
+    NSMutableDictionary *context = [self.hiddenPublisherContext mutableCopy];
+    context[@"publisher_download_final_url"] = response.URL.absoluteString ?: @"";
+    context[@"publisher_download_filename"] = suggestedFilename.lastPathComponent ?: @"";
+    self.hiddenPublisherContext = context;
     NSString *extension = suggestedFilename.pathExtension.lowercaseString ?: @"";
     NSString *mimeType = response.MIMEType.lowercaseString ?: @"";
     if (![extension isEqualToString:@"pdf"] && ![extension isEqualToString:@"doc"] && ![extension isEqualToString:@"docx"]) {
@@ -1491,7 +1735,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         else if ([mimeType containsString:@"msword"]) extension = @"doc";
         else extension = @"pdf";
     }
-    NSString *temporaryName = [NSString stringWithFormat:@"daiqo-published-%@.%@", NSUUID.UUID.UUIDString, extension];
+    NSString *temporaryName = [NSString stringWithFormat:@"gewu-publisher-%@.%@", NSUUID.UUID.UUIDString, extension];
     NSString *temporaryPath = [NSTemporaryDirectory() stringByAppendingPathComponent:temporaryName];
     self.hiddenPublisherTemporaryPath = temporaryPath;
     completionHandler([NSURL fileURLWithPath:temporaryPath]);
@@ -1621,6 +1865,12 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)failHiddenPublisherDownload:(NSString *)message {
+    if ([[self publisherNameForContext:self.hiddenPublisherContext ?: @{}] isEqualToString:@"aaas"]) {
+        [self appendLauncherLogMessage:[NSString stringWithFormat:@"Science download %@ (%@): %@ %@",
+            self.hiddenPublisherContext[@"paper_id"] ?: @"",
+            self.hiddenPublisherContext[@"publisher_download_kind"] ?: @"",
+            message ?: @"Download failed", self.hiddenPublisherContext[@"publisher_download_response_detail"] ?: @""]];
+    }
     NSString *token = self.hiddenPublisherToken ?: @"";
     [self notifyHiddenPublisherDownloadToken:token success:NO data:nil error:message ?: @"Published PDF download failed."];
     [self clearHiddenPublisherDownload];
@@ -1710,7 +1960,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)positionTrafficLightButtons {
-    if (!self.webView.superview || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    if (!self.webView.superview || self.trafficLightFullScreenTransition
+        || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
     // Match .view-switcher / .view-switch in ui_server.py: top 6, height 32,
     // a 2-point top border and no bottom border put the label center at 23.
     const CGFloat tabBarHeight = 38.0;
@@ -1744,6 +1995,19 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     }
 }
 
+- (void)windowDidUpdate:(NSNotification *)notification {
+    if (notification.object != self.window || self.trafficLightLayoutInProgress
+        || self.trafficLightFullScreenTransition
+        || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    // AppKit can reset the native titlebar after the resize/startup callbacks.
+    // Finish its pending layout, then align before this update is displayed.
+    // Do not queue another update: unchanged frames need no work or timer.
+    self.trafficLightLayoutInProgress = YES;
+    [self.window layoutIfNeeded];
+    [self positionTrafficLightButtons];
+    self.trafficLightLayoutInProgress = NO;
+}
+
 - (void)scheduleTrafficLightLayout:(NSNotification *)notification {
     if (notification.object != self.window || self.trafficLightLayoutScheduled) return;
     self.trafficLightLayoutScheduled = YES;
@@ -1765,8 +2029,33 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [self scheduleTrafficLightLayout:notification];
 }
 
+- (void)windowWillEnterFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = YES;
+}
+
+- (void)windowWillExitFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = YES;
+}
+
+- (void)windowDidEnterFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = NO;
+}
+
 - (void)windowDidExitFullScreen:(NSNotification *)notification {
+    if (notification.object == self.window) self.trafficLightFullScreenTransition = NO;
     [self scheduleTrafficLightLayout:notification];
+}
+
+- (void)windowDidFailToEnterFullScreen:(NSWindow *)window {
+    if (window != self.window) return;
+    self.trafficLightFullScreenTransition = NO;
+    [self positionTrafficLightButtons];
+}
+
+- (void)windowDidFailToExitFullScreen:(NSWindow *)window {
+    if (window != self.window) return;
+    self.trafficLightFullScreenTransition = NO;
+    [self positionTrafficLightButtons];
 }
 
 - (void)windowDidChangeBackingProperties:(NSNotification *)notification {
@@ -1847,13 +2136,15 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     pdfRenameSettingsItem.target = self;
     NSMenuItem *quickLookSettingsItem = [settingMenu addItemWithTitle:@"Quick Look Settings" action:@selector(openQuickLookSettings:) keyEquivalent:@""];
     quickLookSettingsItem.target = self;
+    NSMenuItem *libraryDestinationSettingsItem = [settingMenu addItemWithTitle:@"Add to Library" action:@selector(openLibraryDestinationSettings:) keyEquivalent:@""];
+    libraryDestinationSettingsItem.target = self;
     NSMenuItem *websiteLinkSettingsItem = [settingMenu addItemWithTitle:@"Website Links" action:@selector(openWebsiteLinkSettings:) keyEquivalent:@""];
     websiteLinkSettingsItem.target = self;
     NSMenuItem *aiAccessItem = [settingMenu addItemWithTitle:@"AI Access" action:@selector(openAIAccessSettings:) keyEquivalent:@""];
     aiAccessItem.target = self;
     NSMenuItem *arxivSettingsItem = [settingMenu addItemWithTitle:@"arXiv Scope Settings" action:@selector(openArxivSettings:) keyEquivalent:@""];
     arxivSettingsItem.target = self;
-    NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Open Source Settings" action:@selector(openCitationSettings:) keyEquivalent:@","];
+    NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Literature Data Source" action:@selector(openCitationSettings:) keyEquivalent:@","];
     citationSettingsItem.target = self;
     NSMenuItem *fieldSettingsItem = [settingMenu addItemWithTitle:@"Field Settings" action:@selector(openFieldSettings:) keyEquivalent:@""];
     fieldSettingsItem.target = self;
@@ -1869,6 +2160,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
     NSMenuItem *userGuideItem = [helpMenu addItemWithTitle:@"User Guide" action:@selector(openUserGuide:) keyEquivalent:@"?"];
     userGuideItem.target = self;
+    NSMenuItem *contactItem = [helpMenu addItemWithTitle:@"Contact Us" action:@selector(contactUs:) keyEquivalent:@""];
+    contactItem.target = self;
     helpMenuItem.submenu = helpMenu;
 
     NSApp.mainMenu = mainMenu;
@@ -2093,6 +2386,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [self.webView evaluateJavaScript:@"window.openAIAccessSettings && window.openAIAccessSettings()" completionHandler:nil];
 }
 
+- (void)openLibraryDestinationSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openLibraryDestinationSettings && window.openLibraryDestinationSettings()" completionHandler:nil];
+}
+
 - (void)openWebsiteLinkSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openWebsiteLinkSettings && window.openWebsiteLinkSettings()" completionHandler:nil];
 }
@@ -2177,10 +2474,24 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     if (url) [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
+- (void)contactUs:(id)sender {
+    NSURLComponents *components = [NSURLComponents componentsWithString:@"mailto:info@gewu-insight.com"];
+    components.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"subject" value:@"Gewu Insight — Feedback and Support"]
+    ];
+    // Let Launch Services choose the user's default email application.
+    if ([[NSWorkspace sharedWorkspace] openURL:components.URL]) return;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Could not open your email app";
+    alert.informativeText = @"Set a default email app on your Mac, or contact info@gewu-insight.com directly.";
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
 - (void)showAboutWindow {
     if (!self.aboutWindow) {
         const CGFloat width = 336.0;
-        const CGFloat height = 340.0;
+        const CGFloat height = 380.0;
         self.aboutWindow = [[NSWindow alloc]
             initWithContentRect:NSMakeRect(0, 0, width, height)
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
@@ -2196,20 +2507,20 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
         self.aboutWindow.contentView = content;
 
-        NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(132, 248, 72, 72)];
+        NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(132, 288, 72, 72)];
         iconView.image = NSApp.applicationIconImage;
         iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
         [content addSubview:iconView];
 
         [content addSubview:[self aboutLabelWithString:@"Gewu Insight"
                                                    font:[NSFont systemFontOfSize:23.5 weight:NSFontWeightSemibold]
-                                                  frame:NSMakeRect(20, 211, 296, 30)
+                                                  frame:NSMakeRect(20, 251, 296, 30)
                                                   color:NSColor.labelColor]];
         NSURL *calligraphyURL = [[NSBundle mainBundle] URLForResource:@"GewuAboutCalligraphy" withExtension:@"png"];
         NSImage *calligraphyImage = calligraphyURL ? [[NSImage alloc] initWithContentsOfURL:calligraphyURL] : nil;
         if (calligraphyImage) {
             calligraphyImage.template = YES;
-            NSImageView *calligraphyView = [[NSImageView alloc] initWithFrame:NSMakeRect(116, 182, 104, 22)];
+            NSImageView *calligraphyView = [[NSImageView alloc] initWithFrame:NSMakeRect(116, 222, 104, 22)];
             calligraphyView.image = calligraphyImage;
             calligraphyView.imageScaling = NSImageScaleProportionallyUpOrDown;
             calligraphyView.contentTintColor = NSColor.secondaryLabelColor;
@@ -2225,33 +2536,33 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             : [NSString stringWithFormat:@"Version %@", version];
         [content addSubview:[self aboutLabelWithString:versionText
                                                    font:[NSFont systemFontOfSize:11.5]
-                                                  frame:NSMakeRect(20, 160, 296, 16)
+                                                  frame:NSMakeRect(20, 200, 296, 16)
                                                   color:NSColor.tertiaryLabelColor]];
 
         NSTextField *taglineLabel = [self aboutLabelWithString:@"Your personal research workspace where papers,\nevidence, and files stay connected over time."
                                                            font:[NSFont systemFontOfSize:12.0]
-                                                          frame:NSMakeRect(16, 112, 304, 36)
+                                                          frame:NSMakeRect(16, 152, 304, 36)
                                                           color:NSColor.labelColor];
         taglineLabel.maximumNumberOfLines = 2;
         taglineLabel.selectable = NO;
         [content addSubview:taglineLabel];
 
         NSButton *guideButton = [self aboutLinkButtonWithTitle:@"User Guide"
-                                                        frame:NSMakeRect(83, 84, 82, 22)
+                                                        frame:NSMakeRect(83, 124, 82, 22)
                                                        action:@selector(openUserGuide:)];
         [content addSubview:guideButton];
         [content addSubview:[self aboutLabelWithString:@"·"
                                                    font:[NSFont systemFontOfSize:12]
-                                                  frame:NSMakeRect(162, 85, 12, 20)
+                                                  frame:NSMakeRect(162, 125, 12, 20)
                                                   color:NSColor.tertiaryLabelColor]];
         NSButton *githubButton = [self aboutLinkButtonWithTitle:@"GitHub"
-                                                         frame:NSMakeRect(171, 84, 82, 22)
+                                                         frame:NSMakeRect(171, 124, 82, 22)
                                                         action:@selector(openAboutProjectWebsite:)];
         [content addSubview:githubButton];
 
         [content addSubview:[self aboutLabelWithString:@"Designed and developed by Lingyuan Kong and Zhengran Wu,\nwith coding assistance from OpenAI Codex."
                                                    font:[NSFont systemFontOfSize:9.5]
-                                                  frame:NSMakeRect(18, 48, 300, 25)
+                                                  frame:NSMakeRect(18, 88, 300, 25)
                                                   color:NSColor.secondaryLabelColor]];
         NSString *copyright = [bundle objectForInfoDictionaryKey:@"NSHumanReadableCopyright"]
             ?: @"Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.";
@@ -2259,8 +2570,14 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
                                                                           withString:@".\nAll Rights Reserved."];
         [content addSubview:[self aboutLabelWithString:copyrightDisplay
                                                    font:[NSFont systemFontOfSize:9]
-                                                  frame:NSMakeRect(14, 12, 308, 25)
+                                                  frame:NSMakeRect(14, 52, 308, 25)
                                                   color:NSColor.tertiaryLabelColor]];
+        NSTextField *licenseLabel = [self aboutLabelWithString:@"Source-available research software.\nAcademic/non-commercial research use permitted.\nCommercial use requires written authorization."
+                                                         font:[NSFont systemFontOfSize:9]
+                                                        frame:NSMakeRect(14, 9, 308, 35)
+                                                        color:NSColor.secondaryLabelColor];
+        licenseLabel.maximumNumberOfLines = 3;
+        [content addSubview:licenseLabel];
         [self.aboutWindow center];
     }
     [self.aboutWindow makeKeyAndOrderFront:nil];
@@ -2321,6 +2638,28 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSURLComponents *components = [NSURLComponents componentsWithURL:self.url resolvingAgainstBaseURL:NO];
     components.queryItems = @[[[NSURLQueryItem alloc] initWithName:@"standalone" value:@"loader"]];
     return components.URL ?: self.url;
+}
+
+- (void)showLoaderPaperInLibrary:(NSDictionary *)payload {
+    NSString *paperId = [payload[@"paper_id"] isKindOfClass:NSString.class] ? payload[@"paper_id"] : @"";
+    NSNumber *itemId = [payload[@"library_item_id"] isKindOfClass:NSNumber.class] ? payload[@"library_item_id"] : @0;
+    if (!paperId.length) return;
+    // Arguments are passed as values, never interpolated into JavaScript.
+    [self.webView callAsyncJavaScript:
+        @"try { await window.revealLoaderPaper(paperId, itemId); return ''; } catch (error) { return error.message || 'Could not show paper in Library.'; }"
+        arguments:@{@"paperId": paperId, @"itemId": itemId}
+        inFrame:nil inContentWorld:WKContentWorld.pageWorld
+        completionHandler:^(id result, NSError *error) {
+            NSString *message = error ? @"Could not show paper in Library. Please try again."
+                : ([result isKindOfClass:NSString.class] ? result : @"");
+            if (!message.length) {
+                [self.loaderWindow orderOut:nil];
+                [self.window makeKeyAndOrderFront:nil];
+                [NSApp activateIgnoringOtherApps:YES];
+            }
+            [self.loaderWebView callAsyncJavaScript:@"window.finishLoaderPaperReveal(errorMessage);"
+                arguments:@{@"errorMessage": message} inFrame:nil inContentWorld:WKContentWorld.pageWorld completionHandler:nil];
+        }];
 }
 
 - (void)showLibraryLoaderWindow {
@@ -2471,6 +2810,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)recheckServerWhileStartupFailureIsVisible {
+    if (self.workspaceRecoveryAttempts > 3) return;
     if (!self.startupFailureAlert || self.applicationIsTerminating) return;
     [self checkServerWithCompletion:^(BOOL available) {
         if (!self.startupFailureAlert || self.applicationIsTerminating) return;
@@ -2516,6 +2856,22 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 decidePolicyForNavigationAction:(WKNavigationAction *)action
 decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSURL *url = action.request.URL;
+    if (webView == self.webView && action.targetFrame.isMainFrame
+        && GewuWorkspaceSameOrigin(url, self.url)
+        && [@[@"", @"/", @"/user-guide"] containsObject:url.path ?: @""]
+        && [(action.request.HTTPMethod ?: @"GET") isEqualToString:@"GET"]
+        && !action.request.HTTPBody && !action.request.HTTPBodyStream
+        && ![action.request valueForHTTPHeaderField:@"Authorization"].length) {
+        NSMutableURLRequest *authenticated = [self workspaceRequestForURL:url];
+        NSString *credential = [authenticated valueForHTTPHeaderField:@"X-Gewu-Workspace"];
+        if (credential.length && ![[action.request valueForHTTPHeaderField:@"X-Gewu-Workspace"] isEqualToString:credential]) {
+            // Cookies can disappear with a WebKit process. Reattach only to
+            // the local top-level UI, never to frames, publishers or APIs.
+            decisionHandler(WKNavigationActionPolicyCancel);
+            [webView loadRequest:authenticated];
+            return;
+        }
+    }
     BOOL webURL = [@[@"http", @"https"] containsObject:url.scheme.lowercaseString];
     if (webView == self.webView && webURL && !GewuWorkspaceSameOrigin(url, self.url)
         && (!action.targetFrame || action.targetFrame.isMainFrame)) {
@@ -2550,6 +2906,21 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        // A short-lived native file operation; never create a window or server.
+        // NSURL keeps the final symlink intact, including a dangling symlink.
+        if (argc == 3 && strcmp(argv[1], "--trash-item") == 0) {
+            NSURL *source = [NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[2]]];
+            NSURL *destination = nil;
+            NSError *error = nil;
+            BOOL moved = [[NSFileManager defaultManager] trashItemAtURL:source
+                resultingItemURL:&destination error:&error];
+            if (!moved || !destination) {
+                fprintf(stderr, "%s\n", error.localizedDescription.UTF8String ?: "macOS did not return the Trash location.");
+                return 1;
+            }
+            printf("%s\n", destination.path.UTF8String);
+            return 0;
+        }
         NSApplication *application = [NSApplication sharedApplication];
         PaperMonitorDelegate *delegate = [[PaperMonitorDelegate alloc] init];
         application.delegate = delegate;

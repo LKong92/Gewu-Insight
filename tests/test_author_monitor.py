@@ -1651,7 +1651,7 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
     def test_all_scholar_requests_share_a_random_minimum_interval(self):
         previous = ui_server.GOOGLE_SCHOLAR_LAST_REQUEST_AT
         ui_server.GOOGLE_SCHOLAR_LAST_REQUEST_AT = 10.0
-        response = object()
+        response = SimpleNamespace(text="<html></html>", url="https://scholar.google.com/citations")
         try:
             with patch.object(ui_server.random, "uniform", return_value=6.0), patch.object(
                 ui_server.time,
@@ -2375,7 +2375,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
             "function startAuthorMonitorSummaryPolling", 1
         )[0]
         self.assertIn("previousSignature !== nextSignature", summary)
-        self.assertIn("renderAuthorMonitor({preserveScroll: true})", summary)
+        self.assertIn("refreshAuthorMonitorInPlace()", summary)
         self.assertIn("pollAuthorMonitorInitialImport(Number(pendingImport.id))", summary)
 
     def test_author_remove_uses_an_in_app_safety_confirmation(self):
@@ -2690,7 +2690,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn('AUTHOR_MONITOR_SELECTION_STORAGE_KEY = "daiqo-author-monitor-selected-id"', html)
         self.assertIn("async function loadAuthorMonitorScope", html)
         self.assertIn("function prefetchAuthorMonitorIndex", html)
-        self.assertIn('fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1"', html)
+        self.assertIn('fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1&cards_only=1"', html)
         self.assertIn("state.authorMonitorIndexLoaded", html)
         self.assertIn("applyAuthorMonitorIndex(data)", html)
         self.assertIn("authorMonitorSelectedPaperByAuthor: new Map()", html)
@@ -2703,7 +2703,8 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("restoreCachedAuthorMonitorPapers(requestedId)", html)
         self.assertIn("state.authorMonitorViewCache?.key === cacheKey", html)
         self.assertIn("scheduleAuthorMonitorIdleEnrichment", html)
-        self.assertIn("startAuthorMonitorEnrichment(targetAuthorId, {maxPapers: 80})", html)
+        self.assertNotIn("authorMonitorEnrichmentStarted", html)
+        self.assertIn("authorMonitorMetadataWork", html)
         self.assertIn("max_papers: request.maxPapers", html)
 
     def test_author_monitor_empty_scope_restores_without_discarding_last_good_papers(self):

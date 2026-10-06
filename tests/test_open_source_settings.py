@@ -196,9 +196,9 @@ assert.ok($('openalexCitationSettingsStatus').textContent.includes('Could not sh
         mask_css = ui_server.INDEX_HTML.split("input.saved-credential:placeholder-shown::placeholder {", 1)[1].split("}", 1)[0]
         self.assertIn("font-size: 13px", mask_css)
         self.assertIn("letter-spacing: 1px", mask_css)
-        self.assertIn('<h2 id="citationSettingsTitle">Open Source Settings</h2>', ui_server.INDEX_HTML)
+        self.assertIn('<h2 id="citationSettingsTitle">Literature Data Source</h2>', ui_server.INDEX_HTML)
         native = (Path(__file__).resolve().parents[1] / "scripts" / "PaperMonitorApp.m").read_text()
-        self.assertIn('addItemWithTitle:@"Open Source Settings"', native)
+        self.assertIn('addItemWithTitle:@"Literature Data Source"', native)
         self.assertNotIn('addItemWithTitle:@"Citation Settings"', native)
         for source in ("openalexKeyInput", "semanticScholarKeyInput", "adsTokenInput"):
             self.assertIn(f'data-credential-input="{source}"', ui_server.INDEX_HTML)

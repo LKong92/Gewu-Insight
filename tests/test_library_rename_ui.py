@@ -1,11 +1,20 @@
 import unittest
 import inspect
+from pathlib import Path
+import shutil
+import subprocess
 
 from paper_monitor import ui_server
 from paper_monitor.ui_server import INDEX_HTML
 
 
 class LibraryRenameUiTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js required")
+    def test_rename_refreshes_paths_and_ignores_old_pending_responses(self):
+        result = subprocess.run([shutil.which("node"), str(Path(__file__).with_name("folder_rename_ui_probe.cjs"))],
+                                input=INDEX_HTML, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_table_view_renders_the_shared_rename_input(self):
         table_markup = INDEX_HTML.split("function libraryTableRowMarkup", 1)[1].split(
             "function libraryPaperTableFallbackParts", 1

@@ -23,6 +23,7 @@ ACTIVE_FOLDERS = '''WITH RECURSIVE active_folders(id,path) AS (
  SELECT id,name FROM library_folders WHERE parent_id IS NULL AND COALESCE(trashed_at,'')=''
  UNION ALL SELECT f.id,a.path || ' / ' || f.name FROM library_folders f
  JOIN active_folders a ON f.parent_id=a.id WHERE COALESCE(f.trashed_at,'')=''
+ AND NOT (f.parent_id=1 AND f.name='Recycle')
 ) '''
 
 
@@ -45,18 +46,18 @@ def require_scope(grant, scope):
         fail(403, 'permission_required', f'This connection needs {scope} permission in AI Access.')
 
 
-def selection_sql(grant):
+def _read_selection_sql(grant):
     selection = grant['selection']
     kind = selection['kind']
     if kind == 'papers':
         keys = selection['keys']
-        return 'p.storage_key IN (' + ','.join('?' for _ in keys) + ')', list(keys)
+        return '(p.storage_key IN (' + ','.join('?' for _ in keys) + ') OR EXISTS (SELECT 1 FROM paper_aliases a WHERE a.paper_id=p.paper_id AND a.alias IN (' + ','.join('?' for _ in keys) + ')))', list(keys) * 2
     location = '''EXISTS (SELECT 1 FROM library_items i JOIN active_folders f ON i.folder_id=f.id
       WHERE i.paper_id=p.paper_id AND COALESCE(i.trashed_at,'')='')'''
     if kind == 'saved':
         return '(' + location + ' OR EXISTS (SELECT 1 FROM my_publications m WHERE m.paper_id=p.paper_id))', []
-    # A moved, trashed, or deleted folder no longer grants access. Matching is
-    # by folder identity, never by a user-controlled display path.
+    # The grant follows its anchor's identity. Descendants moved outside that
+    # anchor, or trashed/deleted folders, no longer grant access.
     return '''EXISTS (WITH RECURSIVE descendants(id) AS (
       SELECT id FROM active_folders WHERE id=? UNION ALL
       SELECT f.id FROM library_folders f JOIN descendants d ON f.parent_id=d.id
@@ -65,12 +66,28 @@ def selection_sql(grant):
       WHERE i.paper_id=p.paper_id AND COALESCE(i.trashed_at,'')='')''', [selection['folder_id']]
 
 
+def selection_sql(grant):
+    from .ai_contract import WRITE_SCOPES
+    clause, params = _read_selection_sql(grant)
+    roots = grant.get('write_folder_ids', []) if set(grant['scopes']) & set(WRITE_SCOPES.values()) else []
+    if not roots:
+        return clause, params
+    marks = ','.join('?' for _ in roots)
+    return '(' + clause + f''' OR EXISTS (
+      WITH RECURSIVE writable(id) AS (
+        SELECT id FROM active_folders WHERE id IN ({marks}) UNION
+        SELECT f.id FROM library_folders f JOIN writable w ON f.parent_id=w.id
+        JOIN active_folders a ON a.id=f.id)
+      SELECT 1 FROM library_items i JOIN writable w ON i.folder_id=w.id
+      WHERE i.paper_id=p.paper_id AND COALESCE(i.trashed_at,'')=''))''', params + roots
+
+
 def paper_for_key(storage, grant, key):
     if not isinstance(key, str) or not re.fullmatch(r'gw_[0-9a-f]{10,64}', key):
         fail(400, 'invalid_key', 'Provide a Gewu Key in the form gw_ followed by its identifier.')
     clause, params = selection_sql(grant)
-    row = storage.conn.execute(ACTIVE_FOLDERS + 'SELECT p.* FROM papers p WHERE p.storage_key=? AND ' + clause,
-                               [key] + params).fetchone()
+    row = storage.conn.execute(ACTIVE_FOLDERS + 'SELECT p.* FROM papers p WHERE (p.storage_key=? OR EXISTS (SELECT 1 FROM paper_aliases a WHERE a.paper_id=p.paper_id AND a.alias=?)) AND ' + clause,
+                               [key, key] + params).fetchone()
     if not row:
         fail(404, 'paper_unavailable', 'This paper was not found in the authorized collection.')
     return dict(row)
@@ -103,6 +120,8 @@ def paper_details(storage, paper):
     result = metadata(paper)
     result['files'] = [file_metadata(r, (default or {}).get('id', 0)) for r in resources]
     result['default_file_id'] = (default or {}).get('id')
+    from .publication_notices import for_paper
+    result['publication_notices'] = for_paper(storage,paper['paper_id'])
     return result
 
 
@@ -139,8 +158,8 @@ def search(storage, grant, args):
     clause, params = selection_sql(grant)
     if q.strip():
         term = '%' + q.strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
-        clause += " AND (p.title LIKE ? ESCAPE '\\' OR p.doi LIKE ? ESCAPE '\\' OR p.storage_key LIKE ? ESCAPE '\\' OR p.abstract LIKE ? ESCAPE '\\')"
-        params += [term] * 4
+        clause += " AND (p.title LIKE ? ESCAPE '\\' OR p.doi LIKE ? ESCAPE '\\' OR p.storage_key LIKE ? ESCAPE '\\' OR p.abstract LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM paper_aliases a WHERE a.paper_id=p.paper_id AND a.alias LIKE ? ESCAPE '\\'))"
+        params += [term] * 5
     rows = storage.conn.execute(ACTIVE_FOLDERS + 'SELECT p.* FROM papers p WHERE ' + clause +
                                 ' ORDER BY p.storage_key LIMIT ? OFFSET ?', params + [limit + 1, offset]).fetchall()
     return {'papers': [metadata(dict(row)) for row in rows[:limit]],
@@ -209,8 +228,8 @@ def save_analysis(storage, grant, paper, args):
         fail(410, 'analysis_removed', 'The previously saved analysis has been removed. Use a new request ID to create another.')
     if receipt and receipt['resource_id']:
         resource = storage.get_paper_resource(receipt['resource_id'])
-        if not resource or not Path(storage.resource_local_path(resource)).is_file():
-            fail(410, 'analysis_removed', 'The previously saved analysis has been removed. Use a new request ID to create another.')
+        if not resource or resource.get('paper_id') != paper['paper_id'] or not Path(storage.resource_local_path(resource)).is_file():
+            fail(410, 'analysis_removed', 'The previously saved analysis has been moved or removed. Use a new request ID to create another.')
         return {'gewu_key': paper['storage_key'], 'file': file_metadata(resource), 'reused': True}
     source_id = args.get('source_file_id')
     source_hash = args.get('source_sha256', '')
@@ -254,10 +273,21 @@ def execute(storage, authorization, operation, args):
     try:
         if operation == 'capabilities':
             return {'api_version': '1', 'connection': grant['name'], 'scopes': grant['scopes'],
-                    'selection': grant['selection'], 'expires_at': grant['expires_at']}
+                    'selection': grant['selection'], 'write_folder_ids': grant.get('write_folder_ids', []),
+                    'expires_at': grant['expires_at']}
         require_scope(grant, 'papers:read')
-        if operation == 'search_papers':
+        from .ai_contract import WRITE_SCOPES
+        if operation in WRITE_SCOPES:
+            from .ai_writes import execute_write
+            result = execute_write(storage, authorization, operation, args)
+        elif operation in ('get_upload_status', 'release_upload'):
+            from .ai_uploads import manage_uploads
+            result = manage_uploads(storage, grant, operation, args)
+        elif operation == 'search_papers':
             result = search(storage, grant, args)
+        elif operation in ('list_folders', 'list_folder_papers'):
+            from .ai_folders import list_collection
+            result = list_collection(storage, grant, operation, args)
         elif operation in ('get_paper', 'read_paper', 'save_analysis', 'download_file'):
             paper = paper_for_key(storage, grant, key)
             if operation == 'get_paper':
@@ -285,6 +315,9 @@ def execute(storage, authorization, operation, args):
         # A revoke, disable or collection move during a long extraction takes
         # effect before any content is returned to the client.
         fresh = authenticate(storage, authorization)
+        if operation in ('list_folders', 'list_folder_papers'):
+            from .ai_folders import verify_result
+            verify_result(storage, fresh, result)
         if key:
             paper_for_key(storage, fresh, key)
         audit(storage, grant, operation, key)

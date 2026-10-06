@@ -153,7 +153,7 @@ class WindowsSourceTests(unittest.TestCase):
 
     def test_older_shell_cannot_silently_claim_current_source_parity(self):
         with patch("win32api.GetFileVersionInfo", return_value={"FileVersionMS": 1, "FileVersionLS": 19 << 16}):
-            with self.assertRaisesRegex(RuntimeError, "0.1.20 or later; found 0.1.19"):
+            with self.assertRaisesRegex(RuntimeError, "0.1.21 or later; found 0.1.19"):
                 desktop_executable(Path(sys.executable))
 
 

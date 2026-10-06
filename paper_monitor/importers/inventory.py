@@ -11,7 +11,8 @@ from typing import Any, Callable, Iterable
 from pypdf import PdfReader
 
 from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, ROOT, WORKSPACE_ROOT
-from ..resource_fingerprint import fingerprint_file
+from ..resource_fingerprint import fingerprint_file, sha256_for_file
+from ..resource_dedup import find_existing, remember_source, source_resources, serialize_writes
 from ..storage import Storage
 from ..text import clean_text, is_placeholder_publication_title, make_paper_id, normalize_doi, safe_slug, sha1_short
 
@@ -316,6 +317,8 @@ def empty_result(
         "reused_existing_files": 0,
         "resources_or_attachments_to_import": 0,
         "skipped": 0,
+        "processed_files": 0,
+        "identity_conflicts": [],
         "skipped_system_metadata": 0,
         "mac_aliases_found": 0,
         "missing_source_files": 0,
@@ -410,39 +413,22 @@ def evaluate_files(
 
         if is_paper_candidate(record):
             result["paper_candidates_seen"] += 1
+            from ..publication_notices import describe
+            notice=describe(record)
+            if notice:
+                result.setdefault('publication_notices',[]).append({'title':record['title'],'status':'relation_review'})
+                result['resources_or_attachments_to_import'] += int(source_exists)
+                result['warnings'].append(f"Publication notice: {record['filename']}. Will attach to an explicitly identified original or retain for relation review; no independent paper.")
+                continue
             identity = paper_identity(record, dedupe_keys)
             if not identity:
                 result["skipped"] += 1
                 result["warnings"].append(f"Skipping PDF without usable identity: {source_path or record['filename']}")
                 continue
 
-            doi = record["doi"]
-            arxiv_id = record["arxiv_id"]
-            path_key = source_fingerprint(record)
-            duplicate = False
-            if doi and doi in seen_dois:
-                result["doi_duplicates"] += 1
-                duplicate = True
-                append_limited(result["duplicate_dois"], {"doi": doi, **compact_record(record)}, 200)
-            if arxiv_id and arxiv_id in seen_arxiv_ids:
-                result["arxiv_duplicates"] += 1
-                duplicate = True
-                append_limited(result["duplicate_arxiv_ids"], {"arxiv_id": arxiv_id, **compact_record(record)}, 200)
-            if path_key and path_key in seen_paths:
-                result["path_duplicates"] += 1
-                duplicate = True
-                append_limited(result["duplicate_paths"], {"path_key": path_key, **compact_record(record)}, 200)
-            if identity in seen_identities or duplicate:
-                result["duplicate_paper_candidates"] += 1
+            if is_duplicate_record(record, identity, seen_identities, seen_dois, seen_arxiv_ids, seen_paths, result):
                 continue
-
-            seen_identities.add(identity)
-            if doi:
-                seen_dois.add(doi)
-            if arxiv_id:
-                seen_arxiv_ids.add(arxiv_id)
-            if path_key:
-                seen_paths.add(path_key)
+            remember_record_identity(record, identity, seen_identities, seen_dois, seen_arxiv_ids, seen_paths)
 
             matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
             plan = paper_plan(record, paper_id=matched_paper_id or new_paper_id(record))
@@ -452,6 +438,7 @@ def evaluate_files(
             else:
                 result["created_papers"] += 1
                 append_limited(result["papers_to_create"], plan, 500)
+                add_existing_index(existing, record, plan["paper_id"])
             if source_path and source_exists:
                 result["pdf_attachments_to_import"] += 1
                 result["resources_or_attachments_to_import"] += 1
@@ -505,6 +492,7 @@ def execute_import(
 
     try:
         for index, raw in enumerate(files):
+            result["processed_files"] = index + 1
             emit_progress(progress_callback, stage="import", message="", current=index + 1, total=total)
             if index == 0 or (index + 1) % 100 == 0 or index + 1 == total:
                 emit_progress(
@@ -519,6 +507,7 @@ def execute_import(
                 result["warnings"].append(f"Skipping non-object file record at index {index}.")
                 continue
             record = normalize_record(raw)
+            library_item = None
             source_path = record["source_path"]
             source = Path(source_path) if source_path else None
             reusable_path = reusable_stored_path(storage, record, copy_mode=result["copy_mode"])
@@ -545,6 +534,37 @@ def execute_import(
 
             if is_paper_candidate(record):
                 result["paper_candidates_seen"] += 1
+                from .. import publication_notices as notices
+                notice = notices.describe_known(storage,record)
+                if notice:
+                    parent = notices.target(storage, notice)
+                    event_id = notices.record(storage, record, notice, parent, commit=True)
+                    if parent: notices.adopt_pending_files(storage,event_id,parent)
+                    file_path = reusable_path or (copy_record(record, target_root=target_root) if source_exists else '')
+                    if file_path:
+                        if parent:
+                            from .. import ui_server as ui
+                            resource = ui.attach_file_to_paper(storage, paper_id=parent['paper_id'],
+                                filename=record['filename'],content=Path(file_path).read_bytes(),
+                                file_type=notice['kind'],added_via='inventory_notice')
+                            notices.attach(storage,event_id,resource['id'])
+                            # Remove only the redundant private copy from this call.
+                            if record.get('_new_copy') == file_path and file_path != storage.resource_local_path(resource):
+                                Path(file_path).unlink()
+                        else:
+                            resource_id = upsert_resource(storage,record,batch_id=batch_id,paper_id=None,stored_path=file_path)
+                            notices.attach(storage,event_id,resource_id)
+                        storage.conn.commit()
+                        result['resources_or_attachments_to_import'] += 1
+                    if parent and result['preserve_folders']:
+                        folder_id = ensure_folder_path(storage,record['parent_relative_path'],folder_cache)
+                        _,created = ensure_imported_library_item(storage,paper_id=parent['paper_id'],folder_id=folder_id,display_name='')
+                        result['library_items_created' if created else 'library_items_existing'] += 1
+                    result.setdefault('publication_notices',[]).append({'notice_id':event_id,'status':'linked' if parent else 'needs_relation'})
+                    if not parent:
+                        result['warnings'].append(f"Publication notice {event_id} retained for relation review: {record['filename']}. Supply the original article DOI; no independent paper was created.")
+                    if parent: reconcile_imported_layout(storage,parent['paper_id'],target_root,result)
+                    continue
                 identity = paper_identity(record, dedupe_keys)
                 if not identity:
                     result["skipped"] += 1
@@ -554,8 +574,13 @@ def execute_import(
                     continue
                 remember_record_identity(record, identity, seen_identities, seen_dois, seen_arxiv_ids, seen_paths)
 
-                matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
+                matched_paper_id = matched_import_paper(storage, record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                if matched_paper_id and source_exists:
+                    duplicate = find_existing(storage, paper_id, source)
+                    if duplicate:
+                        reusable_path = storage.resource_local_path(duplicate)
+                conflict = note_import_identity_conflict(storage, record, paper_id, result, progress_callback) if matched_paper_id else False
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
@@ -568,17 +593,18 @@ def execute_import(
                     if stored_path:
                         result["pdf_attachments_to_import"] += 1
                         result["resources_or_attachments_to_import"] += 1
-                        attach_imported_file_to_existing_paper(
-                            storage,
-                            record,
-                            paper_id=paper_id,
-                            stored_path=stored_path,
-                            pdf_like=True,
-                        )
+                        if not conflict:
+                            attach_imported_file_to_existing_paper(
+                                storage,
+                                record,
+                                paper_id=paper_id,
+                                stored_path=stored_path,
+                                pdf_like=True,
+                            )
                         upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                     if result["preserve_folders"]:
                         folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                        _, created = ensure_imported_library_item(
+                        library_item, created = ensure_imported_library_item(
                             storage,
                             paper_id=paper_id,
                             folder_id=folder_id,
@@ -588,6 +614,11 @@ def execute_import(
                             result["library_items_created"] += 1
                         else:
                             result["library_items_existing"] += 1
+                    reconcile_imported_layout(storage, paper_id, target_root, result)
+                    emit_progress(progress_callback, stage="import",
+                                  message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                                  current=index + 1, total=total, paper_id=paper_id,
+                                  library_item_id=library_item["id"] if library_item else None)
                     continue
                 stored_path = ""
                 if reusable_path:
@@ -599,16 +630,22 @@ def execute_import(
                     result["pdf_attachments_to_import"] += 1
                     result["resources_or_attachments_to_import"] += 1
 
-                upsert_imported_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
-                result["created_papers"] += 1
-                append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
-                queue_metadata_refresh_candidate(result, record, paper_id)
+                accepted = upsert_imported_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
+                if accepted:
+                    result["created_papers"] += 1
+                    append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                    queue_metadata_refresh_candidate(result, record, paper_id)
+                else:
+                    # Another import may have registered this identity after our lookup.
+                    note_import_identity_conflict(storage, record, paper_id, result, progress_callback)
+                    result["existing_papers"] += 1
+                    append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
                 add_existing_index(existing, record, paper_id)
                 if stored_path:
                     upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    _, created = ensure_imported_library_item(
+                    library_item, created = ensure_imported_library_item(
                         storage,
                         paper_id=paper_id,
                         folder_id=folder_id,
@@ -618,11 +655,21 @@ def execute_import(
                         result["library_items_created"] += 1
                     else:
                         result["library_items_existing"] += 1
+                reconcile_imported_layout(storage, paper_id, target_root, result)
+                emit_progress(progress_callback, stage="import",
+                              message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                              current=index + 1, total=total, paper_id=paper_id,
+                              library_item_id=library_item["id"] if library_item else None)
                 continue
 
             if import_as == "resource":
-                matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
+                matched_paper_id = matched_import_paper(storage, record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                if matched_paper_id and source_exists:
+                    duplicate = find_existing(storage, paper_id, source)
+                    if duplicate:
+                        reusable_path = storage.resource_local_path(duplicate)
+                conflict = note_import_identity_conflict(storage, record, paper_id, result, progress_callback) if matched_paper_id else False
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
@@ -635,18 +682,19 @@ def execute_import(
                     if stored_path:
                         result["created_resources"] += 1
                         result["resources_or_attachments_to_import"] += 1
-                        attach_imported_file_to_existing_paper(
-                            storage,
-                            record,
-                            paper_id=paper_id,
-                            stored_path=stored_path,
-                            pdf_like=False,
-                        )
+                        if not conflict:
+                            attach_imported_file_to_existing_paper(
+                                storage,
+                                record,
+                                paper_id=paper_id,
+                                stored_path=stored_path,
+                                pdf_like=False,
+                            )
                         upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                         append_limited(result["resources_to_import"], resource_plan(record), 500)
                     if result["preserve_folders"]:
                         folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                        _, created = ensure_imported_library_item(
+                        library_item, created = ensure_imported_library_item(
                             storage,
                             paper_id=paper_id,
                             folder_id=folder_id,
@@ -656,6 +704,11 @@ def execute_import(
                             result["library_items_created"] += 1
                         else:
                             result["library_items_existing"] += 1
+                    reconcile_imported_layout(storage, paper_id, target_root, result)
+                    emit_progress(progress_callback, stage="import",
+                                  message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                                  current=index + 1, total=total, paper_id=paper_id,
+                                  library_item_id=library_item["id"] if library_item else None)
                     continue
                 stored_path = ""
                 if reusable_path:
@@ -666,16 +719,22 @@ def execute_import(
                 if stored_path:
                     result["created_resources"] += 1
                     result["resources_or_attachments_to_import"] += 1
-                upsert_imported_file_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
-                result["created_papers"] += 1
-                append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
-                queue_metadata_refresh_candidate(result, record, paper_id)
+                accepted = upsert_imported_file_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
+                if accepted:
+                    result["created_papers"] += 1
+                    append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                    queue_metadata_refresh_candidate(result, record, paper_id)
+                else:
+                    # Another import may have registered this identity after our lookup.
+                    note_import_identity_conflict(storage, record, paper_id, result, progress_callback)
+                    result["existing_papers"] += 1
+                    append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
                 add_existing_index(existing, record, paper_id)
                 upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 append_limited(result["resources_to_import"], resource_plan(record), 500)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    _, created = ensure_imported_library_item(
+                    library_item, created = ensure_imported_library_item(
                         storage,
                         paper_id=paper_id,
                         folder_id=folder_id,
@@ -685,6 +744,11 @@ def execute_import(
                         result["library_items_created"] += 1
                     else:
                         result["library_items_existing"] += 1
+                reconcile_imported_layout(storage, paper_id, target_root, result)
+                emit_progress(progress_callback, stage="import",
+                              message=f"Imported {index + 1} / {total}: {record['relative_path'] or record['filename']}",
+                              current=index + 1, total=total, paper_id=paper_id,
+                              library_item_id=library_item["id"] if library_item else None)
                 continue
 
             result["skipped"] += 1
@@ -695,9 +759,68 @@ def execute_import(
         finish_import_batch(storage, batch_id=batch_id, result=result, status="cancelled")
         raise
     except Exception as exc:
-        result["errors"].append(f"Import failed: {exc}")
+        label = (record.get("relative_path") or record.get("filename")) if "record" in locals() else ""
+        result["errors"].append(f"Import failed{f' at {label}' if label else ''}: {exc}")
         finish_import_batch(storage, batch_id=batch_id, result=result, status="failed")
-        emit_progress(progress_callback, stage="import", message=f"Import failed: {exc}", current=total, total=total)
+        emit_progress(progress_callback, stage="import", message=result["errors"][-1], current=result["processed_files"], total=total)
+
+
+def reconcile_imported_layout(storage, paper_id, target_root, result):
+    # CLI imports to arbitrary external destinations must not relocate into the
+    # running application's Library. The App configures these managed roots.
+    from .. import ui_server as ui
+    from ..file_layout import reconcile
+    if not any(Path(target_root).resolve().is_relative_to(root.resolve()) for root in
+               (ui.LIBRARY_LOCAL_COPY_ROOT, ui.SPACES_LOCAL_COPY_ROOT, ui.MY_PUBLICATIONS_LOCAL_COPY_ROOT)):
+        return
+    try:
+        reconcile(storage, paper_id)
+    except Exception as exc:
+        # Import bytes/identity have been saved. Keep them, expose the failure,
+        # and allow a later repair instead of silently losing a completed file.
+        result["warnings"].append(f"File layout needs attention for {paper_id}: {exc}")
+
+
+def matched_import_paper(storage, record, existing, dedupe_keys):
+    # An explicit file reassignment wins over later DOI-based imports.
+    origins = source_resources(storage, record)
+    moved = next((r for r in origins if r.get('status') == 'reassigned'), None)
+    if moved and moved['paper_id']:
+        return str(moved['paper_id'])
+    matched = existing_paper_id(record, existing, dedupe_keys)
+    if matched:
+        return matched
+    if origins and origins[0].get('paper_id'):
+        return str(origins[0]['paper_id'])
+    candidate = new_paper_id(record)
+    return candidate if storage.get_paper(candidate) else ""
+
+
+def note_import_identity_conflict(storage, record, paper_id, result, progress_callback):
+    paper = storage.get_paper(paper_id) or {}
+    incoming = {"paper_id": paper_id, "doi": record["doi"],
+                "title": record["title"] or record["filename"], "authors": record["authors"],
+                "journal": "Imported Library" if is_paper_candidate(record) else "Imported File", "source": "inventory",
+                "url": f"https://arxiv.org/abs/{record['arxiv_id']}" if record["arxiv_id"] else ""}
+    reasons = storage.paper_identity_conflict_reasons(paper, incoming)
+    if not reasons:
+        return False
+    conflict_id = storage.record_paper_identity_conflict(paper, incoming, reasons)
+    storage.conn.execute("UPDATE paper_identity_conflicts SET status='attached' WHERE id=?", (conflict_id,))
+    storage.conn.commit()
+    entry = {"conflict_id": conflict_id, "filename": record["filename"],
+             "relative_path": record["relative_path"], "incoming_doi": record["doi"],
+             "existing_doi": paper.get("doi") or "", "gewu_key": paper.get("storage_key") or "",
+             "reasons": reasons}
+    result["identity_conflicts"].append(entry)
+    message = (f"Identity mismatch for {record['relative_path'] or record['filename']}: "
+               f"detected DOI {record['doi'] or '(none)'}, existing DOI {paper.get('doi') or '(none)'}. "
+               "Keeping the file in Paper Files without changing the paper metadata.")
+    result["warnings"].append(message)
+    record["identity_conflict_detail"] = message
+    emit_progress(progress_callback, stage="import", message=message,
+                  current=result["processed_files"], total=result["total_files"])
+    return True
 
 
 def is_duplicate_record(
@@ -727,7 +850,7 @@ def is_duplicate_record(
         append_limited(result["duplicate_paths"], {"path_key": path_key, **compact_record(record)}, 200)
     if identity in seen_identities or duplicate:
         result["duplicate_paper_candidates"] += 1
-        return True
+        return bool(path_key and path_key in seen_paths)
     return False
 
 
@@ -769,6 +892,7 @@ def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
         "page_count": int_or_none(raw.get("page_count")),
         "parse_status": clean_text(raw.get("parse_status")),
         "parse_error": clean_text(raw.get("parse_error")),
+        "publication_notice": raw.get("publication_notice"),
     }
     filename = record["filename"] or Path(record["source_path"]).name
     if is_system_metadata_filename(filename):
@@ -894,6 +1018,8 @@ def emit_progress(
     total: int | None = None,
     files_scanned: int | None = None,
     directories_scanned: int | None = None,
+    paper_id: str | None = None,
+    library_item_id: int | None = None,
 ) -> None:
     if not progress_callback:
         return
@@ -903,6 +1029,10 @@ def emit_progress(
             event["files_scanned"] = files_scanned
         if directories_scanned is not None:
             event["directories_scanned"] = directories_scanned
+        if paper_id:
+            event["paper_id"] = paper_id
+        if library_item_id:
+            event["library_item_id"] = library_item_id
         progress_callback(event)
     except ImportCancelled:
         raise
@@ -929,6 +1059,9 @@ def mime_type_for_kind(kind: str, extension: str) -> str | None:
 
 
 def is_probable_mac_alias(path: Path) -> bool:
+    from ..finder_alias import is_alias
+    if is_alias(path):
+        return True
     try:
         if path.is_symlink() or path.is_dir() or path.stat().st_size > 1024 * 1024:
             return False
@@ -979,6 +1112,14 @@ def pdf_metadata(path: Path) -> dict[str, Any]:
         metadata["arxiv_id"] = arxiv_id
     if not metadata["title"]:
         metadata["title"] = path.name
+    from ..publication_notices import from_front_matter
+    notice = from_front_matter(metadata['title'],text)
+    if notice:
+        metadata['publication_notice'] = notice
+        # The first DOI on a notice page can be the original article's DOI.
+        if metadata['doi'] in notice['related_dois']:
+            alternatives = {normalize_doi(m) for m in re.findall(r'10\.\d{4,9}/[^\s<>]+',text)} - set(notice['related_dois'])
+            metadata['doi'] = next(iter(alternatives)) if len(alternatives)==1 else ''
     return metadata
 
 
@@ -1005,10 +1146,12 @@ def split_pdf_authors(value: str) -> list[str]:
 
 def doi_from_text(value: str) -> str:
     text = re.sub(r"(10\.\d{4,9}/)\s+", r"\1", value or "", flags=re.I)
-    match = DOI_PATTERN.search(text)
-    if not match:
-        return ""
-    return normalize_doi(match.group(0).rstrip(".,;)"))
+    text = re.sub(r"(10\.1073/pnas\.)[ \t]*\r?\n[ \t]*(?=\d)", r"\1", text, flags=re.I)
+    for match in DOI_PATTERN.finditer(text):
+        doi = normalize_doi(match.group(0).rstrip(".,;)"))
+        if doi != "10.1073/pnas":
+            return doi
+    return ""
 
 
 def doi_from_filename(filename: str) -> str:
@@ -1017,6 +1160,9 @@ def doi_from_filename(filename: str) -> str:
     if doi:
         return doi
     normalized = filename.lower()
+    pnas = re.search(r"\bpnas\.(\d{10})(?!\d)", normalized)
+    if pnas:
+        return f"10.1073/pnas.{pnas.group(1)}"
     physrev = re.search(r"(revmodphys|physrev[a-z]*|prxquantum)\.?\s*(\d+)\.([0-9a-z]+)", normalized, flags=re.I)
     if physrev:
         journal = physrev.group(1).replace("physrevlett", "physrevlett")
@@ -1080,7 +1226,7 @@ def upsert_imported_paper(
     paper_id: str,
     batch_id: str,
     stored_path: str,
-) -> None:
+) -> bool:
     title = "" if is_placeholder_publication_title(record["title"]) else record["title"]
     title = title or record["filename"] or "(Untitled imported PDF)"
     journal = "arXiv" if record["arxiv_id"] and not record["doi"] else "Imported Library"
@@ -1111,7 +1257,7 @@ def upsert_imported_paper(
         }
     )
     if not accepted:
-        raise ValueError("Imported paper identity conflict is pending review")
+        return False
     storage.conn.execute(
         """
         UPDATE papers
@@ -1162,6 +1308,7 @@ def upsert_imported_paper(
         ),
     )
     storage.conn.commit()
+    return True
 
 
 def upsert_imported_file_paper(
@@ -1171,7 +1318,7 @@ def upsert_imported_file_paper(
     paper_id: str,
     batch_id: str,
     stored_path: str,
-) -> None:
+) -> bool:
     title = record["filename"] or record["title"] or "(Untitled imported file)"
     raw = {
         "import": import_metadata(record, batch_id=batch_id, stored_path=stored_path),
@@ -1202,7 +1349,7 @@ def upsert_imported_file_paper(
         }
     )
     if not accepted:
-        raise ValueError("Imported file identity conflict is pending review")
+        return False
     storage.conn.execute(
         """
         UPDATE papers
@@ -1247,6 +1394,7 @@ def upsert_imported_file_paper(
         ),
     )
     storage.conn.commit()
+    return True
 
 
 def attach_imported_file_to_existing_paper(
@@ -1329,7 +1477,20 @@ def attach_imported_file_to_existing_paper(
     storage.conn.commit()
 
 
-def upsert_resource(
+@serialize_writes
+def upsert_resource(storage, record, *, batch_id, paper_id, stored_path):
+    # Serialize lookup + registration across processes, including two Loaders
+    # importing the same bytes at the same time from different source paths.
+    if not storage.conn.in_transaction:
+        storage.conn.execute("BEGIN IMMEDIATE")
+    try:
+        return _upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
+    except Exception:
+        storage.conn.rollback()
+        raise
+
+
+def _upsert_resource(
     storage: Storage,
     record: dict[str, Any],
     *,
@@ -1345,18 +1506,48 @@ def upsert_resource(
             fingerprint = fingerprint_file(fingerprint_path)
         except OSError:
             fingerprint = None
+    duplicate = find_existing(storage, paper_id, fingerprint_path) if paper_id else None
+    if not paper_id and fingerprint:
+        row=storage.conn.execute('SELECT * FROM resources WHERE paper_id IS NULL AND sha256=? AND size_bytes=? AND stored_path=?',
+            (fingerprint.sha256,record['size_bytes'],stored_path)).fetchone()
+        duplicate=dict(row) if row else None
+    if duplicate:
+        remember_source(storage, duplicate['id'], record, fingerprint.sha256 if fingerprint else '', batch_id)
+        extra = record.pop('_new_copy', '')
+        actual = storage.resource_local_path(duplicate)
+        # Only discard the private copy made by this invocation, after another
+        # writer won registration. Never remove an external input or a resource.
+        discard = bool(extra and extra == stored_path and extra != actual
+            and not storage.conn.execute('SELECT 1 FROM resources WHERE stored_path=? OR source_path=?',
+                                         (extra, extra)).fetchone())
+        if discard:
+            from ..ui_server import update_paper_file_path_references
+            update_paper_file_path_references(storage, paper_id, Path(extra), Path(actual), commit=False)
+        storage.conn.commit()
+        if discard:
+            Path(extra).unlink(missing_ok=True)
+        return int(duplicate['id'])
+    # A source may be edited in place without changing its length. Preserve its
+    # old resource/version instead of ON CONFLICT overwriting its stored path.
+    origin = record['source_path']
+    if storage.conn.execute('SELECT 1 FROM resources WHERE source_path=? AND size_bytes=? AND kind=?',
+                            (origin, record['size_bytes'], record['kind'])).fetchone():
+        origin = None
     parse_status = clean_text(record.get("parse_status") or "").casefold()
     file_type = (
         "invalid_file"
         if record.get("kind") == "pdf" and parse_status in {"failed", "invalid", "unparseable", "corrupt"}
         else ("preprint" if clean_text(record.get("arxiv_id") or "") else "unknown")
     )
+    from ..publication_notices import describe
+    notice = describe(record)
+    if notice: file_type=notice['kind']
     annotation_state = (
         "annotated"
         if fingerprint and fingerprint.is_annotated
         else ("unannotated" if fingerprint and record.get("kind") == "pdf" else "unknown")
     )
-    storage.conn.execute(
+    cursor = storage.conn.execute(
         """
         INSERT INTO resources (
           paper_id, source_path, stored_path, original_relative_path,
@@ -1364,47 +1555,12 @@ def upsert_resource(
           import_as, import_batch_id, size_bytes, modified_at, parse_status,
           parse_error, page_count, sha256, content_sha256, annotation_count,
           is_annotated, file_type, file_source, source_detail, annotation_state,
-          status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_path, size_bytes, kind) DO UPDATE SET
-          paper_id = COALESCE(excluded.paper_id, resources.paper_id),
-          stored_path = COALESCE(NULLIF(excluded.stored_path, ''), resources.stored_path),
-          original_relative_path = excluded.original_relative_path,
-          original_parent_relative_path = excluded.original_parent_relative_path,
-          original_filename = excluded.original_filename,
-          mime_type = excluded.mime_type,
-          import_as = excluded.import_as,
-          import_batch_id = excluded.import_batch_id,
-          modified_at = excluded.modified_at,
-          parse_status = excluded.parse_status,
-          parse_error = excluded.parse_error,
-          page_count = excluded.page_count,
-          sha256 = COALESCE(NULLIF(excluded.sha256, ''), resources.sha256),
-          content_sha256 = COALESCE(NULLIF(excluded.content_sha256, ''), resources.content_sha256),
-          annotation_count = MAX(COALESCE(resources.annotation_count, 0), COALESCE(excluded.annotation_count, 0)),
-          is_annotated = CASE
-            WHEN COALESCE(resources.annotation_override, 0) = 1 THEN resources.is_annotated
-            ELSE excluded.is_annotated
-          END,
-          annotation_state = CASE
-            WHEN COALESCE(resources.annotation_override, 0) = 1 THEN resources.annotation_state
-            ELSE excluded.annotation_state
-          END,
-          file_type = CASE
-            WHEN COALESCE(resources.file_type_override, 0) = 1 THEN resources.file_type
-            ELSE excluded.file_type
-          END,
-          file_source = CASE
-            WHEN COALESCE(resources.file_source, 'unknown') = 'unknown' THEN excluded.file_source
-            ELSE resources.file_source
-          END,
-          source_detail = COALESCE(NULLIF(resources.source_detail, ''), excluded.source_detail),
-          status = excluded.status,
-          updated_at = excluded.updated_at
+          status, created_at, updated_at, added_via
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             paper_id,
-            record["source_path"],
+            origin,
             stored_path,
             record["relative_path"],
             record["parent_relative_path"],
@@ -1424,14 +1580,17 @@ def upsert_resource(
             1 if fingerprint and fingerprint.is_annotated else 0,
             file_type,
             "user_import",
-            "inventory",
+            record.get("identity_conflict_detail") or "inventory",
             annotation_state,
             "imported" if stored_path else "missing_source",
             timestamp,
             timestamp,
+            "inventory_conflict" if record.get("identity_conflict_detail") else "inventory",
         ),
     )
+    remember_source(storage, int(cursor.lastrowid), record, fingerprint.sha256 if fingerprint else '', batch_id)
     storage.conn.commit()
+    return int(cursor.lastrowid)
 
 
 def import_metadata(record: dict[str, Any], *, batch_id: str, stored_path: str) -> dict[str, Any]:
@@ -1456,11 +1615,27 @@ def import_metadata(record: dict[str, Any], *, batch_id: str, stored_path: str) 
 def copy_record(record: dict[str, Any], *, target_root: Path) -> str:
     source = Path(record["source_path"])
     relative_path = safe_inventory_relative_path(record["relative_path"] or record["filename"])
-    target = unique_target_path(target_root / relative_path)
+    target_root.mkdir(parents=True, exist_ok=True)
+    target_root = target_root.resolve()
+    target = target_root / relative_path
     if not target.resolve().is_relative_to(target_root.resolve()):
         raise ValueError("Inventory target escapes the managed import directory")
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    while True:
+        target = unique_target_path(target)
+        try:
+            stream = target.open('xb')
+            break
+        except FileExistsError:
+            continue
+    try:
+        with stream, source.open('rb') as original:
+            shutil.copyfileobj(original, stream)
+        shutil.copystat(source, target)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    record['_new_copy'] = str(target)
     return str(target)
 
 
@@ -1472,28 +1647,15 @@ def reusable_stored_path(storage: Storage, record: dict[str, Any], *, copy_mode:
     kind = record.get("kind") or ""
     if not source_path or size_bytes is None or not kind:
         return ""
-    row = storage.conn.execute(
-        """
-        SELECT resources.stored_path
-        FROM resources
-        LEFT JOIN inventory_import_batches
-          ON inventory_import_batches.id = resources.import_batch_id
-        WHERE resources.source_path = ?
-          AND resources.size_bytes = ?
-          AND resources.kind = ?
-          AND resources.stored_path IS NOT NULL
-          AND resources.stored_path != ''
-          AND resources.stored_path != resources.source_path
-        ORDER BY
-          CASE WHEN inventory_import_batches.status = 'completed' THEN 0 ELSE 1 END,
-          resources.updated_at DESC
-        LIMIT 1
-        """,
-        (source_path, size_bytes, kind),
-    ).fetchone()
-    stored_path = path_text(row["stored_path"] if row else "")
-    if stored_path and Path(stored_path).exists():
-        return stored_path
+    source = Path(source_path)
+    for resource in source_resources(storage, record):
+        stored = storage.resource_local_path(resource)
+        if not stored or not Path(stored).is_file():
+            continue
+        # A missing source can resume from its saved copy. Existing sources must
+        # match current bytes, even if their path and byte count are unchanged.
+        if not source.is_file() or sha256_for_file(source) == sha256_for_file(Path(stored)):
+            return stored
     return ""
 
 
@@ -1699,14 +1861,27 @@ def existing_paper_id(record: dict[str, Any], existing: dict[str, dict[str, str]
 
 
 def build_existing_index(storage: Storage) -> dict[str, dict[str, str]]:
-    rows = storage.conn.execute("SELECT paper_id, doi, raw_json FROM papers").fetchall()
+    # Imports need identity/provenance fields, not every provider's full reply.
+    # Project in SQLite and stream rows so a one-file drop does not materialize
+    # and JSON-decode the entire metadata library in Python. Keep the legacy
+    # parser for malformed JSON and the same normalization/first-match rules.
+    fields = ("arxiv_id", "versioned_arxiv_id", "import", "source_path", "size_bytes")
+    rows = storage.conn.execute("""
+        SELECT paper_id, doi, json_valid(raw_json) AS projected,
+               CASE WHEN json_valid(raw_json)
+                    THEN json_extract(raw_json, '$.arxiv_id', '$.versioned_arxiv_id',
+                                      '$.import', '$.source_path', '$.size_bytes')
+                    ELSE raw_json END AS identity_fields
+        FROM papers
+    """)
     index: dict[str, dict[str, str]] = {"doi": {}, "arxiv_id": {}, "source_path": {}}
     for row in rows:
         paper_id = str(row["paper_id"] or "")
         doi = normalize_doi(row["doi"])
         if paper_id and doi:
             index["doi"].setdefault(doi, paper_id)
-        raw = parse_json(row["raw_json"])
+        raw = (dict(zip(fields, json.loads(row["identity_fields"]))) if row["projected"]
+               else parse_json(row["identity_fields"]))
         for value in [raw.get("arxiv_id"), raw.get("versioned_arxiv_id")]:
             arxiv_id = normalize_arxiv_id(value)
             if paper_id and arxiv_id:

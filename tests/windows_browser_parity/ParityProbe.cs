@@ -50,6 +50,7 @@ internal sealed partial class WorkspaceWindow
                 await WorkspaceScriptAsync("document.getElementById('browserMode').click()");
                 await Until(() => browserActive && selected != null);
                 await EnsureBrowserViewAsync(selected!);
+                stage = "loaded original PDF"; await CheckLoadedPdfsAsync();
                 stage = "publisher downloads and native Library drag"; await CheckPublisherAndDragAsync();
                 stage = "publisher CDN and PDF controls"; await CheckPublisherRoutesAsync();
                 await File.WriteAllTextAsync(output, JsonSerializer.Serialize(new { success = true, scope = "publisher", checks = probeChecks }, new JsonSerializerOptions { WriteIndented = true }));
@@ -73,8 +74,11 @@ internal sealed partial class WorkspaceWindow
             stage = "Monitor cache"; await CheckMonitorCacheAsync(page);
             stage = "Home history and keyboard"; await CheckNavigationAsync(page, fixtures);
             stage = "page actions and downloads"; await CheckPageActionsAsync(page);
-            stage = "publisher downloads and native Library drag"; await CheckPublisherAndDragAsync();
+            if (Environment.GetEnvironmentVariable("GEWU_PARITY_WORKSPACE_ONLY") != "1") {
+            stage = "loaded original PDF"; await CheckLoadedPdfsAsync();
+                stage = "publisher downloads and native Library drag"; await CheckPublisherAndDragAsync();
             stage = "publisher CDN and PDF controls"; await CheckPublisherRoutesAsync();
+            }
             await workspace.CoreWebView2.ExecuteScriptAsync("window.__parityEvents=[]; const original=window.gewuBrowserNativeEvent; window.gewuBrowserNativeEvent=e=>{window.__parityEvents.push(e); original(e)}");
             stage = "suggestions";
             await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserAddress').focus()");
@@ -88,10 +92,14 @@ internal sealed partial class WorkspaceWindow
             Check(!suggestions.Visible, "native mouse selection navigates to the chosen candidate and dismisses it");
             using (var command = Command(new { items = Array.Empty<object>() })) ShowSuggestions(command.RootElement);
             Check(!suggestions.Visible, "empty suggestions dismiss without geometry fields");
-            await workspace.CoreWebView2.ExecuteScriptAsync("const field=document.getElementById('browserAddress'); field.focus(); field.value='parity'; field.dispatchEvent(new InputEvent('input',{inputType:'insertText',bubbles:true}))");
+            await Task.Delay(300); // Let the prior native suggestion navigation finish its focus handoff.
+            ActiveControl = workspace; workspace.Focus();
+            await workspace.CoreWebView2.ExecuteScriptAsync("const field=document.getElementById('browserAddress'); field.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); field.focus(); field.value='parity'; field.dispatchEvent(new InputEvent('input',{inputType:'insertText',bubbles:true}))");
+            await Task.Delay(1000);
+            await File.WriteAllTextAsync(Path.Combine(dataRoot,"suggestions-debug.json"), await workspace.CoreWebView2.ExecuteScriptAsync("JSON.stringify({focus:document.activeElement.id,mode:state.mode,value:document.getElementById('browserAddress').value,expanded:document.getElementById('browserAddress').getAttribute('aria-expanded'),message:document.getElementById('browserMessageText').textContent})"));
             await Until(() => suggestions.Visible && suggestions.Entries.Length > 0);
             int nextSuggestion = suggestions.Selected < 0 ? 0 : (suggestions.Selected + 1) % suggestions.Entries.Length;
-            await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserAddress').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))");
+            await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserAddress').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}))");
             await Until(() => suggestions.Selected == nextSuggestion);
             Check(await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserAddress').value.startsWith('https://parity.example/')") == "true", "address typing queries actual history and ArrowDown selects a candidate");
             await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserAddress').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); document.getElementById('browserAddress').blur()");
@@ -170,8 +178,16 @@ internal sealed partial class WorkspaceWindow
             await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserMode').click()");
             await Until(() => browserActive && page.View.Visible);
             Check(!page.Home && page.Url.EndsWith("/second.html"), "reopening Browser after recovery keeps the existing page instead of resetting Home");
-            await UntilJS("[...document.querySelectorAll('.browser-entry-title')].some(e=>e.textContent==='Chosen paper')");
+            await WorkspaceScriptAsync("window.__bookmarksAfterCrash=false;fetch('/api/browser',{method:'POST',headers:{'Content-Type':'application/json','X-Gewu-Browser':'1'},body:JSON.stringify({action:'state'})}).then(r=>r.json()).then(v=>window.__bookmarksAfterCrash=v.bookmarks.some(b=>b.title==='Chosen paper'))");
+            await UntilJS("window.__bookmarksAfterCrash");
             Check(true, "synced bookmarks persist through repeated service crashes");
+            stage = "workspace renderer recovery";
+            int rendererGeneration = rendererRestarts.Count;
+            _ = workspace.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.crash", "{}").ContinueWith(_ => { });
+            await Until(() => rendererRestarts.Count > rendererGeneration && !recoveringRenderer, 40);
+            await UntilJS("state.libraryLoaded && typeof window.gewuBrowserNativeEvent==='function'");
+            Check(selected == page && page.View.CoreWebView2 == core && !server!.HasExited, "workspace renderer recovery retains the service and remote Browser document");
+            Check(await core.ExecuteScriptAsync("document.getElementById('draft').value") == "\"draft retained through crash\"", "workspace renderer recovery preserves the remote unsent form");
             server!.Kill();
             await Until(() => !recoveringService && startup.Text.Contains("could not recover"));
             Check(server == null, "repeated crashes stop at the bounded recovery limit");

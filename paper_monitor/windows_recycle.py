@@ -9,6 +9,8 @@ from pathlib import Path
 import contextvars
 import hashlib
 import os
+import re
+import stat
 import shutil
 import sqlite3
 import time
@@ -17,9 +19,56 @@ import uuid
 _current = contextvars.ContextVar("windows_resource_removal", default=None)
 
 
+def checked_paths(path):
+    path = Path(path).absolute()
+    pending = [path]
+    while pending:
+        entry = pending.pop()
+        info = entry.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+            raise PermissionError('Recovery does not follow symlinks or junctions: ' + str(entry))
+        yield entry
+        if entry.is_dir():
+            pending.extend(sorted(entry.iterdir(), reverse=True))
+
+
 def digest(path):
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+    path = Path(path)
+    if path.is_file():
+        with path.open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+    hashes = hashlib.sha256()
+    for entry in checked_paths(path):
+        name = entry.relative_to(path).as_posix()
+        value = 'D' if entry.is_dir() else digest(entry)
+        hashes.update((name + '\0' + value + '\n').encode('utf-8'))
+    return hashes.hexdigest()
+
+
+def copy_for_recovery(source, destination):
+    source, destination = Path(source), Path(destination)
+    list(checked_paths(source))
+    if source.is_dir():
+        shutil.copytree(source, destination)
+    else:
+        with source.open('rb') as input_file, destination.open('xb') as output:
+            shutil.copyfileobj(input_file, output)
+            output.flush()
+            os.fsync(output.fileno())
+
+
+def remove_backup(path):
+    path = Path(path).absolute()
+    # Only an individual generated recovery copy beneath its private journal.
+    if path.parent.name != '.file-recovery' or not re.fullmatch(r'[0-9a-f]{32}\.backup', path.name):
+        raise PermissionError('Unexpected recovery-copy path')
+    if not path.exists():
+        return
+    list(checked_paths(path))
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def recycle_file(path):
@@ -53,7 +102,8 @@ def recycle_file(path):
             if result >= 0 and recycled is not None:
                 self.destination = recycled.GetDisplayName(shellcon.SIGDN_FILESYSPATH)
 
-    requested = Path(path).resolve()
+    requested = Path(path).absolute()
+    list(checked_paths(requested))
     pythoncom.CoInitialize()
     try:
         sink = Sink()
@@ -65,7 +115,7 @@ def recycle_file(path):
         if operation.GetAnyOperationsAborted() or sink.result is None or sink.result < 0 or not sink.destination:
             raise OSError("Windows did not confirm a recoverable Recycle Bin item.")
         destination = Path(sink.destination)
-        if requested.exists() or not destination.is_file():
+        if requested.exists() or not destination.exists():
             raise OSError("Windows did not confirm the recycled file.")
         return destination
     except pywintypes.com_error as exc:
@@ -92,7 +142,7 @@ def restore_shell_item(recycled, source):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             pythoncom.PumpWaitingMessages()
-            if source.is_file() and not recycled.exists():
+            if source.exists() and not recycled.exists():
                 return
             time.sleep(.05)
         raise OSError("Windows did not finish restoring the file.")
@@ -105,6 +155,8 @@ def restore_shell_item(recycled, source):
 def open_journal(storage):
     directory = storage.db_path.resolve().parent / ".file-recovery"
     directory.mkdir(parents=True, exist_ok=True)
+    from .local_access import protect_directory
+    protect_directory(directory)
     journal = sqlite3.connect(directory / "recovery.sqlite")
     journal.row_factory = sqlite3.Row
     journal.execute("PRAGMA synchronous=FULL")
@@ -118,10 +170,10 @@ def open_journal(storage):
 def restore_record(record):
     source, backup = Path(record["source"]), Path(record["backup"])
     if source.exists():
-        if not source.is_file() or digest(source) != record["sha256"]:
+        if digest(source) != record["sha256"]:
             raise OSError(f"File recovery found a changed file and preserved the backup: {backup}")
         return
-    if not backup.is_file() or digest(backup) != record["sha256"]:
+    if not backup.exists() or digest(backup) != record["sha256"]:
         raise OSError(f"The file recovery backup is missing or changed: {backup}")
     if record["recycled"]:
         try:
@@ -132,16 +184,13 @@ def restore_record(record):
         # Crash between Shell completion and receipt persistence: restore the
         # verified backup without guessing which Shell record to remove.
         source.parent.mkdir(parents=True, exist_ok=True)
-        with source.open("xb") as output, backup.open("rb") as input_file:
-            shutil.copyfileobj(input_file, output)
-            output.flush()
-            os.fsync(output.fileno())
+        copy_for_recovery(backup, source)
     if digest(source) != record["sha256"]:
         raise OSError(f"File restoration needs attention; backup retained: {backup}")
 
 
 def finish_record(journal, record):
-    Path(record["backup"]).unlink(missing_ok=True)
+    remove_backup(Path(record["backup"]))
     journal.execute("DELETE FROM removals WHERE id = ?", (record["id"],))
     journal.commit()
 
@@ -196,12 +245,9 @@ class ResourceRemoval:
         operation_id = uuid.uuid4().hex
         backup = directory / (operation_id + ".backup")
         before = digest(source)
-        with source.open("rb") as input_file, backup.open("xb") as output:
-            shutil.copyfileobj(input_file, output)
-            output.flush()
-            os.fsync(output.fileno())
+        copy_for_recovery(source, backup)
         if digest(backup) != before or digest(source) != before:
-            backup.unlink()
+            remove_backup(backup)
             raise OSError("The file changed while preparing recovery. Retry after saving it.")
         self.record = dict(id=operation_id, resource_id=self.resource_id, paper_id=self.paper_id,
                            source=str(source), backup=str(backup), sha256=before, recycled="", batch_id=self.batch_id)

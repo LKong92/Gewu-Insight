@@ -1,23 +1,136 @@
-Gewu Insight Proprietary License
+Gewu Insight Academic and Non-Commercial Research License
+Version 1.1, September 24, 2026
 
 Copyright © 2026 Lingyuan Kong and Zhengran Wu.
-All rights reserved.
+All rights reserved, except for the limited permissions expressly granted below.
 
-Gewu Insight and the original source code, documentation, artwork, and other
-materials in this repository are proprietary. They are not offered under an
-open-source license.
+Gewu Insight is source-available research software. It is not offered under an
+open-source license. Public availability of source code does not grant commercial
+rights. This is a custom license, not MIT, Apache, GPL or another standard license.
 
-No permission is granted to use, copy, modify, merge, publish, distribute,
-sublicense, sell, or create derivative works from the copyrighted portions of
-this repository, in source or binary form, except with prior written permission
-from the copyright holders.
+1. Scope and ownership
 
-Access to this repository, or the technical ability to view or fork it on a
-hosting platform, does not grant a license to reuse its contents.
+"Software" means the original Gewu Insight source code, binaries, documentation
+and other original project materials made available under this License, only to
+the extent the copyright holders have the right to license them. Third-party
+components and materials are excluded and remain subject to Section 6.
+"You" means the individual or organization exercising the permissions below.
+The copyright holders retain ownership of the Software and reserve every right
+not expressly granted, including the right to offer separate commercial licenses.
 
-Third-party software, services, fonts, data, and other materials used by or
-distributed with Gewu Insight remain subject to their respective licenses and
-terms. This notice does not restrict rights granted by those third parties.
+2. Permitted research use
 
-For permission requests, contact the repository owners through:
-https://github.com/LKong92/Gewu-Insight
+Subject to this License, the copyright holders grant You a worldwide,
+non-exclusive, royalty-free, non-sublicensable permission to download, copy,
+install, build, run, study and modify the Software solely for academic or other
+non-commercial research, education related to that research, evaluation and
+reproduction of scientific results ("Permitted Research Use").
+
+Permitted Research Use must not be directed toward commercial advantage,
+commercial product or service development, or paid services for another party.
+Academic affiliation or nonprofit status alone does not make an activity
+non-commercial. Research salaries, ordinary academic grants, tuition, and
+publication in journals that charge fees do not alone make otherwise permitted
+academic research commercial. Research performed for a commercial sponsor's
+product development, exclusive commercial exploitation or business operations
+requires separate written authorization. Contact the copyright holders before
+using the Software if the proposed purpose is unclear.
+
+3. Non-commercial research sharing
+
+You may share copies of the Software, including modified versions, derivative
+works and patches, in source or binary form, without charge, solely to support
+Permitted Research Use, provided that:
+
+(a) You include this complete License, preserve copyright and attribution
+    notices, and retain applicable third-party licenses and notices;
+(b) You identify the original version, clearly mark modifications and their
+    dates, and do not imply that a modified version is an official release or
+    that the authors endorse Your research, distribution or organization;
+(c) You distribute the Software under these same permissions and restrictions,
+    without granting broader rights; and
+(d) the distribution is not part of a commercial product, paid service,
+    commercial offering or promotion for commercial advantage.
+
+These permissions include public research forks and pull requests within the
+conditions above; no separate written authorization or contributor agreement is
+needed merely to make or share them. Each recipient receives permission for the
+copyright holders' Software directly under this License. License Your original
+modifications under these same research-use and sharing terms when distributing
+them with the Software, to the extent You have authority to do so. This does not
+permit commercial redistribution or broader sublicensing or relicensing.
+
+You retain any copyright in Your own original changes. Sharing a modification
+or submitting a pull request does not transfer its ownership or grant the
+project authors additional commercial licensing rights. Acceptance into the
+official project is a separate decision; maintainers must obtain any additional
+contributor authorization needed for commercial licensing before merging.
+See CONTRIBUTING.md. This License is not a contributor license agreement.
+
+4. Commercial and other reserved uses
+
+Without separate prior written authorization from the copyright holders, You
+may not use the Software for commercial purposes, commercially redistribute it,
+sell or license access to it, sublicense or relicense it, or incorporate any
+covered portion into a commercial product or service. This includes commercial
+internal use and R&D, consulting or contract services, paid hosted services,
+SaaS, and commercial distribution of modified versions, whether or not the
+Software is separately priced.
+
+You may not remove ownership or license notices or represent that this License
+grants unrestricted, public-domain or open-source rights. Only the permissions
+expressly granted in Sections 2 and 3 are provided here. Separate commercial
+terms must be agreed in writing; silence, public access, a download or a fork
+does not constitute that authorization.
+
+5. Research outputs and identification
+
+This License does not claim ownership of Your papers, notes, data or other
+independent research outputs, or require them to use this License merely because
+You used the Software. Such outputs do not include copied Software or materials
+owned by others. Publication and sharing of results of Permitted Research Use
+are allowed, subject to the rights in the underlying research content.
+Acknowledging Gewu Insight and identifying the version used is appreciated.
+
+No trademark, logo or endorsement rights are granted except identification of
+the Software and retention of its notices in permitted copies. No patent rights
+are granted by this copyright license. Rights that cannot be restricted under
+applicable law, and viewing/forking rights independently provided by a hosting
+platform's applicable terms, are not overridden by this License; those platform
+rights do not create a commercial-use license from the copyright holders.
+
+6. Third-party rights
+
+Third-party software, fonts, artwork, screenshots' underlying content, scholarly
+papers, data and services are governed by their own licenses, permissions and
+terms. See THIRD_PARTY_NOTICES.md and component-specific notices. This License
+neither applies its non-commercial restriction to separately licensed third-party
+components nor grants rights the copyright holders do not own. Access to a paper,
+website, font or image is not permission to redistribute it. A separate Gewu
+commercial license does not by itself grant third-party rights.
+
+7. Warranty, liability and termination
+
+To the extent permitted by applicable law, the Software is provided "AS IS",
+without warranties of any kind, including merchantability, fitness for a
+particular purpose or non-infringement. The copyright holders are not liable for
+claims, damages or other liability arising from use or distribution of the
+Software. No support, maintenance or continued access to external services is
+promised by this License.
+
+The permissions granted to You terminate automatically if You breach this
+License. You must then stop the activities for which this License supplied
+permission, unless the copyright holders reinstate permission in writing.
+Termination does not remove third-party rights or rights under applicable law.
+Ownership, reserved rights, third-party protections and the warranty/liability
+limitations survive termination. A later license for another release does not
+by itself withdraw these permissions for this version while You comply with it.
+
+8. Written permission and commercial licensing
+
+Contact: info@gewu-insight.com
+Project: https://github.com/LKong92/Gewu-Insight
+
+Describe the organization, intended use, deployment and redistribution scope
+when requesting authorization. Commercial use may begin only after written
+authorization from the copyright holders or their authorized representative.

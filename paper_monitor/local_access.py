@@ -106,3 +106,25 @@ history.replaceState(null, '', location.pathname);
 if(ticket) fetch('/api/workspace-session', {method:'POST', headers:{'X-Gewu-Bootstrap':ticket}})
  .then(r => {if(r.ok) location.reload(); else document.getElementById('status').textContent='This launch link expired. Open Gewu Insight again.';});
 </script>'''
+
+
+def protect_directory(path):
+    path = Path(path)
+    if path.is_symlink() or (sys.platform == 'win32' and path.is_junction()):
+        raise PermissionError('Private staging must not be a filesystem link.')
+    if sys.platform != 'win32':
+        path.chmod(0o700)
+        return
+    import win32api, win32con, win32security, ntsecuritycon
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+    try:
+        user = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+    finally:
+        token.Close()
+    descriptor = win32security.GetNamedSecurityInfo(str(path), win32security.SE_FILE_OBJECT, win32security.OWNER_SECURITY_INFORMATION)
+    if descriptor.GetSecurityDescriptorOwner() != user:
+        raise PermissionError('Private staging must belong to the current user.')
+    acl = win32security.ACL()
+    acl.AddAccessAllowedAceEx(win32security.ACL_REVISION, win32con.OBJECT_INHERIT_ACE | win32con.CONTAINER_INHERIT_ACE, ntsecuritycon.FILE_ALL_ACCESS, user)
+    win32security.SetNamedSecurityInfo(str(path), win32security.SE_FILE_OBJECT,
+        win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION, None, None, acl, None)

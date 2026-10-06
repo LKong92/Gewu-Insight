@@ -68,6 +68,8 @@ def request_with_retries(
     last_error: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
+            from .metadata_network import before_request, after_response, after_error
+            before_request(url)
             response = request_with_local_proxy_fallback(
                 method,
                 url,
@@ -78,6 +80,7 @@ def request_with_retries(
                 stream=stream,
                 allow_redirects=allow_redirects,
             )
+            after_response(response)
             if response.status_code == 429:
                 last_error = RuntimeError(f"HTTP 429 Too Many Requests for {response.url}")
                 if not retry_on_429 or attempt == max_retries:
@@ -91,8 +94,10 @@ def request_with_retries(
             if isinstance(exc, requests.HTTPError) and exc.response is not None:
                 status = exc.response.status_code
                 if status != 429 and status < 500:
+                    after_error(url, exc)
                     raise
             if attempt == max_retries:
+                after_error(url, exc)
                 raise
             time.sleep(retry_sleep * attempt)
     if last_error:

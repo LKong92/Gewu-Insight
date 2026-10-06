@@ -14,6 +14,7 @@
     <Compile Include="ParityProbe.cs" />
     <Compile Include="NavigationProbe.cs" />
     <Compile Include="DownloadProbe.cs" />
+    <Compile Include="LoadedPdfProbe.cs" />
     <Compile Include="PublisherProbe.cs" />
     <Compile Include="LoaderCacheProbe.cs" />
     <Compile Include="PublisherRoutesProbe.cs" />

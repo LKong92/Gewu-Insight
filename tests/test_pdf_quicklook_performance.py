@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 from http import HTTPStatus
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -144,6 +146,38 @@ class PdfQuickLookPerformanceTests(unittest.TestCase):
             renderer.index("existingFrame?.dataset.pdfPath"),
             renderer.index("root.innerHTML = `<iframe"),
         )
+
+    def test_selection_updates_immediately_without_timers_in_every_preview_mode(self):
+        node = shutil.which("node")
+        if not node: self.skipTest("Node.js required")
+        script = r"""
+const assert=require('node:assert/strict');
+let selected={merged_pdf_path:'a.pdf'},renders=[];
+const window={setTimeout:()=>{throw new Error('Preview must not wait for a timer');},requestAnimationFrame:()=>{throw new Error('Preview must be immediate');}};
+const state={libraryQuickLookOpen:true,libraryQuickLookKind:'pdf',libraryQuickLookPath:'old.pdf'};
+let kind='pdf';
+const selectedLibraryPaper=()=>selected, desiredQuickLookKind=()=>kind;
+const quickLookLibraryPdf=p=>{renders.push(p.merged_pdf_path);state.libraryQuickLookPath=p.merged_pdf_path;state.libraryQuickLookKind=kind;};
+const quickLookLibraryFile=p=>{renders.push(p.source_path);state.libraryQuickLookPath=p.source_path;state.libraryQuickLookKind=kind;};
+const paperNativePath=p=>p.source_path,libraryPaperIsPdfLike=()=>false;
+const showLibraryQuickLookPlaceholder=()=>renders.push('placeholder');
+""" + self.js_function('refreshLibraryQuickLookForSelection') + r"""
+for(kind of ['pdf','native-file','file']) {
+ for(let i=0;i<100;i++) {
+  const path=kind+i;
+  selected=kind==='file'?{source_path:path}:{merged_pdf_path:path};
+  const before=renders.length;refreshLibraryQuickLookForSelection();
+  assert.equal(renders.length,before+1,'every selection updates within the same call');
+  assert.equal(renders.at(-1),path);
+  refreshLibraryQuickLookForSelection();assert.equal(renders.length,before+1,'same file is reused');
+ }
+}
+const before=renders.length;state.libraryQuickLookOpen=false;refreshLibraryQuickLookForSelection();assert.equal(renders.length,before);
+state.libraryQuickLookOpen=true;refreshLibraryQuickLookForSelection({force:true});assert.equal(renders.length,before+1);
+selected=null;refreshLibraryQuickLookForSelection();assert.equal(renders.at(-1),'placeholder');
+"""
+        result = subprocess.run([node, '-'], input=script, capture_output=True, text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
 
     def test_startup_retains_bounded_thumbnail_cache(self) -> None:
         source = ui_server.run_ui_server.__code__.co_names

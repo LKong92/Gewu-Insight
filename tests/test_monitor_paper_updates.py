@@ -48,8 +48,12 @@ class MonitorPaperUpdateTests(unittest.TestCase):
                 storage.close()
         functions = "\n".join([
             ui_function_block("function updatePaperState", "function initialAuthorMonitorSelectedId"),
+            ui_function_block("function applyPaperFilesPayloads", "function paperFileRoleLabel"),
             ui_function_block("async function addPaperToLibrary", "async function moveLibraryEntry"),
             ui_function_block("function setReportLibraryButtonShowState", "async function navigateToPaperInLibrary"),
+            ui_function_block("async function downloadReportPaper", "async function deletePaperAsset"),
+            ui_function_block("function applyPaperPdfDownloadResult", "const pendingPaperPdfDownloads ="),
+            ui_function_block("const pendingPaperPdfDownloads =", "async function downloadScienceSupplementaryPdfs"),
             ui_function_block("function themePaperMatchesGroup", "function selectThemeSubject"),
         ])
         setup = r'''
@@ -58,15 +62,16 @@ const paperId = monitor.paper_id;
 const state = {
   mode: "theme", activeThemeGroupKey: "sensing", selectedDate: "2026-08-31",
   reportSelectedPaperId: paperId, themeGroups: [{key: "sensing"}, {key: "computing"}],
-  papers: [], themePapers: [structuredClone(monitor)], reportCache: {},
+  monitorPaperOperations: new Map(), papers: [], themePapers: [structuredClone(monitor)], reportCache: {},
   themePapersByDate: {}, libraryLoaded: false, libraryItems: [],
-  myPublications: [], authorMonitorPapers: []
+  myPublications: [], authorMonitorPapers: [], paperFilesByPaperId: {}, paperFileRequests: {}
 };
 // These aliases are created by applyThemeReportData and renderThemeMonitor.
 state.papers = state.themePapers;
 state.themePapersByDate["2026-08-31|ALL"] = state.themePapers;
 function themeVisiblePapers() { return state.themePapers; }
 function invalidateAuthorMonitorViewCache() {}
+function libraryItemById() {return null;}
 const classes = new Set();
 const button = {
   dataset: {libraryState: "add"}, disabled: false, textContent: "Add to Library",
@@ -79,8 +84,11 @@ const viewport = {paperId, scrollTop: 310, anchorOffset: 12};
 function captureMonitorViewport() { return viewport; }
 let renderOptions;
 let renderedGroups;
-function renderCurrentPaperSurface(options) {
-  renderOptions = options;
+function renderCurrentPaperSurface() { throw new Error("Background action must not render a workspace"); }
+function setMonitorPaperOperation(paperId, kind, operation) {
+  const operations = state.monitorPaperOperations.get(paperId) || {};
+  if (operation) operations[kind] = operation; else delete operations[kind];
+  state.monitorPaperOperations.set(paperId, operations);
   renderedGroups = groupedThemePapers();
 }
 async function fetch(url, options) {
@@ -109,13 +117,73 @@ assert.equal(button.disabled, false);
 assert.equal(state.selectedDate, "2026-08-31");
 assert.equal(state.activeThemeGroupKey, "sensing");
 assert.equal(state.reportSelectedPaperId, paperId);
-assert.equal(renderOptions.monitorViewport, viewport);
+assert.equal(state.monitorPaperOperations.get(paperId).library, undefined);
 // A later generic image/download response must not discard the groups either.
 updatePaperState(paperId, {paper_id: paperId, image_url: "local-figure", library_status_loaded: false});
 assert.deepEqual(groupedThemePapers().map(group => group.papers.length), [1, 1]);
 assert.equal(state.themePapers[0].in_library, true);
 assert.equal(state.themePapersByDate["2026-08-31|ALL"][0].image_url, "local-figure");
 ''')
+
+    def test_download_survives_navigation_and_duplicate_click_without_rendering(self):
+        self.run_javascript(r'''
+let complete, requests = 0;
+fetch = async () => { requests++; return await new Promise(resolve => { complete = resolve; }); };
+state.paperFilesByPaperId = {[paperId]: {files: []}};
+state.paperFileRequests = {[paperId]: Promise.resolve({files: []})};
+const first = downloadReportPaper(article, paperId);
+assert.equal(state.monitorPaperOperations.get(paperId).download.busy, true);
+state.mode = "browser";
+await downloadReportPaper(article, paperId);
+assert.equal(requests, 1);
+complete({ok: true, json: async () => ({paper: {...updated, merged_pdf_path: "fixture.pdf"}})});
+await first;
+assert.equal(state.mode, "browser");
+assert.equal(state.paperFilesByPaperId[paperId], undefined);
+assert.equal(state.paperFileRequests[paperId], undefined);
+assert.equal(state.papers[0].merged_pdf_path, "fixture.pdf");
+assert.equal(state.monitorPaperOperations.get(paperId).download, undefined);
+''')
+
+    def test_add_replaces_recycled_file_cache_without_changing_monitor_selection(self):
+        self.run_javascript(r'''
+state.paperFilesByPaperId[paperId] = {files: [{id: 10, local_path: "Recycle/old.pdf"}]};
+state.paperFileRequests[paperId] = Promise.resolve({files: []});
+fetch = async () => ({ok: true, json: async () => ({paper: updated,
+  paper_files: [{paper_id: paperId, paper: {...updated, merged_pdf_path: "Library/new.pdf"},
+    files: [{id: 10, local_path: "Library/new.pdf"}]}]})});
+await addPaperToLibrary(article, paperId, {folderId: 1});
+assert.equal(state.paperFilesByPaperId[paperId].files[0].local_path, "Library/new.pdf");
+assert.equal(state.paperFileRequests[paperId], undefined);
+assert.equal(state.reportSelectedPaperId, paperId);
+assert.equal(state.activeThemeGroupKey, "sensing");
+assert.equal(state.mode, "theme");
+''')
+
+    def test_shared_download_request_keeps_distinct_papers_independent_and_allows_retry(self):
+        self.run_javascript(r'''
+const replies = new Map(); let requests = 0;
+fetch = async (url, options) => {
+  requests++;
+  return await new Promise(resolve => replies.set(JSON.parse(options.body).paper_id, resolve));
+};
+const a = requestPaperPdfDownload({paper_id: "a"});
+assert.equal(a, requestPaperPdfDownload({paper_id: "a", context: "library", force: true}));
+const b = requestPaperPdfDownload({paper_id: "b"});
+assert.equal(requests, 2);
+replies.get("b")({ok: true, json: async () => ({result: {status: "partial"}})});
+await b;
+assert.equal(pendingPaperPdfDownloads.has("a"), true);
+const failure = assert.rejects(a, /fixture failure/);
+replies.get("a")({ok: false, json: async () => ({error: "fixture failure"})});
+await failure;
+assert.equal(pendingPaperPdfDownloads.has("a"), false);
+const retry = requestPaperPdfDownload({paper_id: "a"});
+replies.get("a")({ok: true, json: async () => ({result: {status: "partial"}})});
+await retry;
+assert.equal(requests, 3);
+''')
+
 
     def test_updates_keep_each_cached_views_context_without_reverting_library_state(self):
         self.run_javascript(r'''

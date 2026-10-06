@@ -15,16 +15,19 @@ from .config import DEFAULT_DB_PATH
 from .browser_store import ensure_browser_schema
 from .workflow_store import ensure_workflow_schema, PUBLICATION_REMOVED_BY_USER
 from .ai_store import ensure_ai_schema
+from .resource_dedup import ensure_schema as ensure_resource_dedup_schema
+from . import paper_identity, publication_notices
 from .text import (
     is_placeholder_publication_title,
     normalize_doi,
+    normalize_arxiv_identifier,
     normalize_publication_title,
     paper_is_from_zenodo,
 )
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 18
+STORAGE_SCHEMA_VERSION = 22
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -35,8 +38,18 @@ PAPER_FILE_TYPES = (
     "published_version",
     "corrected_published_version",
     "correction_notice",
+    "retraction_notice",
+    "expression_of_concern",
+    "withdrawal_notice",
+    "addendum",
     "supplementary_material",
     "peer_review_file",
+    "perspective",
+    "news_and_views",
+    "summary",
+    "analysis",
+    "source_data",
+    "source_code",
     "other",
     "unknown",
     "invalid_file",
@@ -143,8 +156,9 @@ def legacy_paper_file_type(
     parse = str(parse_status or "").strip().lower()
     if parse in {"invalid", "failed", "corrupt", "unparseable"}:
         return "invalid_file"
-    if re.search(r"\b(author|publisher)?\s*(correction|erratum|corrigendum)\b", name):
-        return "correction_notice"
+    notice_type = publication_notices.title_kind(Path(name).stem)
+    if notice_type:
+        return notice_type
     if "peer review" in name or "reviewer report" in name or "decision letter" in name:
         return "peer_review_file"
     if role == "publication_version":
@@ -177,8 +191,18 @@ def legacy_role_projection(file_type: Any) -> tuple[str, str, str]:
             "Corrected published version",
         ),
         "correction_notice": ("other", "", "Correction notice"),
+        "retraction_notice": ("other", "", "Retraction notice"),
+        "expression_of_concern": ("other", "", "Expression of concern"),
+        "withdrawal_notice": ("other", "", "Withdrawal notice"),
+        "addendum": ("other", "", "Addendum"),
         "supplementary_material": ("supplement", "", "Supplementary material"),
         "peer_review_file": ("other", "", "Peer review file"),
+        "perspective": ("other", "", "Perspective"),
+        "news_and_views": ("other", "", "News and Views"),
+        "summary": ("other", "", "Summary"),
+        "analysis": ("note", "", "Analysis"),
+        "source_data": ("data", "", "Source Data"),
+        "source_code": ("code", "", "Source Code"),
         "other": ("other", "", "Other"),
         "unknown": ("other", "", "Unknown"),
         "invalid_file": ("other", "", "Invalid file"),
@@ -726,6 +750,7 @@ class Storage:
             )
             if schema_version < 14 or schema_needs_repair:
                 self.conn.executescript(SCHEMA)
+                paper_identity.ensure_schema(self.conn)
                 self._ensure_schema_columns()
                 self._backfill_paper_source_observations()
                 self._ensure_library_root()
@@ -734,6 +759,8 @@ class Storage:
                 ensure_browser_schema(self.conn)
                 ensure_workflow_schema(self.conn)
                 ensure_ai_schema(self.conn)
+                ensure_resource_dedup_schema(self.conn)
+                publication_notices.ensure_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -749,6 +776,14 @@ class Storage:
                     ensure_workflow_schema(self.conn)
                 if schema_version < 18:
                     ensure_ai_schema(self.conn)
+                if schema_version < 19:
+                    paper_identity.ensure_schema(self.conn)
+                if schema_version < 20:
+                    ensure_resource_dedup_schema(self.conn)
+                if schema_version < 21:
+                    ensure_ai_schema(self.conn)
+                if schema_version < 22:
+                    publication_notices.ensure_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -1041,6 +1076,9 @@ class Storage:
             raw = {}
         if not isinstance(raw, dict):
             raw = {}
+        if raw.get("manual_preprint_identifier_override") is True:
+            value = normalize_arxiv_identifier(raw.get("manual_preprint_identifier"))
+            return [value] if value else []
         preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
         versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
         preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
@@ -1053,15 +1091,12 @@ class Storage:
             preprint_version.get("versioned_arxiv_id"),
         ]
         paper_id = str(paper.get("paper_id") or "")
-        if paper_id.lower().startswith("arxiv_"):
+        correction = raw.get("manual_identifier_correction") or {}
+        if paper_id.lower().startswith("arxiv_") and correction.get("status") not in {"pending", "applied"}:
             candidates.append(paper_id[6:])
         normalized: list[str] = []
         for candidate in candidates:
-            value = str(candidate or "").strip()
-            value = re.sub(r"^arxiv:\s*", "", value, flags=re.IGNORECASE)
-            value = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/", "", value, flags=re.IGNORECASE)
-            value = re.sub(r"\.pdf(?:\?.*)?$", "", value, flags=re.IGNORECASE)
-            value = re.sub(r"v\d+$", "", value, flags=re.IGNORECASE)
+            value = normalize_arxiv_identifier(candidate)
             if value and value.casefold() not in {item.casefold() for item in normalized}:
                 normalized.append(value)
         return normalized
@@ -1489,6 +1524,7 @@ class Storage:
         return values
 
     def list_paper_source_observations(self, paper_id: str) -> list[dict[str, Any]]:
+        paper_id = self.resolve_paper_id(paper_id)
         rows = self.conn.execute(
             """
             SELECT *
@@ -1546,6 +1582,7 @@ class Storage:
         token, while ``source_key`` optionally distinguishes durable sub-sources
         without using fetch-run or time-window IDs that would defeat idempotency.
         """
+        paper_id = self.resolve_paper_id(paper_id)
         paper_id = str(paper_id or "").strip()
         if not paper_id:
             raise ValueError("paper_id is required for a source observation")
@@ -1645,6 +1682,7 @@ class Storage:
         last_seen_at: str = "",
         commit: bool = True,
     ) -> bool:
+        paper_id = self.resolve_paper_id(paper_id)
         created = self.record_paper_source_observations(
             paper_id,
             [
@@ -1823,25 +1861,40 @@ class Storage:
     def _identity_authors(cls, paper: dict[str, Any]) -> set[str]:
         raw = cls._paper_raw_dict(paper)
         candidates: list[Any] = []
-        for key in ("authors", "author"):
-            value = paper.get(key)
-            if value not in (None, "", []):
-                candidates.extend(value if isinstance(value, list) else [value])
-            raw_value = raw.get(key)
-            if raw_value not in (None, "", []):
-                candidates.extend(raw_value if isinstance(raw_value, list) else [raw_value])
+        for record in paper_identity.metadata_records(paper, raw):
+            for key in ("authors", "author", "creators"):
+                value = record.get(key)
+                if value not in (None, "", []):
+                    candidates.extend(value if isinstance(value, list) else [value])
+            authorships = record.get("authorships")
+            if isinstance(authorships, list):
+                for authorship in authorships:
+                    if isinstance(authorship, dict):
+                        author = authorship.get("author")
+                        name = author.get("display_name") if isinstance(author, dict) else None
+                        candidates.append(name or authorship.get("raw_author_name"))
         names: set[str] = set()
         for candidate in candidates:
+            structured = isinstance(candidate, dict)
             if isinstance(candidate, dict):
-                family = candidate.get("family") or candidate.get("last") or candidate.get("last_name")
-                given = candidate.get("given") or candidate.get("first") or candidate.get("first_name")
-                candidate = candidate.get("name") or " ".join(
+                family = candidate.get("family") or candidate.get("last") or candidate.get("last_name") or candidate.get("familyName")
+                given = candidate.get("given") or candidate.get("first") or candidate.get("first_name") or candidate.get("givenName")
+                candidate = family or candidate.get("name") or candidate.get("display_name") or " ".join(
                     part for part in (str(given or ""), str(family or "")) if part
                 )
-            key = cls._identity_text_key(candidate)
-            if key:
-                tokens = key.split()
-                names.add(tokens[-1] if tokens else key)
+            if not isinstance(candidate, str):
+                continue
+            # A structured name may be "Family, Given"; a Scholar authors
+            # string instead lists multiple people separated by commas.
+            if structured and "," in candidate:
+                if candidate.count(",") != 1 or ";" in candidate:
+                    continue
+                candidate = candidate.split(",", 1)[0]
+            for name in re.split(r"[,;，；、]", candidate):
+                name = re.sub(r"\bet\s+al\.?\s*$", "", name, flags=re.IGNORECASE)
+                key = cls._identity_text_key(name)
+                if key:
+                    names.add(key.split()[-1])
         return names
 
     @classmethod
@@ -1861,6 +1914,10 @@ class Storage:
             for key in ("url", "landing_url", "pdf_url")
         } - {""}
         reasons: list[str] = []
+        existing_kind = paper_identity.work_kind(existing, cls._paper_raw_dict(existing))
+        incoming_kind = paper_identity.work_kind(incoming, cls._paper_raw_dict(incoming))
+        if {existing_kind, incoming_kind} == {"dataset", "article"}:
+            reasons.append("dataset_article_conflict")
         if incoming_doi and incoming_url_dois and incoming_doi not in incoming_url_dois:
             reasons.append("incoming_doi_url_mismatch")
         if existing_doi and incoming_url_dois and existing_doi not in incoming_url_dois:
@@ -1988,7 +2045,78 @@ class Storage:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def upsert_paper(
+    def resolve_paper_id(self, paper_id: str) -> str:
+        return paper_identity.resolve(self, paper_id)
+
+    def paper_for_key(self, key: str) -> dict[str, Any] | None:
+        return paper_identity.for_key(self, key)
+
+    def upsert_paper(self, paper: dict[str, Any], *, replace_bibliographic_metadata: bool = False, commit: bool = True) -> bool:
+        try:
+            publication_notices.guard(self, paper, commit=commit)
+        except publication_notices.NoticeReviewRequired:
+            return False
+        with paper_identity.transaction(self, commit):
+            payload = paper_identity.prepare(self, paper)
+            if payload is None:
+                return False
+            accepted = self._upsert_paper_unresolved(payload, replace_bibliographic_metadata=replace_bibliographic_metadata, commit=False)
+            if accepted:
+                # Callers attach relationships/files using the accepted identity.
+                paper["paper_id"] = payload["paper_id"]
+                paper_identity.register(self, self.get_paper(payload["paper_id"]))
+            return accepted
+
+    def merge_paper_missing_metadata(self, paper: dict[str, Any], *, source_name: str, commit: bool = True) -> bool:
+        publication_notices.guard(self, paper, commit=commit)
+        with paper_identity.transaction(self, commit):
+            payload = paper_identity.prepare(self, paper)
+            if payload is None:
+                return False
+            changed = self._merge_paper_missing_metadata_unresolved(payload, source_name=source_name, commit=False)
+            paper["paper_id"] = payload["paper_id"]
+            paper_identity.register(self, self.get_paper(payload["paper_id"]))
+            return changed
+
+    def refresh_paper_metadata(self, paper_id: str, paper: dict[str, Any], *, linked_preprint_id: str = "") -> dict[str, Any] | None:
+        publication_notices.guard(self, paper)
+        paper_id = self.resolve_paper_id(paper_id)
+        with paper_identity.transaction(self):
+            current = self.get_paper(paper_id)
+            if not current:
+                return None
+            payload = paper_identity.prepare(self, paper, current_id=current["paper_id"], linked_preprint_id=linked_preprint_id)
+            updated = self._refresh_paper_metadata_unresolved(payload["paper_id"], payload, linked_preprint_id=linked_preprint_id, commit=False)
+            if updated:
+                paper_identity.register(self, updated)
+            return updated
+
+    def apply_identifier_correction(self, paper_id: str, paper: dict[str, Any], edit: dict[str, Any]) -> dict[str, Any]:
+        """Apply verified metadata only to the explicitly edited object, never merge it."""
+        publication_notices.guard(self, paper)
+        from . import identifier_correction
+        paper_id = self.resolve_paper_id(paper_id)
+        with paper_identity.transaction(self):
+            current = self.get_paper(paper_id)
+            if not current or identifier_correction.pending(current) != edit:
+                raise ValueError('Identifier changed during refresh. Refresh again with the saved value.')
+            identity = (edit['kind'], edit['identifier'])
+            if identity not in paper_identity.identifiers(self, paper):
+                raise ValueError('Metadata does not match the corrected identifier.')
+            candidates = paper_identity.find(self, paper)
+            incoming_ids = paper_identity.identifiers(self, paper)
+            if any(p['paper_id'] != paper_id and incoming_ids & paper_identity.identifiers(self, p) for p in candidates):
+                raise ValueError('Corrected metadata matches another Gewu Key. Existing papers and files were preserved.')
+            payload = identifier_correction.with_history(current, paper, edit)
+            reference = identifier_correction.baseline(current, edit)
+            if self.paper_identity_conflict_reasons(reference, payload):
+                raise ValueError('Corrected metadata contains contradictory identifiers; previous information retained.')
+            updated = self._refresh_paper_metadata_unresolved(paper_id, payload, correction_reference=reference, commit=False)
+            self.conn.execute('UPDATE papers SET semantic_scholar_json=NULL, semantic_scholar_enriched_at=NULL WHERE paper_id=?', (paper_id,))
+            paper_identity.register(self, updated)
+            return self.get_paper(paper_id)
+
+    def _upsert_paper_unresolved(
         self,
         paper: dict[str, Any],
         *,
@@ -2149,7 +2277,7 @@ class Storage:
             raise
         return True
 
-    def merge_paper_missing_metadata(
+    def _merge_paper_missing_metadata_unresolved(
         self,
         paper: dict[str, Any],
         *,
@@ -2280,13 +2408,42 @@ class Storage:
         if commit:
             self.conn.commit()
 
-    def refresh_paper_metadata(self, paper_id: str, paper: dict[str, Any]) -> dict[str, Any] | None:
+    @classmethod
+    def metadata_refresh_identity_reference(cls, existing: dict[str, Any], incoming: dict[str, Any], *, linked_preprint_id: str = "") -> dict[str, Any]:
+        """A verified preprint-to-publication link may replace the arXiv DOI.
+
+        Only metadata refresh opts in; import identity and merge guards remain
+        unchanged. An unrelated published DOI can never use this exception.
+        """
+        if not linked_preprint_id:
+            return existing
+        old_doi = normalize_doi(existing.get("doi"))
+        preprint_doi = "10.48550/arxiv." + linked_preprint_id.lower()
+        if old_doi and old_doi != preprint_doi:
+            return existing
+        incoming_raw = cls._paper_raw_dict(incoming)
+        if normalize_doi(incoming_raw.get("published_doi")) != normalize_doi(incoming.get("doi")):
+            return existing
+        reference = dict(existing)
+        reference["doi"] = incoming.get("doi")
+        for key in ("url", "landing_url", "pdf_url"):
+            if cls._identity_url_doi(reference.get(key)) == preprint_doi:
+                reference[key] = ""
+        # A published title/journal may change; disjoint authors AND a changed
+        # title still trigger the ordinary identity guard.
+        reference["journal"] = incoming.get("journal")
+        return reference
+
+    def _refresh_paper_metadata_unresolved(self, paper_id: str, paper: dict[str, Any], *, linked_preprint_id: str = "", correction_reference: dict[str, Any] | None = None, commit: bool = True) -> dict[str, Any] | None:
         existing = self.get_paper(paper_id)
         if not existing:
             return None
-        conflict_reasons = self.paper_identity_conflict_reasons(existing, paper)
+        if correction_reference is not None:
+            existing = correction_reference
+        reference = self.metadata_refresh_identity_reference(existing, paper, linked_preprint_id=linked_preprint_id)
+        conflict_reasons = self.paper_identity_conflict_reasons(reference, paper)
         if conflict_reasons:
-            self.record_paper_identity_conflict(existing, paper, conflict_reasons)
+            self.record_paper_identity_conflict(existing, paper, conflict_reasons, commit=commit)
             return existing
         timestamp = now_iso()
         existing_raw = self._paper_raw_dict(existing)
@@ -2353,13 +2510,16 @@ class Storage:
                 )
             else:
                 self._sync_paper_source_projection(str(paper_id))
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
         except Exception:
-            self.conn.rollback()
+            if commit:
+                self.conn.rollback()
             raise
         return self.get_paper(paper_id)
 
-    def update_semantic_scholar_enrichment(self, paper_id: str, enrichment: dict[str, Any]) -> dict[str, Any] | None:
+    def update_semantic_scholar_enrichment(self, paper_id: str, enrichment: dict[str, Any], *, commit: bool = True) -> dict[str, Any] | None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             """
             UPDATE papers
@@ -2369,10 +2529,26 @@ class Storage:
             """,
             (json.dumps(enrichment or {}, ensure_ascii=False), now_iso(), str(paper_id)),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_paper(paper_id)
 
-    def update_paper_raw_json(self, paper_id: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+    def update_paper_raw_json(self, paper_id: str, raw: dict[str, Any], *, commit: bool = True) -> dict[str, Any] | None:
+        paper_id = self.resolve_paper_id(paper_id)
+        with paper_identity.transaction(self, commit=commit):
+            existing = self.get_paper(paper_id)
+            if not existing:
+                return None
+            payload = paper_identity.prepare(self, {**existing, "raw": raw}, current_id=paper_id)
+            if payload["paper_id"] != paper_id:
+                # A raw identifier update can join an existing record. Keep the
+                # survivor's notes and provenance before applying new evidence.
+                raw = paper_identity._json_union(self._paper_raw_dict(self.get_paper(payload["paper_id"])), raw)
+            updated = self._update_paper_raw_json_unresolved(payload["paper_id"], raw)
+            paper_identity.register(self, updated)
+            return updated
+
+    def _update_paper_raw_json_unresolved(self, paper_id: str, raw: dict[str, Any]) -> dict[str, Any] | None:
         existing = self.get_paper(str(paper_id))
         if not existing:
             return None
@@ -2410,9 +2586,7 @@ class Storage:
                 )
             else:
                 self._sync_paper_source_projection(str(paper_id))
-            self.conn.commit()
         except Exception:
-            self.conn.rollback()
             raise
         return self.get_paper(paper_id)
 
@@ -2505,6 +2679,7 @@ class Storage:
         source: str,
         commit: bool = True,
     ) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.record_journal_monitor_papers(
             fetch_run_id=fetch_run_id,
             observations=[{"paper_id": paper_id, "source": source}],
@@ -2533,7 +2708,7 @@ class Storage:
             {
                 (
                     int(fetch_run_id),
-                    str(observation.get("paper_id") or "").strip(),
+                    self.resolve_paper_id(str(observation.get("paper_id") or "").strip()),
                     str(observation.get("source") or "").strip(),
                     timestamp,
                     timestamp,
@@ -2577,6 +2752,7 @@ class Storage:
         paper_id: str | None = None,
         fetch_run_id: int | None = None,
     ) -> list[dict[str, Any]]:
+        paper_id = self.resolve_paper_id(paper_id)
         clauses: list[str] = []
         params: list[Any] = []
         if paper_id is not None:
@@ -2742,6 +2918,7 @@ class Storage:
         window_end: str,
         query_plan_hash: str,
     ) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.record_theme_candidates(
             [
                 {
@@ -2758,7 +2935,7 @@ class Storage:
         timestamp = now_iso()
         rows = [
             (
-                str(candidate.get("paper_id") or ""),
+                self.resolve_paper_id(str(candidate.get("paper_id") or "")),
                 str(candidate.get("source") or ""),
                 str(candidate.get("window_start") or ""),
                 str(candidate.get("window_end") or ""),
@@ -2856,7 +3033,7 @@ class Storage:
         rows = [
             (
                 str(journal_slug),
-                str(paper.get("paper_id") or ""),
+                self.resolve_paper_id(str(paper.get("paper_id") or "")),
                 str(paper.get("publication_date") or "")[:10],
                 timestamp,
                 timestamp,
@@ -2964,6 +3141,7 @@ class Storage:
         return [dict(row) for row in rows]
 
     def get_paper(self, paper_id: str) -> dict[str, Any] | None:
+        paper_id = self.resolve_paper_id(paper_id)
         row = self.conn.execute(
             """
             SELECT papers.*, inventory_import_batches.copy_mode AS import_copy_mode
@@ -3003,6 +3181,7 @@ class Storage:
         *,
         commit: bool = True,
     ) -> dict[str, Any] | None:
+        paper_id = self.resolve_paper_id(paper_id)
         paper = self.get_paper(str(paper_id))
         if not paper:
             return None
@@ -3060,7 +3239,8 @@ class Storage:
             existing = self.conn.execute(
                 """
                 SELECT id FROM resources
-                WHERE paper_id = ? AND (stored_path = ? OR source_path = ?)
+                WHERE paper_id = ? AND (stored_path = ? OR
+                    (COALESCE(stored_path, '') = '' AND source_path = ?))
                 ORDER BY id ASC LIMIT 1
                 """,
                 (paper_id, path_text, path_text),
@@ -3138,6 +3318,7 @@ class Storage:
             )
 
     def list_paper_resources(self, paper_id: str, *, ensure_primary: bool = True) -> list[dict[str, Any]]:
+        paper_id = self.resolve_paper_id(paper_id)
         if ensure_primary:
             self.ensure_primary_pdf_resource(str(paper_id))
         paper = self.get_paper(str(paper_id)) or {}
@@ -3207,9 +3388,18 @@ class Storage:
         supersedes_resource_id: int | None = None,
         commit: bool = True,
     ) -> dict[str, Any]:
+        paper_id = self.resolve_paper_id(paper_id)
         if not self.get_paper(str(paper_id)):
             raise KeyError(str(paper_id))
         path = Path(str(stored_path)).expanduser()
+        from .resource_dedup import find_existing, remember_source
+        existing = find_existing(self, paper_id, path, exact_content=False)
+        if existing:
+            remember_source(self, existing['id'], {'source_path': source_path,
+                'size_bytes': self._resource_size(str(path)), 'kind': kind or path.suffix.lstrip('.')}, sha256)
+            if commit:
+                self.conn.commit()
+            return existing
         inferred_mime = mime_type or ("application/pdf" if path.suffix.lower() == ".pdf" else "")
         inferred_kind = kind or (path.suffix.lower().lstrip(".") or "file")
         resolved_type = (
@@ -3221,6 +3411,10 @@ class Storage:
                 display_name=display_name or path.name,
             )
         )
+        if inferred_kind == 'pdf':
+            resolved_type = publication_notices.title_kind(Path(display_name or path.name).stem) or resolved_type
+        if resolved_type in publication_notices.KINDS:
+            file_role, version_role, version_label = legacy_role_projection(resolved_type)
         projected_role, projected_version, projected_label = legacy_role_projection(resolved_type)
         if (
             str(file_type or "").strip()
@@ -3294,6 +3488,7 @@ class Storage:
         return self.get_paper_resource(resource_id) or {}
 
     def set_preferred_paper_resource(self, paper_id: str, resource_id: int | None) -> dict[str, Any] | None:
+        paper_id = self.resolve_paper_id(paper_id)
         if resource_id is not None:
             resource = self.get_paper_resource(int(resource_id))
             if not resource or str(resource.get("paper_id") or "") != str(paper_id):
@@ -3341,6 +3536,10 @@ class Storage:
             resource
             for resource in resources
             if resource.get("exists")
+            # Appending through MCP is provenance, not a manual Default choice.
+            # Classified publication versions use the same ranking as UI imports;
+            # unresolved identity conflicts still require explicit review.
+            and (resource.get("added_via") != "inventory_conflict" or resource.get("file_type_override"))
             and normalize_paper_file_type(resource.get("file_type"))
             in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
         ]
@@ -3359,18 +3558,24 @@ class Storage:
         )
         if automatic:
             return automatic[0]
-        # Browser Save can establish the first main PDF before its version is
-        # known. This fallback never outranks a recognized publication version
-        # or a manual Default, and does not adopt ordinary Unknown attachments.
-        primary = by_id.get(int(paper.get("primary_resource_id") or 0))
-        if (primary and primary.get("exists")
-                and primary.get("added_via") == "browser_capture"
-                and normalize_paper_file_type(primary.get("file_type")) == "unknown"
-                and Storage.resource_is_pdf(primary)):
-            return primary
-        return None
+        # A work still needs a stable main file before classification. Keep an
+        # existing main/primary when possible, then choose the earliest PDF,
+        # then the earliest other file. Never infer a publication type or take
+        # an unreviewed identifier-conflict file as the Default.
+        fallback = [r for r in resources if r.get("exists")
+                    and normalize_paper_file_type(r.get("file_type")) in {"unknown", "other"}
+                    and (r.get("added_via") not in {"inventory_conflict", "ai_import_attachment"} or r.get("file_type_override"))]
+        primary_id = int(paper.get("primary_resource_id") or 0)
+        main_paths = {str(paper.get(k) or "") for k in ("merged_pdf_path", "main_pdf_path")} - {""}
+        fallback.sort(key=lambda r: (
+            0 if int(r.get("id") or 0) == primary_id or Storage.resource_local_path(r) in main_paths else 1,
+            0 if Storage.resource_is_pdf(r) else 1,
+            str(r.get("created_at") or ""), int(r.get("id") or 0),
+        ))
+        return fallback[0] if fallback else None
 
     def resolve_default_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
+        paper_id = self.resolve_paper_id(paper_id)
         paper = self.get_paper(str(paper_id))
         if not paper:
             return None
@@ -3378,6 +3583,7 @@ class Storage:
         return self._select_default_paper_resource(paper, resources)
 
     def resolve_primary_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
+        paper_id = self.resolve_paper_id(paper_id)
         paper = self.get_paper(str(paper_id))
         if not paper:
             return None
@@ -3458,6 +3664,7 @@ class Storage:
         merged_pdf_path: str | None = None,
         pdf_url: str | None = None,
     ) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             """
             UPDATE papers
@@ -3511,6 +3718,7 @@ class Storage:
         window_end: str,
         commit: bool = True,
     ) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         timestamp = now_iso()
         try:
             self.conn.execute(
@@ -3635,6 +3843,7 @@ class Storage:
 
 
     def update_analysis_status(self, paper_id: str, *, status: str, path: str | None, message: str = "") -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             """
             UPDATE papers
@@ -3648,6 +3857,7 @@ class Storage:
         self.conn.commit()
 
     def queue_analysis(self, paper_id: str, *, analysis_path: str, message: str = "") -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         status = "queued_for_codex" if not message else f"queued_for_codex: {message}"
         self.conn.execute(
             """
@@ -3662,6 +3872,7 @@ class Storage:
         self.conn.commit()
 
     def clear_download_status(self, paper_id: str) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             """
             UPDATE papers
@@ -3678,6 +3889,7 @@ class Storage:
         self.conn.commit()
 
     def clear_analysis_status(self, paper_id: str) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             """
             UPDATE papers
@@ -3697,6 +3909,7 @@ class Storage:
         publisher_section: str,
         section_allowed: bool | None,
     ) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             """
             UPDATE papers
@@ -3709,13 +3922,14 @@ class Storage:
         self.conn.commit()
 
     def update_image_url(self, paper_id: str, image_url: str) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute(
             "UPDATE papers SET image_url = ? WHERE paper_id = ?",
             (image_url, paper_id),
         )
         self.conn.commit()
 
-    def create_library_folder(self, *, parent_id: int = 1, name: str) -> dict[str, Any]:
+    def create_library_folder(self, *, parent_id: int = 1, name: str, commit: bool = True) -> dict[str, Any]:
         parent_id = int(parent_id or 1)
         clean_name = " ".join(name.strip().split()) or "New Folder"
         clean_name = self._unique_library_folder_name(parent_id, clean_name)
@@ -3728,10 +3942,11 @@ class Storage:
             """,
             (clean_name, parent_id, timestamp, timestamp, sort_order),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(int(cursor.lastrowid)) or {}
 
-    def create_library_root_folder(self, *, name: str) -> dict[str, Any]:
+    def create_library_root_folder(self, *, name: str, commit: bool = True) -> dict[str, Any]:
         clean_name = " ".join(name.strip().split()) or "Space"
         clean_name = self._unique_library_root_folder_name(clean_name)
         timestamp = now_iso()
@@ -3746,7 +3961,8 @@ class Storage:
             """,
             (clean_name, timestamp, timestamp, sort_order),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(int(cursor.lastrowid)) or {}
 
     def get_library_folder(self, folder_id: int) -> dict[str, Any] | None:
@@ -3770,7 +3986,7 @@ class Storage:
             return dict(row)
         return self.create_library_folder(parent_id=parent_id, name=clean_name)
 
-    def rename_library_folder(self, *, folder_id: int, name: str) -> dict[str, Any]:
+    def rename_library_folder(self, *, folder_id: int, name: str, commit: bool = True) -> dict[str, Any]:
         folder_id = int(folder_id)
         if folder_id == 1:
             raise ValueError("Root folder cannot be renamed")
@@ -3790,7 +4006,8 @@ class Storage:
             """,
             (clean_name, now_iso(), folder_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(folder_id) or {}
 
     def set_library_folder_color(self, *, folder_id: int, color: str) -> dict[str, Any]:
@@ -3813,7 +4030,8 @@ class Storage:
         self.conn.commit()
         return self.get_library_folder(folder_id) or {}
 
-    def add_library_item(self, *, paper_id: str, folder_id: int = 1) -> dict[str, Any]:
+    def add_library_item(self, *, paper_id: str, folder_id: int = 1, commit: bool = True) -> dict[str, Any]:
+        paper_id = self.resolve_paper_id(paper_id)
         folder_id = int(folder_id or 1)
         sort_order = self._next_library_sort_order("library_items", folder_id)
         timestamp = now_iso()
@@ -3824,7 +4042,8 @@ class Storage:
             """,
             (folder_id, paper_id, timestamp, sort_order),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         row = self.conn.execute(
             """
             SELECT *
@@ -3839,7 +4058,7 @@ class Storage:
         row = self.conn.execute("SELECT * FROM library_items WHERE id = ?", (int(item_id),)).fetchone()
         return dict(row) if row else None
 
-    def rename_library_item(self, *, item_id: int, name: str) -> dict[str, Any]:
+    def rename_library_item(self, *, item_id: int, name: str, commit: bool = True) -> dict[str, Any]:
         item_id = int(item_id)
         if not self.get_library_item(item_id):
             raise ValueError("Library item not found")
@@ -3848,7 +4067,8 @@ class Storage:
             "UPDATE library_items SET display_name = ? WHERE id = ?",
             (clean_name or None, item_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_item(item_id) or {}
 
     def delete_library_item(self, *, item_id: int) -> None:
@@ -3865,6 +4085,7 @@ class Storage:
         self.conn.commit()
 
     def remove_library_paper(self, *, paper_id: str) -> None:
+        paper_id = self.resolve_paper_id(paper_id)
         self.conn.execute("DELETE FROM library_items WHERE paper_id = ?", (str(paper_id),))
         self.conn.commit()
 
@@ -4087,7 +4308,7 @@ class Storage:
         self.conn.commit()
 
     def mark_late_arrivals_seen(self, paper_ids: Iterable[str]) -> None:
-        ids = [str(paper_id) for paper_id in paper_ids if str(paper_id or "").strip()]
+        ids = list(dict.fromkeys(self.resolve_paper_id(str(paper_id)) for paper_id in paper_ids if str(paper_id or "").strip()))
         if not ids:
             return
         timestamp = now_iso()
@@ -4102,6 +4323,7 @@ class Storage:
         self.conn.commit()
 
     def add_my_publication(self, *, paper_id: str) -> dict[str, Any]:
+        paper_id = self.resolve_paper_id(paper_id)
         timestamp = now_iso()
         sort_order = self.next_my_publication_sort_order()
         self.conn.execute(
@@ -4193,6 +4415,7 @@ class Storage:
         return dict(row) if row else None
 
     def replace_my_publication_paper(self, *, publication_id: int, paper_id: str) -> dict[str, Any]:
+        paper_id = self.resolve_paper_id(paper_id)
         publication_id = int(publication_id)
         paper_id = str(paper_id)
         timestamp = now_iso()
@@ -4637,7 +4860,9 @@ class Storage:
         scholar_key: str = "",
         scholar_title: str = "",
         unread: bool = False,
+        commit: bool = True,
     ) -> bool:
+        paper_id = self.resolve_paper_id(paper_id)
         existing = self.conn.execute(
             """
             SELECT 1 FROM author_monitor_papers
@@ -4683,9 +4908,11 @@ class Storage:
                 last_seen_at=timestamp,
                 commit=False,
             )
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
         except Exception:
-            self.conn.rollback()
+            if commit:
+                self.conn.rollback()
             raise
         return existing is None
 
@@ -4804,6 +5031,27 @@ class Storage:
             current["author_unread"] = bool(current.get("author_unread")) or bool(item.get("author_unread"))
         return [merged[paper_id] for paper_id in order]
 
+    def list_author_monitor_enrichment_candidates(self) -> list[dict[str, Any]]:
+        """Small, author-only projection for completion planning and live counts.
+
+        Aggregate memberships first so shared papers appear once. Avoid loading
+        file/placement columns. Keep raw identifiers for the same recognition
+        rules used by explicit completion, including manual arXiv overrides.
+        """
+        rows = self.conn.execute("""
+            WITH monitored AS (
+                SELECT paper_id, MIN(author_monitor_id) AS author_monitor_id,
+                       MAX(first_seen_at) AS author_first_seen_at
+                FROM author_monitor_papers GROUP BY paper_id
+            )
+            SELECT p.paper_id, p.doi, p.abstract, p.url,
+                   p.landing_url, p.pdf_url, p.journal, p.publication_date,
+                   m.author_monitor_id, m.author_first_seen_at,
+                   p.raw_json, p.semantic_scholar_json
+            FROM monitored m JOIN papers p ON p.paper_id = m.paper_id
+        """).fetchall()
+        return [dict(row, author_monitor_ids=[row['author_monitor_id']]) for row in rows]
+
     def list_author_monitor_card_cache_candidates(
         self,
         *,
@@ -4908,7 +5156,7 @@ class Storage:
             "pending_count": max(0, total_count - ready_count),
         }
 
-    def list_author_monitor_cached_cards(self) -> list[dict[str, Any]]:
+    def list_author_monitor_cached_cards(self, author_monitor_id: int = 0) -> list[dict[str, Any]]:
         """Return compact cached cards with live author-monitor associations."""
         rows = self.conn.execute(
             """
@@ -4929,10 +5177,12 @@ class Storage:
             LEFT JOIN author_monitor_card_cache_dirty
               ON author_monitor_card_cache_dirty.paper_id = author_monitor_papers.paper_id
             WHERE author_monitor_card_cache_dirty.paper_id IS NULL
+              AND (? = 0 OR author_monitor_papers.author_monitor_id = ?)
             ORDER BY author_monitor_papers.is_unread DESC,
                      author_monitor_papers.first_seen_at DESC,
                      author_monitor_papers.paper_id ASC
-            """
+            """,
+            (int(author_monitor_id or 0), int(author_monitor_id or 0)),
         ).fetchall()
         merged: dict[str, dict[str, Any]] = {}
         order: list[str] = []
@@ -4982,7 +5232,7 @@ class Storage:
         paper_ids: Iterable[str] = (),
         read_all: bool = False,
     ) -> None:
-        ids = [str(paper_id) for paper_id in paper_ids if str(paper_id or "").strip()]
+        ids = list(dict.fromkeys(self.resolve_paper_id(str(paper_id)) for paper_id in paper_ids if str(paper_id or "").strip()))
         if not int(author_monitor_id) and not ids and not read_all:
             return
         conditions: list[str] = ["is_unread = 1"]
@@ -5011,6 +5261,7 @@ class Storage:
         return unread
 
     def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
+        paper_id = self.resolve_paper_id(paper_id)
         row = self.conn.execute(
             """
             WITH RECURSIVE recycle_tree(id) AS (
@@ -5077,12 +5328,16 @@ class Storage:
         return self.get_library_item(int(item_id)) or {}
 
     def recover_library_item(self, *, item_id: int, fallback_folder_id: int) -> dict[str, Any]:
+        from .library_destination import active_folders
         source = self.get_library_item(item_id)
         if not source:
             raise ValueError("Library item not found")
         target_folder_id = int(source.get("original_folder_id") or fallback_folder_id or 1)
-        if not self.get_library_folder(target_folder_id):
+        active_ids = {folder["id"] for folder in active_folders(self)}
+        if target_folder_id not in active_ids:
             target_folder_id = int(fallback_folder_id or 1)
+        if target_folder_id not in active_ids:
+            raise ValueError("Choose an active recovery folder")
         existing = self.conn.execute(
             """
             SELECT *
@@ -5129,13 +5384,17 @@ class Storage:
         return self.get_library_folder(folder_id) or {}
 
     def recover_library_folder(self, *, folder_id: int, fallback_parent_id: int) -> dict[str, Any]:
+        from .library_destination import active_folders
         folder_id = int(folder_id)
         source = self.get_library_folder(folder_id)
         if not source:
             raise ValueError("Folder not found")
         parent_id = int(source.get("original_parent_id") or fallback_parent_id or 1)
-        if parent_id == folder_id or self._folder_is_descendant(parent_id, folder_id) or not self.get_library_folder(parent_id):
+        active_ids = {folder["id"] for folder in active_folders(self)}
+        if parent_id == folder_id or self._folder_is_descendant(parent_id, folder_id) or parent_id not in active_ids:
             parent_id = int(fallback_parent_id or 1)
+        if parent_id not in active_ids:
+            raise ValueError("Choose an active recovery folder")
         sort_order = self._next_library_sort_order("library_folders", parent_id)
         self.conn.execute(
             """
@@ -5287,7 +5546,7 @@ class Storage:
         self.conn.commit()
         return copied
 
-    def move_library_item(self, *, item_id: int, folder_id: int) -> dict[str, Any]:
+    def move_library_item(self, *, item_id: int, folder_id: int, commit: bool = True) -> dict[str, Any]:
         folder_id = int(folder_id or 1)
         item_id = int(item_id)
         source = self.get_library_item(item_id)
@@ -5303,18 +5562,20 @@ class Storage:
         ).fetchone()
         if existing:
             self.conn.execute("DELETE FROM library_items WHERE id = ?", (item_id,))
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
             return dict(existing)
         sort_order = self._next_library_sort_order("library_items", folder_id)
         self.conn.execute(
             "UPDATE library_items SET folder_id = ?, original_folder_id = NULL, trashed_at = NULL, sort_order = ? WHERE id = ?",
             (folder_id, sort_order, item_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         row = self.conn.execute("SELECT * FROM library_items WHERE id = ?", (item_id,)).fetchone()
         return dict(row) if row else {}
 
-    def move_library_folder(self, *, folder_id: int, parent_id: int) -> dict[str, Any]:
+    def move_library_folder(self, *, folder_id: int, parent_id: int, commit: bool = True) -> dict[str, Any]:
         folder_id = int(folder_id)
         parent_id = int(parent_id or 1)
         if folder_id == 1:
@@ -5330,7 +5591,8 @@ class Storage:
             """,
             (parent_id, sort_order, now_iso(), folder_id),
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         return self.get_library_folder(folder_id) or {}
 
     def reorder_library_entry(
