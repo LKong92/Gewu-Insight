@@ -80,14 +80,17 @@ $entries = @(Get-ChildItem -LiteralPath $payload -File -Recurse | Where-Object {
     [pscustomobject]@{Path=[IO.Path]::GetRelativePath($payload,$_.FullName);Bytes=$_.Length;SHA256=(Get-FileHash -LiteralPath $_.FullName).Hash}
 })
 Write-Manifest $entries
-$script:fixtureSignatureStatus = 'Valid'
-$script:fixtureRsa = $true
-$script:fixtureTimestamp = $true
-$script:fixturePublisher = 'CN=Inert unit test publisher'
-$script:fixtureInstallerPublisher = $script:fixturePublisher
-$script:fixtureDllPublisher = $script:fixturePublisher
+$script:fixtureSignatureStatus = 'NotSigned'
+$script:fixturePythonStatus = 'Valid'
+$script:fixturePythonPublisher = 'CN=Python Software Foundation, O=Python Software Foundation'
+$script:fixtureWebViewStatus = 'Valid'
+$script:fixtureWebViewPublisher = 'CN=Microsoft Corporation, O=Microsoft Corporation'
+$script:fixtureWebViewBytes = 1000000
+$script:fixtureInstallerStatus = 'NotSigned'
 $script:fixtureDllVersion = '0.1.20.0'
 $script:fixtureInstallerVersion = '0.1.20'
+$webviewFile = Join-Path $fixture 'webview.exe'
+[IO.File]::WriteAllText($webviewFile, 'inert official-runtime fixture; never executed')
 function Get-Item {
     param([string]$LiteralPath, [string]$ErrorAction)
     $actual = Microsoft.PowerShell.Management\Get-Item -LiteralPath $LiteralPath -ErrorAction Stop
@@ -96,46 +99,63 @@ function Get-Item {
             Attributes=$actual.Attributes;Extension=$actual.Extension;Length=$actual.Length;
             VersionInfo=[pscustomobject]@{FileVersion=$script:fixtureDllVersion;ProductVersion=$script:fixtureInstallerVersion}}
     }
+    if ($actual.FullName -eq $webviewFile) {
+        return [pscustomobject]@{FullName=$actual.FullName;PSIsContainer=$actual.PSIsContainer;
+            Attributes=$actual.Attributes;Extension=$actual.Extension;Length=$script:fixtureWebViewBytes}
+    }
     return $actual
 }
 function Get-AuthenticodeSignature {
     param([string]$LiteralPath)
-    $subject = $script:fixturePublisher
-    if ([IO.Path]::GetFileName($LiteralPath) -eq 'Gewu Insight.dll') { $subject = $script:fixtureDllPublisher }
-    if ($LiteralPath -eq $installerFile) { $subject = $script:fixtureInstallerPublisher }
-    return [pscustomobject]@{Status=$script:fixtureSignatureStatus;
-        SignerCertificate=[pscustomobject]@{Subject=$subject;PublicKey=[pscustomobject]@{
-            Oid=[pscustomobject]@{Value=$(if ($script:fixtureRsa) {'1.2.840.113549.1.1.1'} else {'1.2.840.10045.2.1'})}}};
-        TimeStamperCertificate=$(if ($script:fixtureTimestamp) {'inert timestamp metadata'} else {$null})}
+    $status = $script:fixtureSignatureStatus
+    $subject = 'CN=Inert vendor, O=Inert vendor'
+    if ([IO.Path]::GetFileName($LiteralPath) -eq 'python.exe') {
+        $status = $script:fixturePythonStatus; $subject = $script:fixturePythonPublisher
+    }
+    if ($LiteralPath -eq $webviewFile) {
+        $status = $script:fixtureWebViewStatus; $subject = $script:fixtureWebViewPublisher
+    }
+    if ($LiteralPath -eq $installerFile) { $status = $script:fixtureInstallerStatus }
+    return [pscustomobject]@{Status=$status;SignerCertificate=[pscustomobject]@{Subject=$subject}}
 }
 function Check-ReleasePolicy([string]$Name, [string]$ExpectedIssue) {
-    $result = Test-GewuWindowsRelease -PayloadPath $payload -InstallerPath $installerFile -Version '0.1.20'
+    $result = Test-GewuWindowsRelease -PayloadPath $payload -InstallerPath $installerFile -Version '0.1.20' -WebView2Bootstrapper $webviewFile
     if ($ExpectedIssue) {
         if ($result.StaticChecksPassed -or -not @($result.Issues | Where-Object { $_ -like $ExpectedIssue }).Count) {
             throw "$Name failed: $($result | ConvertTo-Json -Depth 5 -Compress)"
         }
-    } elseif (-not $result.StaticChecksPassed -or $result.RuntimeValidated) { throw "$Name failed: $($result.Issues)" }
+    } elseif (-not $result.StaticChecksPassed -or $result.RuntimeValidated -or $result.Installed -or $result.Distribution -ne 'unsigned' -or
+        $result.WebView2Deployment -ne 'evergreen-online-if-missing' -or $result.WebView2BootstrapperSHA256 -ne (Get-FileHash -LiteralPath $webviewFile).Hash) {
+        throw "$Name failed: $($result.Issues)"
+    }
     $checks.Add($Name)
 }
 try {
-    Check-ReleasePolicy 'synthetic complete release passes static policy but never claims runtime acceptance' ''
-    $script:fixtureSignatureStatus = 'NotSigned'
-    Check-ReleasePolicy 'unsigned components and installer rejected by policy' '*without a valid RSA signature*'
-    $script:fixtureSignatureStatus = 'HashMismatch'
-    Check-ReleasePolicy 'damaged signatures rejected by policy' '*Signature verification failed (HashMismatch)*'
+    Check-ReleasePolicy 'unsigned app and Setup accepted without claiming startup or installation' ''
     $script:fixtureSignatureStatus = 'Valid'
-    $script:fixtureRsa = $false
-    Check-ReleasePolicy 'unsupported ECC signature rejected by policy' '*requires an RSA certificate*'
-    $script:fixtureRsa = $true
-    $script:fixtureTimestamp = $false
-    Check-ReleasePolicy 'missing timestamp rejected by policy' '*no verified timestamp*'
-    $script:fixtureTimestamp = $true
-    $script:fixtureInstallerPublisher = 'CN=Different installer publisher'
-    Check-ReleasePolicy 'different installer publisher rejected' '*same verified signing publisher*'
-    $script:fixtureInstallerPublisher = $script:fixturePublisher
-    $script:fixtureDllPublisher = 'CN=Different DLL publisher'
-    Check-ReleasePolicy 'different Gewu DLL publisher rejected' '*different signing publishers*'
-    $script:fixtureDllPublisher = $script:fixturePublisher
+    Check-ReleasePolicy 'existing vendor signatures accepted without re-signing' ''
+    $script:fixtureSignatureStatus = 'HashMismatch'
+    Check-ReleasePolicy 'damaged binary signatures rejected' '*Damaged or unverifiable binary signature*'
+    $script:fixtureSignatureStatus = 'NotSigned'
+    $script:fixturePythonStatus = 'NotSigned'
+    Check-ReleasePolicy 'unverified Python runtime rejected' '*Official dependency verification failed*'
+    $script:fixturePythonStatus = 'Valid'
+    $script:fixturePythonPublisher = 'CN=Unexpected vendor, O=Unexpected vendor'
+    Check-ReleasePolicy 'wrong Python publisher rejected' '*expected Python Software Foundation*'
+    $script:fixturePythonPublisher = 'CN=Python Software Foundation, O=Python Software Foundation'
+    $script:fixtureWebViewStatus = 'NotSigned'
+    Check-ReleasePolicy 'unverified WebView2 input rejected' '*expected Microsoft Corporation*'
+    $script:fixtureWebViewStatus = 'Valid'
+    $script:fixtureWebViewBytes = 212358352
+    Check-ReleasePolicy 'oversized offline runtime cannot replace the online bootstrapper' '*Expected the small WebView2 Evergreen Bootstrapper*'
+    $script:fixtureWebViewBytes = 0
+    Check-ReleasePolicy 'empty bootstrapper rejected' '*Expected the small WebView2 Evergreen Bootstrapper*'
+    $script:fixtureWebViewBytes = 1000000
+    $script:fixtureInstallerStatus = 'HashMismatch'
+    Check-ReleasePolicy 'damaged installer signature rejected' '*Expected intentionally unsigned Setup*'
+    $script:fixtureInstallerStatus = 'NotSigned'
+    $script:fixtureInstallerVersion = '0.1.20                                            '
+    Check-ReleasePolicy 'Inno padded product-version text accepted' ''
     $script:fixtureDllVersion = '0.1.19.0'
     Check-ReleasePolicy 'stale DLL version rejected' '*Payload version mismatch*'
     $script:fixtureDllVersion = '0.1.20.0'
@@ -144,6 +164,11 @@ try {
 } finally {
     Remove-Item Function:Get-Item,Function:Get-AuthenticodeSignature
 }
+$buildFailure = $null
+try { & (Join-Path $repo 'scripts/build_windows.ps1') -Version 0.0.0 -PythonRuntime unused -InnoCompiler unused }
+catch { $buildFailure = $_.Exception.Message }
+if ($buildFailure -ne 'Setup needs the official WebView2 Evergreen Bootstrapper.') { throw 'Setup prerequisite guard failed.' }
+$checks.Add('builder requires online bootstrapper before making output')
 $report = [pscustomobject]@{Success=$true;Checks=@($checks.ToArray());Fixture=$fixture}
 $report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $fixture 'result.json') -Encoding utf8
 $report | ConvertTo-Json -Depth 4

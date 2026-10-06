@@ -1,5 +1,7 @@
 # Windows signing and local installation recovery
 
+Historical record: on 2026-10-06 the user chose unsigned Windows packaging and explicitly requested removal of the publisher-signing workflow. The active builder no longer requires signing credentials. Manifest, version, official dependency and runtime checks remain. Older signing requirements below are superseded; do not use them to block the user's selected unsigned route.
+
 ## Current delivery: 0.1.21 source desktop (2026-09-29)
 
 The requested Mac alignment is deployed at `dist/windows-preview-0.1.21`, using local source and `.venv`. The original Library reopened successfully with schema 22 and preserved protected records/files. No installer, signing enrollment or system security change was involved. Formal signed-release gates remain separate and unchanged. See [delivery and validation](WINDOWS_MAC_PARITY_0.1.21.md). Do not reinstate the removed 0.1.19 installation.

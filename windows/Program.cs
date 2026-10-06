@@ -135,12 +135,8 @@ internal sealed partial class WorkspaceWindow : Form
             } catch (Exception error) { if (!stopping) MessageBox.Show(this, error.Message, "Could not clear Monitor cache"); }
         });
         var help = new ToolStripMenuItem("Help");
-        help.DropDownItems.Add("About Gewu Insight", null, (_, _) => MessageBox.Show(this, "Gewu Insight (格物洞见)\nWindows Preview " + Application.ProductVersion.Split('+')[0] + "\n\nWindows feature parity is still in development.", "About Gewu Insight", MessageBoxButtons.OK, MessageBoxIcon.Information));
-        help.DropDownItems.Add("Windows Preview Guide", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.html")) { UseShellExecute = true }));
-        help.DropDownItems.Add("Windows Preview Guide (PDF)", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.pdf")) { UseShellExecute = true }));
-        help.DropDownItems.Add("Windows Preview Status", null, (_, _) => MessageBox.Show(File.Exists(Path.Combine(root, "PREVIEW.txt")) ? File.ReadAllText(Path.Combine(root, "PREVIEW.txt")) : "Windows development build. Feature parity has not been accepted.", "Windows Preview"));
+        help.DropDownItems.Add("User Guide", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.html")) { UseShellExecute = true }));
         help.DropDownItems.Add("Contact Us", null, (_, _) => Process.Start(new ProcessStartInfo("mailto:info@gewu-insight.com") { UseShellExecute = true }));
-        help.DropDownItems.Add("Project Website", null, (_, _) => Process.Start(new ProcessStartInfo("https://gewu-insight.com") { UseShellExecute = true }));
         menu.Items.AddRange([file, edit, viewMenu, loader, settings, help]); MainMenuStrip = menu; Controls.Add(menu);
     }
 

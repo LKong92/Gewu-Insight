@@ -5,7 +5,7 @@ Shell: dist/windows-preview-0.1.21; Python: .venv; source: this checkout.
 Library: retain the existing preview-workspace.txt selection.
 
 Includes shared macOS changes through 8a27895 and Windows native equivalents.
-See Help > Windows Preview Guide for current features and permissions.
+See Help > User Guide for current features and permissions.
 This route does not install a package or reinstate Preview 0.1.19.
 Keep the verified database, file and source backups before future updates.
 Apple Passwords/AutoFill, Safari sync and macOS system Quick Look are excluded.

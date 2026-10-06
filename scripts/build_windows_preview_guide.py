@@ -5,6 +5,7 @@ macOS HTML/TeX/PDF, application binaries, settings and research data are untouch
 """
 from __future__ import annotations
 
+import argparse
 import base64
 import importlib.util
 import re
@@ -26,8 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "windows"
 HTML = OUT / "Windows_Preview_Guide.html"
 PDF = OUT / "Windows_Preview_Guide.pdf"
-EDITION = "October 5, 2026"
-VERSION = "0.1.21"
+EDITION = "October 6, 2026"
+VERSION = "0.1.23"
 
 
 def fragment(value):
@@ -74,16 +75,16 @@ def windows_html():
         figure.decompose()
 
     welcome = soup.find("article", id="welcome")
-    welcome.select_one(".guide-revision").string = f"Windows Preview {VERSION} · {EDITION} · Desktop from local source"
-    replace_section(welcome, "Cross-platform core, platform-specific integration", """<h2>Windows desktop edition</h2>
-<p>This manual describes Windows Preview 0.1.21 launched from the local source checkout. Double-click <strong>Start Gewu Insight.cmd</strong>. It uses <code>dist/windows-preview-0.1.21</code> and the project <code>.venv</code>. Check the running version in <strong>Help &gt; About Gewu Insight</strong>.</p>
+    welcome.select_one(".guide-revision").string = f"Windows {VERSION} · {EDITION}"
+    replace_section(welcome, "Cross-platform core, platform-specific integration", f"""<h2>Windows desktop edition</h2>
+<p>This manual describes Gewu Insight {VERSION} for Windows. Install the versioned Setup.exe, then open <strong>Gewu Insight</strong> from the Start menu. The installer includes Python, .NET and application dependencies. It reuses Microsoft WebView2 or installs it from Microsoft when needed.</p>
 <p>The six workspaces share the same paper identities, file classifications and SQLite records. Windows supplies File Explorer, file associations, Recycle Bin, a built-in PDF reader and a WebView2 Browser. Apple Passwords/AutoFill, Safari source sync and macOS system Quick Look are not Windows features.</p>
 <p>Your existing workspace is normally <code>%USERPROFILE%\\Gewu Insight Preview</code>. Use <strong>File &gt; Open Data Folder</strong> to locate the actual selected workspace. The selection is recorded in <code>%USERPROFILE%\\.gewu-insight\\preview-workspace.txt</code>. Program files and research data are separate.</p>
-<div class="note"><span class="callout-title">Current delivery</span>This is the source desktop workflow, without an installer. Older archived Preview builds are recovery material, not the active application. A new computer needs the matching Windows shell, Python dependencies and WebView2. This manual does not imply that every institutional login, external drag destination or Windows device has been verified.</div>
+<p>The default program folder is <code>%LOCALAPPDATA%\\Programs\\Gewu Insight</code>. Existing installation and Library selections take precedence. Updating the program does not move your Library; uninstalling retains research data.</p>
 """)
     replace_section(welcome, "Open this guide again", """
 <h2>Open this guide</h2>
-<p>Choose <strong>Help &gt; Windows Preview Guide</strong> to open this searchable local HTML manual in the Windows default application. Search filters topics; Previous and Next follow the reading order. <strong>Help &gt; Windows Preview Guide (PDF)</strong> or <strong>Print Guide</strong> opens the complete PDF for reading or printing. These files work offline; the research application remains the native desktop window.</p>
+<p>Choose <strong>Help &gt; User Guide</strong> to open this searchable local manual. Search filters topics; Previous and Next follow the reading order. Use <strong>Print Guide</strong> inside the guide to open the complete PDF for reading or printing. Both editions work offline.</p>
 <p>This Windows edition retains all 49 shared topics and the linked Product Identity chapters. macOS screenshots are omitted because their title bars, menus and platform controls do not represent Windows.</p>
 """)
 
@@ -100,10 +101,10 @@ def windows_html():
 <p><strong>Open in Default App</strong> is separate: it follows Windows file associations. Gewu Insight has no separate default-PDF-reader setting. Set the associated application in Windows when needed.</p>
 """)
     replace_topic(soup, "backup-migrate", "Back Up and Upgrade", """
-<p class="lead">Back up the selected workspace and keep the matching source and desktop shell. The executable alone is not your Library.</p>
-<h2>Create a consistent backup</h2><ol class="steps"><li>Use <strong>File &gt; Open Data Folder</strong> to find the selected workspace. Save website drafts and finish or stop background tasks.</li><li>Close the main Gewu window or choose <strong>File &gt; Exit</strong>. This stops its local service. Copy the entire workspace while it is closed, including <code>data/paper_monitor.sqlite</code>, any accompanying WAL/SHM files, managed Library/Space files, Associated Files and notes.</li><li>Preserve external folders used by Shortcuts separately. Keep the workspace-selection file and the matching source checkout, <code>.venv</code> and <code>dist/windows-preview-0.1.21</code> as recovery material.</li><li>Verify the backup opens on a separate copy before relying on it. Keep the original unchanged until the replacement has been checked.</li></ol>
+<p class="lead">Back up the selected workspace and keep the installer for your current version. The executable alone is not your Library.</p>
+<h2>Create a consistent backup</h2><ol class="steps"><li>Use <strong>File &gt; Open Data Folder</strong> to find the selected workspace. Save website drafts and finish or stop background tasks.</li><li>Close the main Gewu window or choose <strong>File &gt; Exit</strong>. This stops its local service. Copy the entire workspace while it is closed, including <code>data/paper_monitor.sqlite</code>, any accompanying WAL/SHM files, managed Library/Space files, Associated Files and notes.</li><li>Preserve external folders used by Shortcuts separately. Keep the workspace-selection file and the installer for the current version as recovery material.</li><li>Verify the backup opens on a separate copy before relying on it. Keep the original unchanged until the replacement has been checked.</li></ol>
 <p>SQLite is authoritative. Copying only JSON exports, the program folder or a database file while it is changing is not a full backup. Do not replace the active database with an older file just to address a display problem.</p>
-<h2>Upgrade the source desktop</h2><p>After a verified backup, update the matching source and shell, then reopen <strong>Start Gewu Insight.cmd</strong>. Check <strong>Help &gt; About Gewu Insight</strong>, the selected data folder, existing papers and file access. Python/interface changes load on restart; native changes need a matching shell. Current data uses schema 22. Do not open it with an older incompatible source or shell.</p>
+<h2>Update the installed application</h2><p>After a verified backup, close Gewu Insight and run the newer versioned Setup.exe. Open <strong>Gewu Insight</strong> from the Start menu, then check the selected data folder, existing papers and file access. Check the installed version in Windows <strong>Settings &gt; Apps &gt; Installed apps</strong>. Keep the previous installer and backup until verification is complete. Do not open the Library with an older incompatible version.</p>
 <h2>Browser and credential boundaries</h2><p>Bookmarks and history are in SQLite. WebView2 website data is separate, under <code>webview/browser</code> in the workspace; it is not a portable sign-in export. Expect to sign in again on another computer. Browser tabs and unsent forms are memory-only and are not restored after quitting.</p>
 <p>Metadata API keys and AI Access information can be present in workspace data. Keep full backups private. Exporting bookmarks produces bookmark HTML, not cookies, passwords or browsing history.</p>
 <h2>Transfer selected research files</h2><p>Use <a href="#desktop-copy">Make a Portable Desktop Copy</a> for a selected collection. Retain its export manifest and use Folder Loader to restore the file relationships. A portable collection is not a full backup of settings, monitor history and the database. Whole-workspace macOS-to-Windows migration requires separate validation of paths and platform files.</p>
@@ -116,7 +117,7 @@ def windows_html():
     # The Mac-specific client tutorial is not a valid Windows connection recipe.
     ai = soup.find("article", id="ai-access")
     replace_section(ai, "Example: connect Codex on macOS", """
-<h2>Connect a local MCP client on Windows</h2><ol class="steps"><li>Keep Gewu Insight running. In <strong>Settings &gt; AI Access</strong>, enable access and create a named connection with only the required collections and operations.</li><li>Use <strong>Copy MCP Configuration</strong>. Copy the generated command, arguments and environment values into your client's local STDIO server configuration. Keep each path, including spaces, as one argument.</li><li>The source desktop uses the project <code>.venv/Scripts/python.exe</code> and <code>scripts/gewu_mcp.py</code>. Use the exact generated paths rather than a macOS <code>.venv/bin/python</code> example.</li><li>Preserve <code>GEWU_API_URL_FILE</code> when generated. It follows the current local port after an App restart. Keep <code>GEWU_API_TOKEN</code> private; do not paste it into a chat. The token is shown only at creation.</li><li>Reload the client's MCP connection. Verify a permitted collection before requesting files or writes. Moving the source checkout requires a newly generated configuration.</li></ol>
+<h2>Connect a local MCP client on Windows</h2><ol class="steps"><li>Keep Gewu Insight running. In <strong>Settings &gt; AI Access</strong>, enable access and create a named connection with only the required collections and operations.</li><li>Use <strong>Copy MCP Configuration</strong>. Copy the generated command, arguments and environment values into your client's local STDIO server configuration. Keep each path, including spaces, as one argument.</li><li>The installed application provides its own Python runtime and MCP adapter. Use the exact generated paths; no separate Python installation is needed.</li><li>Preserve <code>GEWU_API_URL_FILE</code> when generated. It follows the current local port after an App restart. Keep <code>GEWU_API_TOKEN</code> private; do not paste it into a chat. The token is shown only at creation.</li><li>Reload the client's MCP connection. Verify a permitted collection before requesting files or writes. Moving the application or Library requires a newly generated configuration.</li></ol>
 <p>The client must run where it can access the adapter's local files. A returned file path is not a cloud attachment. This manual does not change your AI client's configuration or its model settings.</p>
 """)
     # Remaining h2 after the replaced tutorial is retained (where present).
@@ -140,8 +141,8 @@ def windows_html():
     startup = soup.find("article", id="startup")
     startup.select_one(".lead").string = "The Windows shell starts a local service for your selected workspace and opens the research interface when it is ready."
     replace_section(startup, "Normal startup", """
-<h2>Normal startup</h2><p>Launch <strong>Start Gewu Insight.cmd</strong> and wait for the startup screen to finish. Use one window for a workspace; its lock prevents a second desktop process from writing to the same Library. If the selected database is missing, startup stops instead of silently creating an empty replacement.</p>
-<p>The current source desktop uses the matching 0.1.21 shell and WebView2. Keep the source checkout and <code>.venv</code> available. Opening a recovery copy of an older installed Preview is not a way to launch the current version.</p>
+<h2>Normal startup</h2><p>Open <strong>Gewu Insight</strong> from the Start menu and wait for the startup screen to finish. Use one window for a workspace; its lock prevents a second desktop process from writing to the same Library. If the selected database is missing, startup stops instead of silently creating an empty replacement.</p>
+<p>The installed application includes its runtime dependencies. Keep the selected Library available. If startup fails after an interrupted installation, close the application and rerun its versioned Setup.exe.</p>
 """)
     replace_section(startup, "Automatic local-server recovery", """
 <h2>Automatic local-server recovery</h2><p>The Windows shell retries an unexpectedly stopped service within a bounded restart budget. Workspace-renderer recovery is also bounded. Repeated failures show a recovery message instead of restarting indefinitely.</p>
@@ -158,7 +159,7 @@ def windows_html():
     # claims above receive explicit replacements rather than blind word swaps.
     substitutions = [
         ("Back Up or Move to Another Mac", "Back Up and Upgrade"),
-        ("Gewu Insight > About Gewu Insight", "Help > About Gewu Insight"),
+        ("Gewu Insight > About Gewu Insight", "the guide's About Gewu Insight section"),
         ("Setting >", "Settings >"),
         ("Literature Data Source", "Literature Data Sources"),
         ("Open in Preview", "Open in Default App"),
@@ -178,13 +179,13 @@ def windows_html():
         ("Preview, Download and Website first", "Open in Default App, Download and Open Website first"),
         ("local project", "selected local workspace"),
         ("managed project layout", "selected workspace layout"),
-        ("and inside the App resources", "and in the source checkout"),
+        ("and inside the App resources", "and in the application folder"),
         ("macOS default browser", "Windows default browser"),
         ("default web browser selected in macOS", "default web browser selected in Windows"),
         ("Open in Safari", "Open in Default Browser"),
         ("WebKit", "WebView2"),
         ("WKDownload", "Browser download"),
-        ("Gewu Insight.app", "Start Gewu Insight.cmd"),
+        ("Gewu Insight.app", "Gewu Insight from the Start menu"),
         ("logs/paper_monitor_launcher.log", "logs/windows-launcher.log"),
         ("⌘Q", "File > Exit"), ("⌘L", "Ctrl+L"), ("⌘F", "Ctrl+F"),
         ("⌘", "Ctrl+"), ("⇧", "Shift+"),
@@ -211,7 +212,7 @@ def windows_html():
         ("A secure-connection error such as", "A secure-connection error can reflect network, VPN, routing, system time or certificate problems. Restore the connection, then reload once. The error alone does not prove an expired site certificate. Certificate verification remains enabled."),
         ("Browser website data and its disposable favicon cache are managed", "Browser website data is under webview/browser in the selected Windows workspace. It is separate from SQLite bookmarks/history and Monitor caches. Do not assume that copying it transfers usable sign-ins to another computer."),
         ("A failed database deletion restores the moved file when macOS", ""),
-        ("Choose Help > Contact Us", "Choose Help > Contact Us to open info@gewu-insight.com in the Windows default email application. Write and send the message yourself. Include Windows Preview 0.1.21, the affected workflow and steps to reproduce; omit passwords, tokens and private research data."),
+        ("Choose Help > Contact Us", "Choose Help > Contact Us to open info@gewu-insight.com in your default email application. Include the installed version, affected workflow and steps to reproduce; omit passwords, tokens and private research data. Review and send the message yourself."),
         ("A Library copy creates another reference", "A Library copy creates another placement of the same paper. Windows secondary main-file locations use .lnk shortcuts, and secondary Associated Files locations point to the canonical bundle. Versions and attachments remain associated with that paper; a placement copy does not create another unrelated identity."),
         ("Drag a card's file icon or filename", "Drag a Paper Files icon or filename to File Explorer or a compatible application to copy or open the real file. Library file icons use the same native drag. The receiving application determines its accepted formats and drag behavior; not every external destination has been verified."),
         ("Local PDFs still open in Preview", "Local files open through Windows file associations; File Explorer, the built-in preview and downloads keep their own actions. Browser's explicit Open in Default Browser opens the Windows default browser with its separate website session. Changing Website Links does not transfer cookies or existing tabs."),
@@ -223,7 +224,7 @@ def windows_html():
         ("Right-click links for Open Link in New Tab", "Right-click a webpage link and choose Open Link in New Tab. Bookmarks, Favorites and History provide Open in New Tab in their context menus. Ordinary clicks open in the current tab; new-window links can create another tab."),
         ("Ctrl+F opens Find on Page", "Ctrl+F opens Find on Page. Enter selects the next match and Shift+Enter the previous match. Browser is part of the Windows desktop application; a separately hosted web UI does not embed a second browser engine."),
         ("Choose Loader > Open Loader . Outside Browser", "Choose File > Library Loader or Loader > Open Loader. In Browser, Ctrl+L focuses its address field; use the menu to open Loader."),
-        ("Help > Contact Us opens your default email application's draft", "Help > Contact Us opens info@gewu-insight.com using the Windows default email handler. If none is configured, use the address in your preferred mail service. Include the version, operation and error; omit passwords and tokens. Review and send the message yourself."),
+        ("Help > Contact Us opens your default email application's draft", "Help > Contact Us opens info@gewu-insight.com in the Windows default email application. If none is configured, use your preferred mail service. Include the installed version, operation and error; omit passwords and tokens. Review and send the message yourself."),
         ("Choose Settings > Literature Data Sources , or press", "Choose Settings > Literature Data Sources. The dialog provides provider settings and separate connection tests."),
     ]
     for prefix, replacement in corrections:
@@ -291,7 +292,7 @@ def windows_html():
     # Resolve subsection links into their owning topic instead of falling home.
     javascript = javascript.replace("return topicById.has(id) ? id : 'welcome';", "return topicById.has(id) ? id : (document.getElementById(id)?.closest('.help-topic')?.id || 'welcome');")
     script.string = javascript
-    soup.title.string = "Gewu Insight User Guide - Windows Preview 0.1.21"
+    soup.title.string = f"Gewu Insight User Guide - Windows {VERSION}"
     return soup, common
 
 
@@ -361,15 +362,15 @@ def build_pdf(soup, common):
                                       fontName="GuideBold" if i < 2 else "Guide") for i in range(3)]
     story = [Spacer(1, 55), Paragraph("Gewu Insight", headings[1]),
              Paragraph("User Guide", headings[1]),
-             Paragraph(f"Windows Preview {VERSION}", headings[2]),
-             Paragraph(f"Desktop from local source<br/>{EDITION}", body),
+             Paragraph(f"Windows {VERSION}", headings[2]),
+             Paragraph(EDITION, body),
              Spacer(1, 24), Paragraph("Library · Paper Files · Publications<br/>Journal · Subject · Author · Browser · AI Access", body),
              Spacer(1, 18), Paragraph("A complete Windows edition of the shared 49-topic manual. Interface names match the Windows application. The HTML edition supports topic search; this PDF has linked contents and bookmarks.", body),
              PageBreak(), Paragraph("Contents", headings[1]), toc, PageBreak()]
 
     # Reuse the established semantic hierarchy and diagram/table conversion.
     # The temporary source is documentation-only and lives in the ignored QA dir.
-    work = ROOT / "tmp/user-guide-20261005"
+    work = ROOT / "tmp/windows-user-guide"
     work.mkdir(parents=True, exist_ok=True)
     semantic_source = BeautifulSoup(str(soup), "html.parser")
     for img in semantic_source.select("img[data-pdf-image]"):
@@ -486,7 +487,7 @@ def build_pdf(soup, common):
 
     story.extend(blocks(semantic.body))
     doc = GuidePDF(str(PDF), pagesize=(595,842), leftMargin=44, rightMargin=44,
-                   topMargin=43, bottomMargin=43, title=f"Gewu Insight User Guide - Windows Preview {VERSION}",
+                   topMargin=43, bottomMargin=43, title=f"Gewu Insight User Guide - Windows {VERSION}",
                    author="Gewu Insight", allowSplitting=True)
     def footer(canvas, document):
         canvas.saveState()
@@ -500,6 +501,13 @@ def build_pdf(soup, common):
 
 
 def main():
+    global VERSION
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", default=VERSION)
+    args = parser.parse_args()
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):
+        parser.error("--version must have the form major.minor.patch")
+    VERSION = args.version
     soup, common = windows_html()
     HTML.write_text(str(soup), encoding="utf-8")
     build_pdf(soup, common)
