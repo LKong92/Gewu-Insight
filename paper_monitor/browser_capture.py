@@ -39,6 +39,29 @@ def identifier(value: str) -> tuple[str, str]:
     return "", ""
 
 
+def _recheck_pdf_doi_ellipsis(found, reader, pdf_path, metadata_title, page_texts, layout_titles):
+    """Confirm a displaced ellipsis from this Browser PDF's same title page."""
+    value = found.get("identifier", "")
+    if found.get("kind") != "doi" or found.get("source") != "pdf_title_page" or not value.endswith("…"):
+        return found
+    from . import ui_server as ui
+    titles = ui.article_title_candidates_for_identifier({}, metadata_title, pdf_path, layout_titles=layout_titles)
+    title_page = ui.title_page_text_for_identifier(page_texts, titles)
+    if not title_page:
+        return found
+    index = next(i for i, text in enumerate(page_texts) if clean_text(text) == title_page)
+    try:
+        # PDF drawing order can join a footer DOI to a distant pull quote.
+        # Reuse the validated reader; do not consult URLs or reference pages.
+        layout_text = reader.pages[index].extract_text(extraction_mode="layout") or ""
+    except Exception:
+        return found
+    candidates = ui.doi_candidates_from_text(layout_text)
+    if candidates == [value[:-1]]:
+        return {**found, "identifier": candidates[0]}
+    return found
+
+
 def persistent_url(value: str) -> str:
     try:
         return history_url(value) or ""
@@ -169,6 +192,7 @@ class BrowserCaptureService:
             metadata_title, all_pages = ui.pdf_identifier_page_texts(capture.path, reader=reader)
             found = ui.extract_identifier_from_pdf_or_title(capture.path, {}, title_lookup=lambda _: {},
                 pdf_evidence=(metadata_title, all_pages, layouts))
+            found = _recheck_pdf_doi_ellipsis(found, reader, capture.path, metadata_title, all_pages, layouts)
             capture.pdf_identifier = (found.get("kind", ""), found.get("identifier", ""))
             titles = first_page.get("titles", layouts)
             pages = all_pages[:1]
