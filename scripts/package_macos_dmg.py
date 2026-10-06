@@ -229,8 +229,8 @@ Your selected Gewu Database folder contains data, reports, config and backups.
 The saved location is kept in ~/Library/Application Support/Gewu Insight.
 Logs are in ~/Library/Logs/Gewu Insight; browser data and caches remain in macOS Library.
 Replacing the App does not replace these files. Removing the App retains your data.
-The bundled User Guide describes the source-folder edition in its installation
-section; follow this file for this standalone preview's installation and updates.
+The bundled User Guide explains the separate App and Gewu Database locations,
+first launch, backup, updates and migration. Follow this file for package-specific details.
 Optional Word conversion and TeX exports may require external tools.
 
 Source: LKong92/Gewu-Insight, main commit {commit}

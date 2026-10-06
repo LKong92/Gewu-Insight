@@ -782,11 +782,12 @@ class UserGuideTests(unittest.TestCase):
                 "/user-guide-assets/author-add.png",
                 "/user-guide-assets/about-window.png",
                 "/user-guide-assets/user-guide-window.png",
+                "/user-guide-assets/database-location.png",
             },
         )
 
         screenshot_figures = soup.select("figure.guide-screenshot")
-        self.assertEqual(len(screenshot_figures), 37)
+        self.assertEqual(len(screenshot_figures), 38)
         self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:

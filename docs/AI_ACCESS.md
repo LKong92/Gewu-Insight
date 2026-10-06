@@ -18,6 +18,21 @@ Create a separate named Gewu connection for each client to manage its collection
 permissions, activity, expiry and revocation independently. Client model login
 or API keys are separate from the Gewu connection token.
 
+## Existing clients after an App or database move
+
+A verified workspace migration preserves AI connections, their collection scope
+and permissions. A changed database folder does not itself require a new token.
+Keep the updated App open on the intended database; check **Gewu Insight >
+Database Location…** before reconnecting clients.
+
+If the runtime, adapter path or local port changed, update the existing client's
+`command`, `args` and `GEWU_API_URL` using the installed App's generated values.
+Retain that client's own connection token and unrelated configuration. If those
+values did not change, they can remain unchanged. The MCP command never points
+to the research database folder. Reconnect, list tools and perform a read-only
+lookup of a familiar authorized Gewu Key and its Paper Files; a new paper or
+saved test analysis is not required to verify migration.
+
 ## Methodology: a stateful information infrastructure
 
 Gewu is a persistent research workspace shared by people and authorized AI
@@ -140,9 +155,11 @@ across desktop, CLI and IDE clients.
 | Command | `<GEWU_ROOT>/.venv/bin/python` |
 | Arguments, one entry | `<GEWU_ROOT>/scripts/gewu_mcp.py` |
 
-`<GEWU_ROOT>` means the absolute path to your Gewu program folder, which contains
-`scripts/gewu_mcp.py`. It is not the Library folder or the `.app` bundle. This
-setup does not require a fixed installation location. Replace the whole
+`<GEWU_ROOT>` in these source-installation examples is the absolute path to the
+code folder containing `scripts/gewu_mcp.py`, not `Gewu Database` or Library.
+A standalone package can provide its runtime and adapter from inside the App;
+use its generated paths rather than inventing a project `.venv`. This setup
+does not require a fixed installation location. Replace the whole
 placeholder, including angle brackets; Codex will not expand it automatically.
 The command example assumes a project-local `.venv`. If your Python executable
 is elsewhere, use the complete `command` from **Copy MCP Configuration** instead.

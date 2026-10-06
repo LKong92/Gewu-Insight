@@ -662,7 +662,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Version 1.0.0 · Build 1 · October 5, 2026 · Current workflow edition</p>
+          <p class="guide-revision">Version 1.0.0 · Build 1 · October 6, 2026 · Database and workflow edition</p>
 
           <p><strong>Source-available research software.</strong> The Gewu Insight Academic and Non-Commercial Research License permits downloading, installing, building, running and modifying the software for academic/non-commercial research. Original and modified versions, derivative works and patches may be shared free of charge for those purposes under the same research-use terms, with retained notices and clearly identified modifications. Public research forks and pull requests within those terms need no separate permission. Commercial use, commercial redistribution, sublicensing and integration into commercial products or services require separate prior written authorization. Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved except for those express permissions. Read the complete <a href="https://github.com/LKong92/Gewu-Insight/blob/main/LICENSE">LICENSE</a>, also included with the local distribution and inside the App resources, before use. This is not an open-source license.</p>
 
@@ -694,7 +694,7 @@
 
           <h2>Five design commitments</h2>
           <div class="invariant-list">
-            <div><strong>Local ownership</strong><span>Your live database and managed research files remain in the local project. Online services contribute evidence; they do not own the workspace.</span></div>
+            <div><strong>Local ownership</strong><span>Your live database and managed research files remain in your selected local Gewu Database folder, separate from the App. Online services contribute evidence; they do not own the workspace.</span></div>
             <div><strong>Visible evidence</strong><span>PDFs and attachments remain real files that Finder, Preview, and other applications can inspect.</span></div>
             <div><strong>Continuity over time</strong><span>A preprint, later DOI, publication version, annotations, and personal contexts can accumulate around one persistent paper object.</span></div>
             <div><strong>Explicit state and provenance</strong><span>Completed, empty, partial, failed, downloaded, imported, and retried are different states. Sources and operational outcomes should remain visible.</span></div>
@@ -863,10 +863,19 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="first-session" data-group="Start Here" data-title="Your First Session" data-keywords="launch add paper open preview initial steps quick start PDF DOI arXiv monitor cataloged organized file-backed Gewu Key resource backup">
+        <article class="help-topic guide-topic" id="first-session" data-group="Start Here" data-title="Your First Session" data-keywords="database choose existing create new Applications Dock launch add paper open preview initial steps quick start PDF DOI arXiv monitor cataloged organized file-backed Gewu Key resource backup">
           <p class="topic-kicker">Start Here</p>
           <h1>Set Up Your First Session</h1>
           <p class="lead">Start with one paper, confirm its identity and context, then inspect or add a local file when the work is file-backed.</p>
+
+          <h2 id="first-database">Open your database first</h2>
+          <ol class="steps">
+            <li><strong>Open <span class="ui">Gewu Insight</span> from Applications.</strong> A configured installation remembers its database and opens it automatically. Updating the App does not require another Library import.</li>
+            <li><strong>If <span class="ui">Choose Your Gewu Database</span> appears, select the appropriate action.</strong> Use <span class="ui">Open Existing Database</span> for an existing collection and select its enclosing <code>Gewu Database</code> folder, which contains <code>data/paper_monitor.sqlite</code>. Select the whole folder, not the SQLite file or the inner <code>data</code> folder.</li>
+            <li><strong>Use <span class="ui">Create New Database</span> only to start a new collection.</strong> Choose a new folder name at a local location you control, such as <code>~/Desktop/Gewu Database</code>. The chooser does not replace an existing folder. This is separate from creating a Space inside an existing Library.</li>
+            <li><strong>Check <span class="ui">Gewu Insight &gt; Database Location…</span>.</strong> It displays the active research folder; <span class="ui">Show in Finder</span> reveals it. Keep that folder together when making a backup.</li>
+          </ol>
+          <p>If the remembered database is unavailable, <span class="ui">Locate Your Gewu Database</span> offers to open the existing folder or quit. Reconnect its disk or locate the intended folder; the App does not silently create an empty replacement. For an older installation whose data is still inside the source project, follow <a href="#source-workspace-migration">the one-time migration</a> first. Moving a populated database to a different path needs its file references migrated too.</p>
 
           <h2>Choose your starting route</h2>
           <p>You do not need to prepare a perfect record before beginning. Start from the strongest evidence you already have, then let the paper object become richer over time.</p>
@@ -1139,7 +1148,7 @@
           <table class="plain-table">
             <tr><th>Storage mode</th><th>Meaning</th><th>Safe expectation</th></tr>
             <tr><td>Managed</td><td>The active stored path is inside the Gewu Insight project data area.</td><td>Move, classify, replace, or delete it through the app so paths and relationships change together.</td></tr>
-            <tr><td>Linked</td><td>The active stored path remains outside the managed project data area.</td><td>Availability depends on that external path, and the app should not silently reorganize it.</td></tr>
+            <tr><td>Linked</td><td>The active stored path remains outside the managed research workspace.</td><td>Availability depends on that external path, and the app should not silently reorganize it.</td></tr>
           </table>
 
           <p>A resource can be managed while retaining a separate external source path as provenance. The existence of that source path does not by itself make the managed copy a linked resource, and the external original remains protected.</p>
@@ -1290,7 +1299,7 @@
           <h2>Back up one coherent research asset</h2>
           <p>A reliable backup contains the SQLite database and the managed file roots from the same closed application state. Copying only the database preserves descriptions without every artifact; copying only folders preserves bytes without all identities, relationships, classifications, and operation history. A portable desktop copy is useful for sharing visible folder material, but it is not automatically a complete live-workspace backup.</p>
 
-          <div class="important"><span class="callout-title">Before a major update or migration</span>Quit Gewu Insight, preserve the entire project data set, verify the backup can be read, then update the software in place. Do not create a fresh empty database and attempt to reconstruct the workspace from export files.</div>
+          <div class="important"><span class="callout-title">Before a major update or migration</span>Quit Gewu Insight, preserve the complete selected Gewu Database and any external linked originals, verify the backup can be read, then update the software while keeping that database. Do not create a fresh empty database and attempt to reconstruct the workspace from export files.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#recycle">Delete and Recover Items</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
@@ -2056,40 +2065,59 @@
           <h1>Back Up or Move to Another Mac</h1>
           <p class="lead">A reliable transfer preserves both the SQLite database and the managed file roots. The app bundle alone is not your library.</p>
 
+          <h2 id="app-and-database">Know what you are backing up</h2>
+          <table class="plain-table">
+            <tr><th>Location</th><th>What it contains</th><th>What an update does</th></tr>
+            <tr><td><code>/Applications/Gewu Insight.app</code></td><td>The daily application and its packaged resources, including Print Guide.</td><td>Replace or update the App while it is closed; the selected research folder stays in place.</td></tr>
+            <tr><td>Your selected <code>Gewu Database</code></td><td><code>data</code>, <code>reports</code>, <code>config</code> and <code>backups</code>. This includes SQLite and managed research files.</td><td>Continue using the same database, Gewu Keys, classifications, placements and analyses.</td></tr>
+            <tr><td>A source checkout, when used</td><td>Development code, assets and the local Python environment.</td><td>Preserve local edits and update code separately. A source-backed App still needs this checkout and its configured environment.</td></tr>
+          </table>
+          <p>Find the actual research folder with <span class="ui">Gewu Insight &gt; Database Location…</span>. A desktop folder named <code>Gewu Database</code> is one possible choice, not a required path for everyone. Removing a Dock shortcut or replacing the App does not delete this folder. A GitHub checkout or App-only copy is not a research-data backup.</p>
+
           <h2>Create a full backup</h2>
           <ol class="steps">
-            <li><strong>Quit Gewu Insight with <span class="key">⌘Q</span>.</strong> Wait until background refresh or download work has stopped. Closing a window is not the same as quitting; also stop any separately launched local UI or CLI process before copying its database.</li>
-            <li><strong>Copy the complete project directory.</strong> This is the safest recovery unit because it keeps <code>data</code>, <code>reports</code>, <code>config</code>, the app source, and managed paths together.</li>
-            <li><strong>Preserve directory names and permissions.</strong> Do not separate SQLite from the managed file roots it describes.</li>
-            <li><strong>Store the backup separately.</strong> Use a second disk or a versioned backup location.</li>
+            <li><strong>Finish or stop active work, then quit with <span class="key">⌘Q</span>.</strong> Finish unsaved webpage forms first. Closing a window is not the same as quitting; any separately started Gewu service must also stop before its database is copied.</li>
+            <li><strong>Copy the complete selected <code>Gewu Database</code>.</strong> Include its hidden files, <code>data</code>, <code>reports</code>, <code>config</code> and existing <code>backups</code>. SQLite and the files it describes must come from the same closed state.</li>
+            <li><strong>Include any external files still used by links.</strong> A Finder alias does not contain its target's bytes. Preserve those originals and record their paths. Historical import-source paths are provenance, not proof that every old source is still an active dependency.</li>
+            <li><strong>Preserve macOS file information.</strong> Keep filenames, permissions, symbolic links, Finder aliases and resource forks. Use a backup method that preserves them. If a USB filesystem cannot hold large files or these attributes, use a suitable Mac backup container on the disk rather than reformatting it or splitting individual research files.</li>
+            <li><strong>Keep software and machine configuration recoverable.</strong> Before an upgrade, also retain the installed App, any source checkout and local edits, database-location preference and relevant AI-client configuration. They are separate from the research folder.</li>
+            <li><strong>Verify and store separately.</strong> Check the copied SQLite, file list and representative PDF/Markdown files before relying on the backup. Use another disk or a versioned backup location, outside the live research folder. Keep full backups private because they can include service credentials and connection tokens.</li>
           </ol>
+          <p>A ZIP or filesystem copy that loses alias information is not an equivalent replacement for a verified Mac backup. A <code>.sparsebundle</code> backup container can be mounted in Finder to inspect its contents; keep the container intact and eject its mounted volume after use.</p>
 
           <h2 id="upgrade-installation">Back Up and Upgrade</h2>
           <ol class="steps">
-            <li><strong>Finish or stop active work, then quit and back up.</strong> Preserve SQLite and every managed file root together, including configured roots outside the project. Finish unsaved webpage forms; open Browser tabs are not restored after quitting.</li>
-            <li><strong>Keep the whole installation together.</strong> Gewu uses a project folder containing the App, Python source, configuration and assets. The <code>.app</code> alone is not a standalone installation. Preserve local source edits before merging a GitHub update; never replace your research folders with another installation's empty <code>data</code> or <code>reports</code> folders.</li>
-            <li><strong>Install or build the newer application while the current App is stopped.</strong> A downloaded source checkout is not a verified App package. Native-code or bundled-resource changes need the provided local build workflow before launch. A Python/backend-only update needs a restart to load the changed source.</li>
-            <li><strong>Start the new version once.</strong> Required database schema changes run automatically against the existing SQLite database.</li>
-            <li><strong>Verify before deleting the backup.</strong> Check the Library, a Space, a default PDF, another Paper Files version, an attachment, My Publications and a monitor. Open <span class="ui">Help &gt; User Guide</span> and <span class="ui">Print Guide</span> to confirm that both manual editions came with the update.</li>
+            <li><strong>Note the active database location, then quit and back up.</strong> Preserve the research folder and recoverable software together.</li>
+            <li><strong>Update the existing installation.</strong> A standalone App includes its own runtime. A source-backed installation uses its configured checkout and Python environment; preserve local edits when updating GitHub code and retain its local startup configuration. Downloading source alone does not update a separately packaged App.</li>
+            <li><strong>Install matching native resources while the App is stopped.</strong> Native-code or bundled-resource changes require a matching App build, including the fixed-layout guide. A source-backed Python-only update needs a restart to load the changed code. Keep the daily entry in Applications; do not launch an archived App as a second service.</li>
+            <li><strong>Start once and confirm <span class="ui">Database Location…</span>.</strong> Continue with the same research folder. The App checks database identity, version compatibility and whether another process already has it open. Before a required schema upgrade, it saves a SQLite snapshot under the workspace's <code>backups</code>; this snapshot is not a full research-file backup.</li>
+            <li><strong>Verify before retiring the old installation.</strong> Check Library, a Space, a default PDF, another Paper Files version, an analysis, My Publications and a monitor. Check <span class="ui">Help &gt; User Guide</span> and <span class="ui">Print Guide</span>. Quit and reopen once to confirm the saved database location and any existing MCP connection.</li>
           </ol>
-          <p>The local build uses ad-hoc signing and does not require an Apple developer certificate, Team ID or keychain password. It verifies the staged App before replacing the stopped installation and restores the previous bundle if final installation verification fails. This does not mean the package is notarized by Apple. Build and packaging instructions are supplied in <code>docs/DEVELOPMENT.md</code> and <code>DISTRIBUTION.md</code>; ordinary use does not require running those tools.</p>
+          <p>The local build uses ad-hoc signing and does not require an Apple developer certificate, Team ID or keychain password. This is a local integrity signature, not Apple notarization. Build and packaging details are in <code>docs/DEVELOPMENT.md</code> and <code>DISTRIBUTION.md</code>. Retain any source-backed startup adapter when rebuilding; a generic build does not automatically reproduce a machine's private configuration.</p>
+          <p>Schema migration updates database structure; it does not rebuild your collection from exports or require another Library import. Later ordinary App/source updates keep using the same research folder without repeating the directory migration.</p>
 
-          <div class="note"><span class="callout-title">Note</span>Schema migration updates database structure; it is not a reason to rebuild the database or re-import the Library. Keep the pre-upgrade backup until the new version has been checked.</div>
+          <h2 id="source-workspace-migration">Move an older source-folder installation once</h2>
+          <p>Older installations kept <code>data</code> and <code>reports</code> inside the source project. Use the supplied <code>docs/SOURCE_DATA_MIGRATION.md</code> procedure to separate them. A maintainer or local AI coding assistant can perform the backup, protect local edits, update the code, copy the workspace to your chosen new folder, verify it and configure the daily App. Confirm the destination before migration; no new DMG or fresh Library is required.</p>
+          <p>The migration must update managed absolute paths and Finder aliases as well as copy SQLite and files. Check paper and resource counts, Gewu Keys, classifications, Default choices, placements, analyses and permissions. Record any missing files that predate migration separately from new failures. Keep the original recoverable until the new App, real Paper Files, MCP and a normal restart have been checked.</p>
+          <p>After verification, the old research folders can remain in a clearly labelled archive outside the source checkout. Keep them as recovery material; do not open the old App against the upgraded database or use the archive as another daily collection. <a href="#dock-entry">Update the Dock shortcut</a> when the App's location changes.</p>
 
-          <h2>Move to another Mac</h2>
+          <h2>Move to another Mac or another folder</h2>
           <ol class="steps">
-            <li><strong>Install or update Gewu Insight on the destination Mac.</strong></li>
-            <li><strong>Keep the destination app closed.</strong></li>
-            <li><strong>Restore the matching database and managed file roots together.</strong> Do not mix a new database with an unrelated old Associated Files tree.</li>
-            <li><strong>Start the app and test representative works.</strong> Open a paper, an older version, and an attachment; verify My Publications and one monitor.</li>
+            <li><strong>Prepare a verified, closed backup and a compatible App.</strong> Keep both the source and destination App closed during the copy.</li>
+            <li><strong>Move the complete workspace through the migration procedure.</strong> A different username, disk or parent folder can change absolute paths. Merely dragging the folder or choosing it in Open Existing Database does not rewrite those references.</li>
+            <li><strong>Open the verified destination workspace.</strong> In <span class="ui">Open Existing Database</span>, select the folder containing <code>data/paper_monitor.sqlite</code>. A remembered location is a local machine preference; configure the new machine for its actual path rather than copying another Mac's path blindly.</li>
+            <li><strong>Check real records and files, then restart.</strong> Verify a Space, versions, an attachment, saved analysis, My Publications, monitor state and the database location. Reconnect AI clients with their actual runtime paths if needed.</li>
           </ol>
+
+          <h2 id="restore-workspace">Restore without losing newer work</h2>
+          <p>Quit the current App and first preserve the current workspace, especially if you have added papers or notes since the backup. Restore a matching software/database/files set; do not replace only SQLite or combine unrelated Associated Files trees. An old App must not open a database upgraded by a newer version. If the restored location differs, migrate its file references before using it. Verify the result before deleting any retained copy.</p>
 
           <h2>Transfer only part of a Library</h2>
           <p>Use <span class="ui">Make Copy Desktop</span> on the source Mac, move the complete exported folder, then use Folder Loader on the destination Mac. Keep its verified manifest intact.</p>
 
           <h2>Browser and credential backup boundaries</h2>
-          <p>The project database includes Browser bookmarks, folders, history, and saved sidebar preferences. A bookmark HTML export transfers only bookmarks, not history or research papers. Open webpage tabs and unsubmitted forms are memory-only and are not restored after quitting.</p>
-          <p>WebKit cookies, sign-ins and cache live in a macOS-managed profile outside this project. Project copies and bookmark exports do not transfer it; expect to sign in again on another Mac. Apple Passwords and passkeys remain under macOS/iCloud management. Metadata API keys saved in SQLite travel with the database: keep full backups private.</p>
+          <p>The selected database includes Browser bookmarks, folders, history, and saved sidebar preferences. A bookmark HTML export transfers only bookmarks, not history or research papers. Open webpage tabs and unsubmitted forms are memory-only and are not restored after quitting.</p>
+          <p>WebKit cookies, sign-ins and cache live in a macOS-managed profile outside Gewu Database. Research-folder copies and bookmark exports do not transfer it; expect to sign in again on another Mac. Apple Passwords and passkeys remain under macOS/iCloud management. Metadata API keys saved in SQLite travel with the database: keep full backups private.</p>
 
           <div class="important"><span class="callout-title">Important</span>Never migrate by copying only <code>paper_monitor.sqlite</code> or only the visible Library folder. Either choice leaves half of the managed state behind.</div>
 
@@ -2501,6 +2529,11 @@
           </ol>
           <p>Opening Details, identifying or cancelling imports nothing. Save reuses an existing active Library or Space placement, preferring the selected occurrence of that same paper. Attaching a PDF does not add a root-level entry. To add another location, explicitly choose and confirm its folder. Papers with no active placement use the folder saved in <a href="#add-to-library-settings">Setting &gt; Add to Library</a>, initially <span class="ui">Library / unsorted</span>, unless you confirm another folder. An unavailable saved default falls back to unsorted. Review creates no placement; the destination is checked again on Save. Paper Files refreshes immediately. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. <span class="ui">Show in Library</span> selects the saved occurrence. Browser keeps the webpage.</p>
 
+          <h2 id="browser-notice-save">Save a correction or retraction under its original article</h2>
+          <p>A normal article PDF that resolves to an existing work can be attached to that work, including one with both DOI and arXiv identifiers or placements in several folders. Check the title and Gewu Key in Details, keep <span class="ui">Include this PDF in Paper Files</span> selected and save. The selected placement and existing identity are reused.</p>
+          <p>When Browser recognizes a correction, retraction, expression of concern, withdrawal or addendum, it resolves the explicitly related original article during review. Details shows the original that will receive the file. If that original is not yet cataloged and its DOI can be resolved, Save can create the original's record and attach the notice there. The notice retains its own metadata and file type; it does not receive a separate research-paper Gewu Key or replace the article's automatic Default.</p>
+          <p>If the original cannot be determined, use an existing original's <span class="ui">Gewu Key</span> and click <span class="ui">Use Key</span>. Review the target and confirm the explicit attachment when prompted. <span class="ui">Automatic</span> returns to automatic identification. Resolve missing or conflicting evidence before saving to avoid attaching a notice to the wrong paper. Opening Details or reviewing a target does not itself save anything. MCP and Journal Monitor retain their own <a href="#monitor-publication-updates">notice-import workflows</a>.</p>
+
           <h2 id="browser-science-epdf">Save a Science ePDF already open in Browser</h2>
           <p>Science's online ePDF reader displays the PDF inside a webpage. Once the document has loaded, <span class="ui">Save to Gewu</span> can read that reader's original PDF, including pages whose download control is an icon. This is the article file, not a screenshot or a printout of the webpage.</p>
           <ol class="steps">
@@ -2886,6 +2919,11 @@
             <li><strong>Review and continue.</strong> Inspect the note in Paper Files. In another task, retrieve that same paper and explicitly read the saved note before continuing. Each session works with the current authorized state.</li>
           </ol>
           <p>These steps can be combined into a scripted workflow or repeated over a selected collection. Pagination and bounded reads help control how much material is retrieved; they do not guarantee model accuracy or a particular speed. Review the analysis against its cited sources.</p>
+          <h2 id="ai-after-migration">Keep AI connections after an App or database move</h2>
+          <p>Codex, DeepSeek Harness, Claude Code and other compatible clients connect to the same running Gewu service. Moving research data through a verified migration preserves connection records, their scope and permissions; it does not require a new token merely because the database folder changed.</p>
+          <p>Keep the updated App open on the intended database. If the adapter's code path, Python executable or service port changed, update the existing client's <code>command</code>, <code>args</code> and <code>GEWU_API_URL</code> from the installed App's configuration, preserving its own connection token and other client settings. If those values did not change, they can remain as they are. Do not point the MCP command at the database folder.</p>
+          <p>After reconnecting, list the available tools and perform a read-only lookup of a familiar authorized paper. Check its Gewu Key and available Paper Files. This verifies the existing collection without creating a new paper, changing grants or saving a test analysis.</p>
+
           <h2>Example: connect Codex on macOS</h2>
           <p>This example connects a local Codex client to Gewu Insight on the same Mac. Keep Gewu running. Create a connection named <span class="ui">Codex</span> using the steps above. Enable <span class="ui">Read PDF, attachment and note contents</span> to read full text; metadata-only access cannot read PDFs. Enable <span class="ui">Add new Markdown analyses to Paper Files</span> only when you also want Codex to save analyses.</p>
           <ol>
@@ -2902,7 +2940,7 @@
             <tr><td>Command</td><td><code>&lt;GEWU_ROOT&gt;/.venv/bin/python</code></td></tr>
             <tr><td>Arguments: one entry</td><td><code>&lt;GEWU_ROOT&gt;/scripts/gewu_mcp.py</code></td></tr>
           </table>
-          <div class="note"><span class="callout-title">What &lt;GEWU_ROOT&gt; means</span><code>&lt;GEWU_ROOT&gt;</code> is a placeholder for the absolute path to your Gewu program folder: the folder containing <code>scripts/gewu_mcp.py</code>. It is not the Library folder or the <code>.app</code> bundle. This setup does not require one fixed installation location. Replace the entire placeholder, including the angle brackets, before saving; Codex will not expand it automatically. The command example assumes a project-local <code>.venv</code>. If your Python executable is elsewhere, use the complete <code>command</code> from <span class="ui">Copy MCP Configuration</span> instead. Its first <code>args</code> entry supplies the actual script path. Keep a path containing spaces as one field. If you move the installation later, update both paths from a newly generated configuration.</div>
+          <div class="note"><span class="callout-title">What &lt;GEWU_ROOT&gt; means</span><code>&lt;GEWU_ROOT&gt;</code> in these source-installation examples is the absolute path to the code folder containing <code>scripts/gewu_mcp.py</code>. It is not <code>Gewu Database</code> or the Library. A standalone package can supply its runtime and adapter from inside the App; use the generated paths instead of inventing a project <code>.venv</code>. This setup does not require one fixed installation location. Replace the entire placeholder, including the angle brackets, before saving; Codex will not expand it automatically. The command example assumes a project-local <code>.venv</code>. If your Python executable is elsewhere, use the complete <code>command</code> from <span class="ui">Copy MCP Configuration</span> instead. Its first <code>args</code> entry supplies the actual script path. Keep a path containing spaces as one field. If you move the installation later, update both paths from a newly generated configuration.</div>
           <h3>Fill in Environment variables</h3>
           <p>Under <span class="ui">Environment variables</span>, enter the first row below: the left <span class="ui">Key</span> box holds the variable name and the right <span class="ui">Value</span> box holds its value. Click <span class="ui">Add environment variable</span> to add the second row. Enter each name and value separately, without quotation marks or an equals sign.</p>
           <table class="plain-table">
@@ -3044,7 +3082,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
             <li>The UI server listens on the local loopback address, normally <code>127.0.0.1:8765</code>.</li>
             <li>SQLite stores papers, identities, relationships, settings, and operational state.</li>
             <li>Browser bookmarks, folders, history, and sidebar preferences also live in SQLite. Browser cookies and cache use a separate persistent WebKit profile; they are not shared with Safari or exported with the database.</li>
-            <li>Managed PDFs, attachments, photos, and generated reports stay in local project directories.</li>
+            <li>Managed PDFs, attachments, photos, and generated reports stay in your selected Gewu Database. The App, source code, browser profile and machine preferences have separate locations.</li>
             <li>JSON files are exports or diagnostics; they are not the authoritative database.</li>
           </ul>
 
@@ -3203,7 +3241,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#download-sync">Download and Sync Versions</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup, Monitor Cache, and Text Size" data-keywords="launch local server port 8765 could not start log migration 120 seconds restart recovery failure sheet clear monitor cache stale interface overlay font size compact standard large larger extra large">
+        <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup, Monitor Cache, and Text Size" data-keywords="database location locate missing identity Dock Keep in Dock Applications launch local server port 8765 could not start log migration 120 seconds restart recovery failure sheet clear monitor cache stale interface overlay font size compact standard large larger extra large">
           <p class="topic-kicker">Reference</p>
           <h1>Manage Startup, Monitor Cache, and Text Size</h1>
           <p class="lead">The macOS app shows its branded startup view immediately, starts or connects to the local UI service, and reveals the workspace when Library is ready.</p>
@@ -3215,7 +3253,19 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
 
           <h2>Before the first launch</h2>
-          <p>The supplied native App requires macOS 14 or later, a working <code>python3</code>, and the complete Gewu project folder. Keep that folder in a regular local location such as <code>~/Applications/Gewu Insight</code>. On first launch, the launcher prepares its local Python environment and installs the required dependencies; network access is needed for that setup. Moving only the App into Applications separates it from required source and assets.</p>
+          <p>The native App requires macOS 14 or later. Open the installed <code>/Applications/Gewu Insight.app</code>. A standalone package includes Python and its required dependencies; a source-backed installation uses its configured source checkout and Python environment, which must remain available. Follow the instructions supplied with your installation. An unconfigured source-build App cannot become standalone merely by moving its bundle.</p>
+          <p>On first launch, choose <span class="ui">Open Existing Database</span> or <span class="ui">Create New Database</span> as described in <a href="#first-database">Your First Session</a>. Gewu remembers the selected research folder separately from the App. Network access is needed for online discovery and downloads; it is not needed simply to choose an existing local database.</p>
+
+          <h2 id="database-location">Find the database you are using</h2>
+          <p>Choose <span class="ui">Gewu Insight &gt; Database Location…</span> in the macOS menu bar. The dialog shows the active research folder; <span class="ui">Show in Finder</span> opens it. <span class="ui">Close</span> returns to your work. This dialog displays the location; it is not a Move or Switch Database command.</p>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/database-location.png" alt="Original Gewu Insight Database Location dialog showing a desktop Gewu Database folder and the Close and Show in Finder buttons">
+            <figcaption><strong>Database Location.</strong> The original App shows the current research folder. This desktop path is an example from one Mac; use the path displayed by your own installation. The dialog explains that moving a populated database requires verified migration.</figcaption>
+          </figure>
+          <p>If the remembered folder is missing, reconnect its disk or use <span class="ui">Locate Your Gewu Database</span> to choose the existing workspace. The saved location is retained until another database opens successfully. A mismatched database identity, a database requiring a newer App, another process holding it open or an occupied local service port stops startup with an explanation. Preserve the intended database and resolve the stated condition.</p>
+
+          <h2 id="dock-entry">Keep the current App in the Dock</h2>
+          <p>After moving from the old project App to Applications, the Dock may still show the old shortcut alongside the running App. Right-click the old shortcut and choose <span class="ui">Options &gt; Remove from Dock</span>. Open Gewu Insight from Applications, then right-click its running icon and choose <span class="ui">Options &gt; Keep in Dock</span>. Removing the shortcut does not delete the App, database or backup. Confirm Database Location before using the new shortcut for daily work.</p>
           <p>For an existing installation, follow <a href="#upgrade-installation">Back Up and Upgrade</a> before replacing files. The manual's edition date can change while the product remains Version 1.0.0 / Build 1; a newer manual does not require a fresh Library.</p>
 
           <h2>Normal startup</h2>
@@ -3226,7 +3276,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <p>The Dock tile, native startup panel, and in-window loading state use the icon packaged with the same app build. Startup has a native launch phase and a local-web bootstrap phase, but the visual handoff should not introduce a second icon frame or fall back to an older product mark.</p>
 
           <h2>Startup is not a Library cleanup</h2>
-          <p>Ordinary startup does not reorganize the whole Library, merge historical duplicate files, or make a new full database backup. Managed layout and duplicate protections apply when you import or change the affected paper and files. Keep your own regular <a href="#backup-migrate">backups</a>.</p>
+          <p>Ordinary startup does not reorganize the whole Library, merge historical duplicate files, or make a new full database backup. A pre-schema SQLite snapshot is created only when a schema upgrade is needed; it does not include the research files. Managed layout and duplicate protections apply when you import or change the affected paper and files. Keep your own regular <a href="#backup-migrate">backups</a>.</p>
           <p>If a file move was interrupted before its database and disk changes finished together, startup recovers only the recorded unfinished operation before background workers start. A launch with no unfinished move goes directly to normal preparation. An ambiguous conflict is reported and preserved for repair rather than overwriting a destination or triggering a full-library sweep.</p>
 
           <h2>Automatic local-server recovery</h2>
@@ -3251,7 +3301,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <h2>If the app cannot start</h2>
           <ol class="steps">
             <li><strong>Quit any old Gewu Insight window.</strong> An earlier local server may still own port 8765.</li>
-            <li><strong>Open the launcher log.</strong> Check <code>logs/paper_monitor_launcher.log</code> for the first error.</li>
+            <li><strong>Open the launcher log.</strong> For the installed App, check <code>~/Library/Logs/Gewu Insight/paper_monitor_launcher.log</code> for the first error. A legacy source launcher may use its configured log directory.</li>
             <li><strong>Allow the first startup to finish.</strong> After an upgrade, wait through the migration window before treating the preparation panel as a failure.</li>
             <li><strong>Start the app again once if recovery does not complete.</strong> Avoid opening several copies while the first is still preparing.</li>
             <li><strong>Preserve the database.</strong> Do not delete SQLite as a startup fix.</li>
@@ -3275,6 +3325,11 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <p class="topic-kicker">Reference</p>
           <h1>Troubleshoot Common Problems</h1>
           <p class="lead">Start with the visible status and the selected work. Avoid broad repair actions until you know whether the problem is network, metadata, database state, or a local path.</p>
+
+          <h2>An upgrade appears to open a different or empty Library</h2>
+          <p>Check <span class="ui">Gewu Insight &gt; Database Location…</span> and the App opened by the Dock. A new icon can simply mean that the daily App moved to Applications; it does not establish that your data changed. If the displayed folder is not your intended workspace, stop before importing or recreating records. Preserve both folders and locate the original database. <span class="ui">Create New Database</span> starts a separate empty collection and is not a recovery action.</p>
+          <h2>The database cannot be opened</h2>
+          <p>For a missing folder, reconnect its disk or locate the existing workspace. For a newer schema, use a compatible newer App. For a database identity mismatch, check that the folder is the intended one rather than replacing the saved identity manually. For an already-open database or busy port, quit the other Gewu process normally. Do not remove a lock file, reset the database or terminate unrelated processes as a shortcut. See <a href="#startup">Startup</a> for logs.</p>
 
           <h2>A PDF cannot be found after a move</h2>
           <ol>
@@ -3354,11 +3409,11 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
 
           <h2 id="browser-key-prompt">A WebCrypto keychain prompt keeps appearing</h2>
-          <p>The current Browser declines persistent webpage-key access before WebKit asks Keychain for the <span class="ui">Gewu Insight WebCrypto Master Key</span>. If that exact prompt still appears, quit Gewu and reopen the updated App from the complete installation folder; an older copy may still be running. Record the App version/build and the dialog's exact wording if it persists. Do not delete the keychain item, reset the Browser profile or allow all applications as a repair. A macOS Passwords or AutoFill authentication request is a separate operation.</p>
+          <p>The current Browser declines persistent webpage-key access before WebKit asks Keychain for the <span class="ui">Gewu Insight WebCrypto Master Key</span>. If that exact prompt still appears, quit Gewu and reopen the updated App from Applications; an older Dock shortcut may still point elsewhere. Record the App version/build and the dialog's exact wording if it persists. Do not delete the keychain item, reset the Browser profile or allow all applications as a repair. A macOS Passwords or AutoFill authentication request is a separate operation.</p>
           <h2 id="science-loaded-pdf-help">Science displays a PDF but Save shows Article only</h2>
           <p>Wait for the Science ePDF reader to finish loading, then reopen <span class="ui">Save to Gewu &gt; Details</span> and check the title, DOI and PDF status. Choose <span class="ui">Use Loaded PDF</span> if offered. A changed document, incomplete transfer or file above 128 MB can prevent the original from being read. Choose a saved local PDF, or save the article alone and attach its PDF later under the same Gewu Key. See <a href="#browser-science-epdf">Save a Science ePDF</a>; a failed fresh download does not prove that the loaded copy is unusable.</p>
           <h2>The in-app guide and Print Guide look like different editions</h2>
-          <p>The searchable guide is loaded from the project source; Print Guide opens the fixed-layout PDF packaged in the App. If one is older, the installation's source and bundled resources are out of sync. Follow <a href="#upgrade-installation">Back Up and Upgrade</a> to install a complete matching version. For a source build, regenerate the PDF and package it before reopening the App. Clearing Monitor Cache does not replace a bundled guide.</p>
+          <p>The searchable guide is served by the running Gewu backend; Print Guide opens the fixed-layout PDF packaged in the App. A source-backed backend reads its configured checkout, while a standalone backend uses its packaged source. If one guide is older, the running code and bundled resources are out of sync. Follow <a href="#upgrade-installation">Back Up and Upgrade</a> to install a complete matching version. For a source build, regenerate the PDF and package it before reopening the App. Clearing Monitor Cache does not replace a bundled guide.</p>
           <h2>A long task keeps returning as Continue</h2>
           <p>That task was paused or interrupted, so its remaining queue is saved. Choose the footer's <span class="ui">Details</span>, or open <span class="ui">Loader &gt; Refresh All Metadata</span> and select the task. Choose <span class="ui">Stop</span> to end it permanently. Completed work remains. Closing the window merely hides it; <span class="ui">Pause</span> deliberately keeps it resumable.</p>
           <h2>Two Paper Files cards seem to be the same file</h2>
@@ -3381,22 +3436,29 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
         <article class="help-topic guide-topic" id="storage-reference" data-group="Reference" data-title="Storage Reference" data-keywords="paths data library spaces my publications associated files pdf sqlite reports JSON logs">
           <p class="topic-kicker">Reference</p>
           <h1>Storage Reference</h1>
-          <p class="lead">These paths describe the managed project layout. They are useful for backup and diagnosis, not for routine manual reorganization.</p>
+          <p class="lead">The relative paths below are inside your selected Gewu Database, not inside the App or source checkout. Find the active folder through Gewu Insight &gt; Database Location…. The remaining machine locations are listed separately for backup and diagnosis.</p>
 
           <ul class="path-list">
             <li><code>data/paper_monitor.sqlite</code><span>Authoritative database for papers, identities, relationships, settings, operational state, Browser bookmarks, and visit history. May contain saved metadata API keys; treat backups as private.</span></li>
-            <li><code>data/cache/journal_logos</code><span>Rebuildable local image cache for configured Journal Monitor logos.</span></li>
             <li><code>data/Library</code><span>Visible main Library root, canonical main files and secondary Finder aliases.</span></li>
             <li><code>data/Spaces</code><span>Independent Space roots.</span></li>
             <li><code>data/My Publications</code><span>Managed local files for My Publications.</span></li>
             <li><code>data/Associated Files</code><span>Mirrored bundles for versions, supplements, and attachments.</span></li>
             <li><code>data/pdfs</code><span>Legacy managed PDF location retained for compatibility where needed.</span></li>
-            <li><code>reports</code><span>Generated reading notes and reports. These are artifacts, not the database.</span></li>
-            <li><code>logs/paper_monitor_launcher.log</code><span>macOS launcher diagnostics when the local UI cannot start.</span></li>
+            <li><code>reports</code><span>Generated daily reports, exports and legacy analysis artifacts. New AI analyses saved to Paper Files belong to the paper's managed associated bundle.</span></li>
+            <li><code>config</code><span>Workspace configuration retained with the research data. Saved per-user settings and authoritative journal subscriptions also live in SQLite.</span></li>
+            <li><code>backups</code><span>Pre-schema SQLite snapshots, migration reports and retained recovery material when present. Backups in this folder are on the same disk and do not replace a separate full backup.</span></li>
           </ul>
 
           <p>Quick Look page thumbnails use a separate, automatically trimmed temporary cache. It is rebuildable preview data, not part of the Library, Associated Files, or the SQLite record, so it does not belong in a research backup.</p>
-          <p>Browser website data and its disposable favicon cache are managed by macOS outside the project. They are separate from SQLite bookmarks/history and from the monitor caches listed above. See <a href="#backup-migrate">Browser and credential backup boundaries</a> before moving to another Mac.</p>
+          <h2>App and machine locations</h2>
+          <ul>
+            <li><code>/Applications/Gewu Insight.app</code><br><span>Daily App and packaged resources. Research files are stored in the selected workspace.</span></li>
+            <li><code>~/Library/Application Support/Gewu Insight/database-location.plist</code><br><span>This Mac's remembered workspace path and database identity. It is not the database itself.</span></li>
+            <li><code>~/Library/Logs/Gewu Insight/paper_monitor_launcher.log</code><br><span>Installed-App startup diagnostics.</span></li>
+            <li><code>~/Library/Caches/com.zhengranwu.gewuinsight</code><br><span>Default rebuildable cache for the standalone App. A source-backed installation can retain its configured workspace <code>data/cache</code>, with journal logos under <code>data/cache/journal_logos</code>.</span></li>
+          </ul>
+          <p>Here <code>~</code> means the current Mac user's home folder. Browser website data and its disposable favicon cache remain in a separate macOS-managed profile. They are distinct from SQLite bookmarks/history and monitor caches. See <a href="#backup-migrate">Browser and credential backup boundaries</a> before moving to another Mac.</p>
 
           <h2>Associated Files layout</h2>
           <p>An associated bundle follows the managed scope and path, then a work-specific bundle. Its children separate <code>Versions</code>, <code>Supplements</code>, and <code>Files</code>. The exact physical name can change as the paper moves; the Gewu Key remains stable.</p>

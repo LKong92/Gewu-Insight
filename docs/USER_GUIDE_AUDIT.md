@@ -1,4 +1,90 @@
-# User Guide audit — October 5, 2026
+# User Guide audit — October 6, 2026
+
+## October 6: independent database and current Browser workflow
+
+Audit the existing 49-topic manual against main `31abeec` and this Mac's installed
+Applications App after the verified database migration. The current edition is
+October 6; the product remains Version 1.0.0 / Build 1. Changes are confined to
+manual content, its screenshot/PDF generation, companion documentation and the
+existing guide checks. The package builder's Read Me text is updated to stop
+calling this the old source-folder manual; its packaging behavior is unchanged.
+
+Corrections:
+
+- Replace the old claim that research data belongs inside the source project.
+  Explain the separate App, chosen Gewu Database and optional source checkout.
+- Cover Open Existing Database/Create New Database, choosing the enclosing
+  workspace, unavailable locations, identity/version/process checks, Database
+  Location and Show in Finder. State that this dialog does not move/switch data.
+- Explain Applications and Options > Keep in Dock / Remove from Dock. Removing a
+  Dock shortcut does not remove the database.
+- Rewrite full backup, upgrades, one-time source migration, cross-Mac/path moves
+  and recovery. Retain external-link originals and Mac file attributes; distinguish
+  a pre-schema SQLite snapshot from a full backup. Preserve new writes before
+  rollback, and do not suggest that selecting a moved folder rewrites its paths.
+- Correct machine log/cache/locator paths and the role of reports versus AI
+  analysis files. Keep source-backed and standalone installation requirements
+  explicit without forcing either installation's runtime layout on the other.
+- Keep Codex and DeepSeek Harness as examples of one MCP interface, including
+  Claude Code and other compatible clients. Clarify generated runtime paths,
+  connection retention through migration and read-only reconnection checks.
+- Add the existing Browser-only notice workflow: review the resolved original,
+  attach the notice under that paper, or select and confirm its existing Gewu Key.
+  Normal matching article PDFs can save to their existing paper and placement.
+  Shared MCP/Monitor notice rules are not changed by this documentation.
+- Retain the accurate APS Harvest/background fallback, publisher access limits,
+  PDF-only supplement policy, Refresh Info notices, field-filtered updates and
+  visible-only per-paper unread rules from the previous edition.
+
+Evidence includes `workspace.py`, `database_migration.py`, `config.py`,
+`GewuDatabaseLocation.h`, native Database Location/startup handlers,
+`macos_standalone_entry.py`, `ai_http.py`, and Browser review/save code. The new
+Database Location illustration is captured from the installed original App's
+actual dialog. The opening Guide is recaptured from its actual separate window.
+The other 36 screenshots, including the clean empty Add Monitored Author form,
+are retained. No screenshot is painted, synthesized or cropped to hide controls.
+
+Validation completed for the source, installed App and PDF:
+
+- Reviewed all 49 existing topics; changed 11 text topics while preserving their
+  anchors and navigation. HTML and generated PDF include the same 38 real-App
+  screenshot assets. No new synthetic screenshot replaces a real workflow.
+- Generated 132 pages, 1,009 named destinations, 400 internal links and 13
+  external links. Every internal target resolves. Visually reviewed all pages
+  and 17 affected pages at reading resolution. Found two truncated machine paths
+  in the PDF table; replaced that small table with a full-width list and rechecked
+  page 130. Only page 130's extracted text changed in the final rebuild.
+  Product Identity 4-3 and 4-4 still share page 115.
+- All 31 existing Guide/audit/navigation tests and seven PDF structure checks
+  pass. The old repository-bundle test uses a temporary fixture pointing to the
+  staged Applications App; no App or test data was created inside the checkout.
+  Python compilation and `git diff --check` pass.
+- Native Help search, first-session instructions, the migration link and Dock
+  subsection navigation were checked in the original installed App. The actual
+  Database Location dialog shows the selected desktop research folder.
+- A staged copy preserves the installed App's private source startup adapter.
+  Strict signature verification passes. Only the PDF and signing-related file
+  contents change; unsigned native executable bytes match the installed App.
+  After normal menu Quit, installed that checked bundle at the existing
+  `/Applications/Gewu Insight.app` path and retained the previous App in QA.
+- Relaunch reached Library with one healthy backend/listener (48822), unchanged
+  database UUID and unchanged location preference. The first startup exceeded
+  the native readiness timeout and displayed its existing failure sheet; the
+  same backend subsequently became ready and the sheet dismissed automatically.
+  This transient startup delay is recorded, not attributed to a confirmed cause
+  or claimed repaired. No startup/runtime code was changed for this update.
+- The installed App's Help opens the October 6 edition. Native Print Guide opens
+  its bundled PDF in Preview, showing Page 1 of 132; native page navigation and
+  visual inspection confirm the new Database Location illustration on page 122.
+  Installed/built PDF bytes match, all three private startup adapter files are
+  unchanged and the running App passes strict signature verification.
+- Final PDF SHA-256:
+  `85159deb25515da1aa96b7413cd75e69b40bf0ee61ec6a7534011f9edf812812`.
+  Working evidence is in `/private/tmp/gewu-guide-oct06/`.
+No paper import, classification change, new grant/token, database relocation or
+product business-logic change is part of this guide update.
+
+## Previous October 5 evidence
 
 Rechecked all 49 topics against product commit `befa09909e701dcb00acf8fd93b1587f406e934d`, the preserved October 2 guide revision and current runtime source/feature contracts. Checked the original macOS App and the October 4 Science ePDF, WebCrypto and safe-build changes. The manual edition changes; product version remains 1.0.0 / Build 1. This October 5 pass changes documentation and its illustrations/generated resources only. It retains the previous guide navigation and PDF mapping fixes; it does not alter publisher downloads, metadata schedules, MCP permissions or research data.
 
@@ -80,16 +166,16 @@ Each existing topic and anchor appears exactly once below. Accurate material is 
 
 | Topic | Review result |
 |---|---|
-| [Welcome](../paper_monitor/user_guide.html#welcome) | Update edition to October 5; retain Version 1.0.0 / Build 1, product mission, support and current research-sharing license. |
-| [Guided Tour](../paper_monitor/user_guide.html#guided-tour) | Review Help navigation, separate searchable window, Print Guide and six main tabs; replace the obsolete opening-Guide illustration. |
-| [Your First Session](../paper_monitor/user_guide.html#first-session) | Verify initial setup, paper versus ordinary file identity, source preferences and opt-in AI access. |
+| [Welcome](../paper_monitor/user_guide.html#welcome) | Update edition to October 6; retain product version/build and mission; local ownership now names the selected research folder. |
+| [Guided Tour](../paper_monitor/user_guide.html#guided-tour) | Check Help navigation, search, Print Guide and six main tabs; replace the opening screenshot with the actual October 6 window. |
+| [Your First Session](../paper_monitor/user_guide.html#first-session) | Add first-launch database choices, whole-workspace selection, remembered locations and the old-installation migration link; retain paper import instructions. |
 | [System Architecture at a Glance](../paper_monitor/user_guide.html#system-overview) | Verify six workspaces, canonical paper identity, independent resources, SQLite and external provider boundaries. |
 | [The Persistent Paper Object](../paper_monitor/user_guide.html#persistent-paper-object) | Add explicit distinction between a research-paper identity, a linked publication notice and a corrected full article. |
 | [Why SQLite Is the Core](../paper_monitor/user_guide.html#sqlite-core) | Retain SQLite authority, provenance, durable settings and coordinated file operations. |
-| [Visible Research Files](../paper_monitor/user_guide.html#visible-research-files) | Verify normal file import, canonical/associated storage, and metadata-first MCP import boundaries. |
+| [Visible Research Files](../paper_monitor/user_guide.html#visible-research-files) | Name the managed research workspace rather than the source project; retain normal import, canonical/associated storage and metadata-first MCP boundaries. |
 | [The Personal Research Workspace](../paper_monitor/user_guide.html#personal-research-workspace) | Verify shared records across six tabs, multiple placements, Spaces and scope-specific removal. |
 | [From Discovery to Durable Memory](../paper_monitor/user_guide.html#research-loop) | Retain separate steps for discovery, organization, PDF acquisition, reading and saved analysis. |
-| [State, Scope, and Safe Change](../paper_monitor/user_guide.html#state-and-scope) | Review shared-resource state, explicit actions and retained references; no bulk data reset is implied. |
+| [State, Scope, and Safe Change](../paper_monitor/user_guide.html#state-and-scope) | Align the closed backup baseline with the selected workspace and external linked originals; keep scoped operation boundaries. |
 | [Library Layout](../paper_monitor/user_guide.html#library-layout) | Verify independent Paper Files/Details columns, footer activity indicators, search and navigation. |
 | [Navigate with Mouse and Keyboard](../paper_monitor/user_guide.html#navigation) | Verify keyboard focus, traversal, saved selection and tab transitions; read acknowledgement is documented separately. |
 | [Folders, Shortcuts, and Spaces](../paper_monitor/user_guide.html#organize) | Verify real folder/Space versus shortcut renames, mirrored paths, busy-file retry and complete ancestry. |
@@ -107,28 +193,28 @@ Each existing topic and anchor appears exactly once below. Accurate material is 
 | [Delete and Recover Items](../paper_monitor/user_guide.html#recycle) | Verify recoverable placement removal, permanent emptying scope, shared-reference preservation and native Trash boundaries. |
 | [Use Folder Loader](../paper_monitor/user_guide.html#folder-loader) | Verify recursive imports, metadata modes, background progress, source identity handling and completed-operation boundaries. |
 | [Make a Portable Desktop Copy](../paper_monitor/user_guide.html#desktop-copy) | Verify portable paper/folder copies, associated file bundle and no implied whole-library backup. |
-| [Back Up or Move to Another Mac](../paper_monitor/user_guide.html#backup-migrate) | Expand coherent SQLite/files backup, complete installation, stopped-App upgrade/build, ad-hoc signing and rollback; retain external browser profile/credentials and unsaved memory-only tabs. |
+| [Back Up or Move to Another Mac](../paper_monitor/user_guide.html#backup-migrate) | Rewrite App/data/source separation, coherent complete-workspace backups, old-source migration, path-aware transfers, startup verification and preserving newer writes before recovery. |
 | [My Publications](../paper_monitor/user_guide.html#my-publications) | Verify profile import/resume, identifier completion, manual roles, metrics, shared Files and filtered export scope; linked notice workflow cross-referenced. |
 | [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Update Sunday calendar, visible tab counts versus stored sidebar counts, per-paper unread state and filtered left-sidebar Publication updates. |
 | [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Update Sunday calendar and shared filtered unread semantics; document notice ingestion separately from the Journal-only notice panel. |
 | [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Verify Hong Ding illustration, New/Read All, Scholar pause, source retries, shared identities and distinct Author read state. |
-| [Browse, Bookmark, and Revisit Websites](../paper_monitor/user_guide.html#browser) | Add Science ePDF loaded-original workflow, three save actions and persistent webpage-key refusal; verify existing file reuse, shared native fallback session, history/bookmarks, separate Passwords and website isolation. |
+| [Browse, Bookmark, and Revisit Websites](../paper_monitor/user_guide.html#browser) | Add Browser notice-to-original review/save and manual Key confirmation; retain loaded PDF, Science ePDF, network/access, placement and exact-content reuse behavior. |
 | [Literature Data Source](../paper_monitor/user_guide.html#citation-settings) | Verify current Literature Data Source name, optional provider keys, masked credentials and service-specific limits. |
 | [arXiv Scope Settings](../paper_monitor/user_guide.html#arxiv-scope-settings) | Verify saved discovery archive scopes are distinct from current report filters. |
 | [Field Settings](../paper_monitor/user_guide.html#field-settings) | Add effect of visible fields on tab unread dots and Publication updates, distinct from standalone-field grouping and full journal totals. |
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Verify three modes and local PDF/Markdown behavior versus all-native Quick Look. |
 | [Default Add to Library Folder](../paper_monitor/user_guide.html#add-to-library-settings) | Verify default folder, one-time override, stable folder ID and unsorted fallback. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Verify native/system website routing and default Save Details preference. |
-| [AI Access](../paper_monitor/user_guide.html#ai-access) | Verify tools, optional writes, PDF-optional metadata import, same Key, notice ownership, Default and staging. Add generic local MCP connection guidance, Codex and DeepSeek Harness examples, Claude Code compatibility, and shared read/write verification. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Retain Codex/DeepSeek/Claude Code examples; clarify generated paths for source-backed versus standalone installations and existing-connection continuity after migration. |
 | [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Add extension preservation when long basenames are shortened; retain templates and separate logical identity. |
 | [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Verify canonical main file, Associated Files, Finder aliases, stable identity and collision protection. |
-| [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Clarify persistent webpage keys versus ordinary storage and Passwords; retain external source/client responsibilities, opt-in AI scopes and no credential exposure. |
+| [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Replace project-local file claims with selected workspace storage; preserve API, local access and browser-profile boundaries. |
 | [Visual Identity and Cultural Elements](../paper_monitor/user_guide.html#visual-identity) | Retain approved branding, mission, glyph provenance and wording. Preserve continuous Product Identity chapters 4-1 through 4-4. |
 | [Keyboard Shortcuts](../paper_monitor/user_guide.html#keyboard) | Add per-paper acknowledgement and visible-only tab indicators; retain contextual Browser, Quick Look and edit shortcuts. |
 | [Publisher and Network Access](../paper_monitor/user_guide.html#network-access) | Add off-campus direct-route limits, abstract versus actual PDF entitlement, PDF/CDN routing and native fallback limits. |
-| [Startup, Monitor Cache, and Text Size](../paper_monitor/user_guide.html#startup) | Add macOS/Python/complete-folder and first-launch requirements; verify schedules, no saved-paper periodic refresh, local service lifecycle, narrow recovery and presentation-cache scope. |
-| [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Add stale WebCrypto prompt, Science loaded-PDF and mismatched guide-edition recovery; retain main/supplement distinction, filtered unread dots, notice lookup limits and Markdown formula fallback. |
-| [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Verify SQLite authority, current managed roots, associated resources, exports and disposable caches. |
+| [Startup, Monitor Cache, and Text Size](../paper_monitor/user_guide.html#startup) | Document Applications, first database choice, Database Location, real dialog screenshot, Dock replacement, missing/identity/version/busy checks, pre-schema snapshot and installed log path. |
+| [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Add wrong/empty collection diagnosis and explicit database startup failures; correct App entry, log and HTML/PDF edition mismatch advice. |
+| [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Define relative paths under Gewu Database; add config/backups, locator/App/log/default cache paths and distinguish saved AI analyses from legacy reports. |
 
 ## Reproducibility and validation
 

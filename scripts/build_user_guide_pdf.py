@@ -65,6 +65,7 @@ IMAGE_ROUTES = {
     "/user-guide-assets/markdown-quick-look.png": ROOT / "assets" / "user-guide" / "screenshots" / "markdown-quick-look.png",
     "/user-guide-assets/author-add.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-add.png",
     "/user-guide-assets/about-window.png": ROOT / "assets" / "user-guide" / "screenshots" / "about-window.png",
+    "/user-guide-assets/database-location.png": ROOT / "assets" / "user-guide" / "screenshots" / "database-location.png",
     "/user-guide-assets/user-guide-window.png": ROOT / "assets" / "user-guide" / "screenshots" / "user-guide-window.png",
 }
 

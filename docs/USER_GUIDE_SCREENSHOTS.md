@@ -1,9 +1,9 @@
 # User Guide screenshot inventory
 
-Edition: October 5, 2026 · Version 1.0.0 / Build 1.
-HTML and PDF share 37 packaged PNG captures. This pass retains 36 and replaces only the Guide opening. The preceding October 2 pass visually reviewed all 36 earlier illustrations, replaced three and added Publication updates; those results remain included.
+Edition: October 6, 2026 · Version 1.0.0 / Build 1.
+HTML and PDF share 38 packaged PNG captures. The October 6 pass retains 36, replaces the Guide opening and adds the actual Database Location dialog. Earlier monitor and Paper Files captures remain accurate; the clean empty Add Monitored Author form is retained.
 
-## Capture rules and this revision
+## Capture rules and retained capture history
 
 - New captures come from the real original Gewu Insight App. No synthetic UI, altered literature, painted-out controls or stitched states.
 - Replace Journal Monitor and Subject Monitor to show the Sunday-first calendars and current sidebar/report layout. Journal Monitor uses Nature with visible figures.
@@ -19,7 +19,7 @@ HTML and PDF share 37 packaged PNG captures. This pass retains 36 and replaces o
 
 | Topic | Capture | Captured / reviewed | Contents |
 |---|---|---|---|
-| Guided Tour | [user-guide-window.png](../assets/user-guide/screenshots/user-guide-window.png) | Oct 5 | The User Guide window. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF. |
+| Guided Tour | [user-guide-window.png](../assets/user-guide/screenshots/user-guide-window.png) | Oct 6 | The User Guide window. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF. |
 | Library Layout | [library-paper-files.png](../assets/user-guide/screenshots/library-paper-files.png) | Sep 13; reviewed Oct 2 | Library and Paper Files. This real paper has two already-classified files: Preprint and Published version. The published file is marked Default. Its folder placement, related files, and Paper Details remain connected. |
 | Folders, Shortcuts, and Spaces | [space-workspace.png](../assets/user-guide/screenshots/space-workspace.png) | Sep 16; reviewed Oct 2 | A Space with an open folder. AI remains the heading across its folder and content columns. Literature Project has its own heading beneath it. The Space heading stops at the Details divider; the right-hand Details pane keeps its full height. |
 | Folders, Shortcuts, and Spaces | [add-shortcut.png](../assets/user-guide/screenshots/add-shortcut.png) | Sep 13; reviewed Oct 2 | Add Shortcut. Choose an existing Library folder through the column picker. Add creates a navigation shortcut to that folder. |
@@ -56,3 +56,4 @@ HTML and PDF share 37 packaged PNG captures. This pass retains 36 and replaces o
 | Naming and PDF Rename Rules | [pdf-rename-settings.png](../assets/user-guide/screenshots/pdf-rename-settings.png) | Sep 13; reviewed Oct 2 | PDF Rename Settings. Edit the filename template and inspect its preview before saving. Available tokens appear beside the template. |
 | Visual Identity and Cultural Elements | [about-window.png](../assets/user-guide/screenshots/about-window.png) | Sep 13; reviewed Oct 2 | About Gewu Insight. Open the application menu and choose About Gewu Insight to see the product name, version and calligraphic signature. |
 | Startup, Monitor Cache, and Text Size | [font-size.png](../assets/user-guide/screenshots/font-size.png) | Sep 13; reviewed Oct 2 | Font Size. Preview one of five reading sizes. Save keeps the selected size; Cancel restores the previous preference. |
+| Startup, Monitor Cache, and Text Size | [database-location.png](../assets/user-guide/screenshots/database-location.png) | Oct 6 | Database Location. Actual installed App dialog, captured without retouching or an overlay. The desktop path is one Mac’s example; the text explains that a populated database needs verified migration before changing its location. |

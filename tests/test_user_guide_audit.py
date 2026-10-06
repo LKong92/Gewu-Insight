@@ -24,7 +24,7 @@ class GuideAuditTests(unittest.TestCase):
         documented = re.findall(r'user_guide\.html#([a-z-]+)\)', audit)
         topics = [article["id"] for article in self.soup.select("article.guide-topic")]
         self.assertCountEqual(documented, topics)
-        self.assertIn("October 5, 2026", self.topic("welcome"))
+        self.assertIn("October 6, 2026", self.topic("welcome"))
         self.assertNotIn("five top-level areas", self.topic("personal-research-workspace"))
         self.assertIn("sixth main tab", self.topic("personal-research-workspace"))
 
@@ -119,7 +119,7 @@ class GuideAuditTests(unittest.TestCase):
                        "not restored after App quit", "Passkey", "successful filling are not guaranteed"):
             self.assertIn(phrase, browser)
         backup = self.topic("backup-migrate")
-        for phrase in ("outside this project", "Apple Passwords", "sign in again", "API keys", "memory-only"):
+        for phrase in ("outside Gewu Database", "Apple Passwords", "sign in again", "API keys", "memory-only"):
             self.assertIn(phrase, backup)
         self.assertIn("Home displays local Favorites without a Google request", self.topic("troubleshooting"))
         self.assertIn("even after restarting the App", browser)
