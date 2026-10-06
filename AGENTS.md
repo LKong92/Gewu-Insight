@@ -35,22 +35,26 @@
 
 ## Commands
 
+- Daily App: `/Applications/Gewu Insight.app`. Formal data belongs in the user's selected `Gewu Database`; discover the local location instead of copying another machine's path. Never implicitly recreate project-local user data.
+- Development CLI commands require `GEWU_WORKSPACE_ROOT` pointing to an isolated workspace. Initialize once with `python3 -m paper_monitor.workspace create "$PWD/tmp/development-database"`, then export that path for the commands below.
+- The old project App is a non-launchable build seed in `assets/macos-app-template.zip`. Native builds extract it temporarily; standalone builds stage their own App. Existing bundle-reading tests need a temporary extracted template, removed after testing.
+
 - Setup: `python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt`
 - Run UI: `python3 -m paper_monitor ui --port 8765`
 - Run journal monitor: `python3 -m paper_monitor journal`
 - Run explicit journal window: `python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD`
 - Download paper: `python3 -m paper_monitor download PAPER_ID`
 - Compile check: `python3 -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
-- Clickable launcher: `Gewu Insight.app`
+- Clickable launcher: `/Applications/Gewu Insight.app`
 
 ## Key Paths
 
 - `paper_monitor/`: main Python package.
 - `paper_monitor/ui_server.py`: local web UI and UI API.
 - `config/journals.json`: monitored journals and section policies.
-- `data/paper_monitor.sqlite`: SQLite database.
-- `reports/daily/`: generated Markdown reports.
-- `reports/analyses/`: generated analysis notes.
+- Selected workspace `data/paper_monitor.sqlite`: SQLite database; never use the source checkout for formal data.
+- Selected workspace `reports/daily/`: generated Markdown reports.
+- Paper Files AI analyses live in selected workspace `data/Associated Files/`; legacy reports remain under its `reports/`.
 - `README.md`: user-facing usage documentation.
 
 ## Done Criteria

@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import "GewuDatabaseLocation.h"
 #import <Quartz/Quartz.h>
 #import <WebKit/WebKit.h>
 #import "GewuBrowserController.h"
@@ -2118,6 +2119,20 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [self scheduleTrafficLightLayout:notification];
 }
 
+- (void)showDatabaseLocation:(id)sender {
+    const char *value = getenv("GEWU_WORKSPACE_ROOT");
+    if (!value) return;
+    NSString *path = [NSString stringWithUTF8String:value];
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Database Location";
+    alert.informativeText = [NSString stringWithFormat:@"%@\n\nThis folder contains your database, papers, attachments, reports and configuration. App updates keep this location. Use a verified database migration to move it; existing file references may contain absolute paths.", path];
+    [alert addButtonWithTitle:@"Show in Finder"];
+    [alert addButtonWithTitle:@"Close"];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:path isDirectory:YES]];
+    }
+}
+
 - (void)installMainMenu {
     NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@""];
 
@@ -2126,6 +2141,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Gewu Insight"];
     NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Gewu Insight" action:@selector(openAbout:) keyEquivalent:@""];
     aboutItem.target = self;
+    if (getenv("GEWU_STANDALONE")) {
+        NSMenuItem *databaseItem = [appMenu addItemWithTitle:@"Database Location…" action:@selector(showDatabaseLocation:) keyEquivalent:@""];
+        databaseItem.target = self;
+    }
     [appMenu addItem:[NSMenuItem separatorItem]];
     NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Gewu Insight"];
     [appMenu addItemWithTitle:quitTitle action:@selector(terminate:) keyEquivalent:@"q"];
@@ -2271,6 +2290,12 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = helperURL;
+    NSMutableDictionary *environment = [NSProcessInfo.processInfo.environment mutableCopy];
+    for (NSString *key in @[@"GEWU_WORKSPACE_ROOT", @"GEWU_DATA_ROOT", @"GEWU_APP_PATH", @"GEWU_STANDALONE", @"GEWU_LOG_ROOT", @"GEWU_INSTANCE_ID", @"GEWU_DATABASE_UUID", @"GEWU_CREATE_DATABASE", @"GEWU_REMEMBER_DATABASE"]) {
+        const char *value = getenv(key.UTF8String);
+        if (value) environment[key] = [NSString stringWithUTF8String:value];
+    }
+    task.environment = environment;
     __weak typeof(self) weakSelf = self;
     task.terminationHandler = ^(NSTask *terminatedTask) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -2375,6 +2400,11 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
         BOOL available = (error == nil && httpResponse.statusCode == 200 && data.length > 0);
+        if (available && getenv("GEWU_STANDALONE")) {
+            NSDictionary *health = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            NSString *instance = getenv("GEWU_INSTANCE_ID") ? [NSString stringWithUTF8String:getenv("GEWU_INSTANCE_ID")] : @"";
+            available = [health isKindOfClass:NSDictionary.class] && [health[@"instance_id"] isEqualToString:instance];
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(available);
         });
@@ -2386,7 +2416,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     BOOL local = [url.scheme isEqualToString:self.url.scheme] &&
         [url.host isEqualToString:self.url.host] && [url.port isEqual:self.url.port];
     if (local) {
-        NSString *dataRoot = NSProcessInfo.processInfo.environment[@"GEWU_DATA_ROOT"];
+        NSString *dataRoot = getenv("GEWU_DATA_ROOT") ? [NSString stringWithUTF8String:getenv("GEWU_DATA_ROOT")] : nil;
         NSURL *folder = dataRoot.length ? [NSURL fileURLWithPath:dataRoot isDirectory:YES] :
             [[[NSBundle mainBundle].bundleURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:@"data" isDirectory:YES];
         NSString *token = [NSString stringWithContentsOfURL:[folder URLByAppendingPathComponent:@".gewu-workspace-token"]
@@ -2836,7 +2866,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     if (self.applicationIsTerminating || self.startupFailurePresented) return;
     self.startupFailurePresented = YES;
     NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
-    NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
+    NSString *logRoot = getenv("GEWU_LOG_ROOT") ? [NSString stringWithUTF8String:getenv("GEWU_LOG_ROOT")] : [projectDir stringByAppendingPathComponent:@"logs"];
+    NSString *logPath = [logRoot stringByAppendingPathComponent:@"paper_monitor_launcher.log"];
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"Gewu Insight could not start";
     alert.informativeText = message ?: [NSString stringWithFormat:@"The local UI server did not become ready. Check the launcher log for details:\n\n%@", logPath];
@@ -2885,7 +2916,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 - (void)appendLauncherLogMessage:(NSString *)message {
     if (message.length == 0) return;
     NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
-    NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
+    NSString *logRoot = getenv("GEWU_LOG_ROOT") ? [NSString stringWithUTF8String:getenv("GEWU_LOG_ROOT")] : [projectDir stringByAppendingPathComponent:@"logs"];
+    NSString *logPath = [logRoot stringByAppendingPathComponent:@"paper_monitor_launcher.log"];
     NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:logPath];
     if (!handle) return;
     NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], message];
@@ -2978,6 +3010,8 @@ int main(int argc, const char *argv[]) {
             return 0;
         }
         NSApplication *application = [NSApplication sharedApplication];
+        [application setActivationPolicy:NSApplicationActivationPolicyRegular];
+        if (!GewuConfigureDatabaseLocation()) return 0;
         PaperMonitorDelegate *delegate = [[PaperMonitorDelegate alloc] init];
         application.delegate = delegate;
         [application setActivationPolicy:NSApplicationActivationPolicyRegular];

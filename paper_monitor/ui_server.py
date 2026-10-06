@@ -66,6 +66,8 @@ from .config import (
     DEFAULT_PDF_DIR,
     DEFAULT_SPACES_DIR,
     ROOT,
+    WORKSPACE_ROOT,
+    CACHE_ROOT,
     load_config,
 )
 from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha256_for_file
@@ -367,15 +369,15 @@ AUTHOR_MONITOR_ENRICHMENT_RETRY_DAYS = 7
 AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS = 0.45
 NCBI_EUTILS_TOOL = "GewuInsight"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
-PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
+PDF_THUMB_CACHE_DIR = CACHE_ROOT / "pdf_thumbnails"
 PDF_THUMB_CACHE_MAX_BYTES = 256 * 1024 * 1024
 PDF_THUMB_CACHE_TARGET_BYTES = 192 * 1024 * 1024
 LOCAL_FILE_RESPONSE_CHUNK_BYTES = 1024 * 1024
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
 LATE_ARRIVAL_LOOKBACK_DAYS = 3
-DEFAULT_COMMENT_REPORT_DIR = ROOT / "reports" / "citation_comments"
-PUBLICATION_EXPORT_DIR = ROOT / "reports" / "publication_exports"
+DEFAULT_COMMENT_REPORT_DIR = WORKSPACE_ROOT / "reports" / "citation_comments"
+PUBLICATION_EXPORT_DIR = WORKSPACE_ROOT / "reports" / "publication_exports"
 COMMENT_REPORT_MAX_OPENALEX_PAGES = 10
 COMMENT_REPORT_OPENALEX_PER_PAGE = 100
 COMMENT_REPORT_LIST_LIMIT = 200
@@ -385,7 +387,7 @@ COMMENT_REPORT_HIGHLIGHT_LIMIT = 10
 WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
-SUBJECTS_CONFIG_PATH = ROOT / "config" / "subjects.json"
+SUBJECTS_CONFIG_PATH = WORKSPACE_ROOT / "config" / "subjects.json"
 THEME_GROUPS: dict[str, dict[str, Any]] = {}
 AUTHOR_MONITOR_CARD_CACHE_BUILD_LOCK = threading.Lock()
 
@@ -592,7 +594,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_markdown_preview(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/health":
-                self.send_json({"ok": True})
+                from . import __version__, __build__
+                from .workspace import database_identity
+                health = {"ok": True, "version": __version__, "build": __build__,
+                          "database_uuid": database_identity(self.configured_db_path),
+                          "instance_id": os.environ.get("GEWU_INSTANCE_ID", "")}
+                if self.server.workspace_access.accepts(self.headers):
+                    health["database_path"] = str(Path(self.configured_db_path).resolve())
+                    health["app_path"] = os.environ.get("GEWU_APP_PATH", "")
+                self.send_json(health)
                 return
             if parsed.path == "/api/app-icon":
                 self.handle_app_icon()
@@ -3435,7 +3445,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"path": folder_path})
 
     def handle_choose_library_import_report(self) -> None:
-        imports_root = (ROOT / "reports" / "imports").resolve()
+        imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
         try:
             script = (
                 "POSIX path of (choose file with prompt "
@@ -3660,8 +3670,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         copy_mode = "copy"
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         slug = safe_slug(folder_path.name or "library-folder", 60)
-        inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
-        report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-import-{timestamp}.json"
+        inventory_path = WORKSPACE_ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
+        report_path = WORKSPACE_ROOT / "reports" / "imports" / f"folder-import-{slug}-import-{timestamp}.json"
         try:
             build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=True)
             storage = Storage(self.configured_db_path)
@@ -3718,8 +3728,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         slug = safe_slug(paths[0].name or "finder-drop", 60)
-        inventory_path = ROOT / "reports" / "imports" / f"finder-drop-inventory-{slug}-{timestamp}.json"
-        report_path = ROOT / "reports" / "imports" / f"finder-drop-import-{slug}-{timestamp}.json"
+        inventory_path = WORKSPACE_ROOT / "reports" / "imports" / f"finder-drop-inventory-{slug}-{timestamp}.json"
+        report_path = WORKSPACE_ROOT / "reports" / "imports" / f"finder-drop-import-{slug}-{timestamp}.json"
         try:
             build_inventory_from_paths(paths, output_path=inventory_path, parse_pdfs=True)
             storage = Storage(self.configured_db_path)
@@ -20617,8 +20627,8 @@ def run_library_import_job(
     metadata_mode = normalize_import_metadata_mode(metadata_mode)
     import_prefix = "finder-drop" if preserve_top_level else "folder"
     result = None
-    inventory_path = ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
-    report_path = ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
+    inventory_path = WORKSPACE_ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
+    report_path = WORKSPACE_ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
     progress = library_import_progress_callback(job_id)
     complete_export_manifest = (
         read_gewu_complete_export_manifest(folder_path)
@@ -20772,7 +20782,7 @@ def run_library_import_job(
 def load_import_report_summary(report_path: Any) -> dict[str, Any] | None:
     try:
         path = Path(str(report_path or "")).expanduser().resolve()
-        imports_root = (ROOT / "reports" / "imports").resolve()
+        imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
         if not is_allowed_file(path, [imports_root]) or not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -20789,7 +20799,7 @@ def load_library_import_report(report_path: Any) -> dict[str, Any]:
         path = Path(path_text).expanduser().resolve()
     except OSError as exc:
         raise ValueError(f"Could not resolve report path: {exc}") from exc
-    imports_root = (ROOT / "reports" / "imports").resolve()
+    imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
     if not is_allowed_file(path, [imports_root]):
         raise ValueError("Loader reports must be inside reports/imports")
     if not path.exists() or not path.is_file():
@@ -20810,7 +20820,7 @@ def load_library_import_report(report_path: Any) -> dict[str, Any]:
 
 
 def list_library_import_reports(*, limit: int = 80) -> list[dict[str, Any]]:
-    imports_root = (ROOT / "reports" / "imports").resolve()
+    imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
     if not imports_root.exists():
         return []
     candidates: list[Path] = []
@@ -20887,7 +20897,7 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
         deleted_paths = []
         for path_value in [job.get("inventory_path"), result.get("report_path")]:
             path_text = clean_text(path_value)
-            if delete_import_path(path_text, ROOT / "reports" / "imports"):
+            if delete_import_path(path_text, WORKSPACE_ROOT / "reports" / "imports"):
                 deleted_paths.append(path_text)
         with LIBRARY_IMPORT_JOBS_LOCK:
             live_job = LIBRARY_IMPORT_JOBS.get(job_id)
@@ -20991,7 +21001,7 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
                 break
     cleanup_local_copy_empty_parents(deleted_paths)
     for path_value in [job.get("inventory_path"), result.get("report_path")]:
-        if delete_import_path(clean_text(path_value), ROOT / "reports" / "imports"):
+        if delete_import_path(clean_text(path_value), WORKSPACE_ROOT / "reports" / "imports"):
             deleted_paths.append(clean_text(path_value))
 
     with LIBRARY_IMPORT_JOBS_LOCK:
@@ -21320,6 +21330,8 @@ def journals_for_api(raw: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def journal_logo_cache_dir(db_path: Path = DEFAULT_DB_PATH) -> Path:
+    if os.environ.get("GEWU_STANDALONE"):
+        return CACHE_ROOT / "journal_logos"
     return Path(db_path).expanduser().resolve().parent / "cache" / "journal_logos"
 
 
@@ -25491,7 +25503,7 @@ def move_path_to_macos_trash(path: Path) -> Path:
         target = unique_trash_path(trash_dir / requested.name)
         shutil.move(str(requested), str(target))
         return target
-    helper = ROOT / "Gewu Insight.app" / "Contents" / "MacOS" / "Gewu Insight"
+    helper = Path(os.environ.get("GEWU_APP_PATH") or (ROOT / "Gewu Insight.app")) / "Contents" / "MacOS" / "Gewu Insight"
     result = subprocess.run(
         [str(helper), "--trash-item", str(requested)], check=False,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30,

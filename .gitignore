@@ -16,3 +16,7 @@ deep_survey/plugins/
 # Local-only development history and generated evaluation/design artifacts.
 benchmarks/
 scripts/bench_local.py
+
+# Local marker after moving formal data out of a development checkout.
+.gewu-development-only
+local-development-archive/

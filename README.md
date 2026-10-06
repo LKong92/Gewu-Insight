@@ -46,6 +46,13 @@ Academic/non-commercial research use is permitted under the custom
 
 ## Quick start on macOS
 
+**Source/data separation update:** the launchable App formerly tracked in this
+repository is now an archived build template. Before updating an existing
+checkout, give your Codex the [Chinese migration instructions](docs/SOURCE_DATA_MIGRATION.md)
+to back up and migrate your own data and configure your launch entry. A DMG is
+not required. For a new source setup, use [Manual setup](docs/DEVELOPMENT.md#manual-setup).
+The folder-based App instructions below describe the earlier distribution.
+
 **Requirements:** macOS 14 or later, a working `python3` command, and network
 access for the initial dependency installation and online research services.
 The supplied native launcher supports Apple silicon and Intel Macs.

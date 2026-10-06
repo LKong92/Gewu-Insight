@@ -3,6 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+if [[ -f "$PROJECT_DIR/.gewu-development-only" ]]; then
+  echo "Formal data has moved. Open /Applications/Gewu Insight.app for daily use." >&2
+  echo "For development, use the explicit isolated workspace commands in docs/DEVELOPMENT.md." >&2
+  exit 1
+fi
 PORT="${PAPER_MONITOR_PORT:-8765}"
 HOST="${PAPER_MONITOR_HOST:-127.0.0.1}"
 URL="http://$HOST:$PORT"

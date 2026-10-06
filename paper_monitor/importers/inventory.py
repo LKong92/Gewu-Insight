@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterable
 
 from pypdf import PdfReader
 
-from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, ROOT
+from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, WORKSPACE_ROOT
 from ..resource_fingerprint import fingerprint_file, sha256_for_file
 from ..resource_dedup import find_existing, remember_source, source_resources, serialize_writes
 from ..storage import Storage
@@ -20,7 +20,7 @@ from ..text import clean_text, is_placeholder_publication_title, make_paper_id, 
 SUPPORTED_COPY_MODES = {"copy"}
 PAPER_CANDIDATE_KIND = "pdf"
 PAPER_CANDIDATE_IMPORT_AS = "paper_candidate"
-REPORT_DIR = ROOT / "reports" / "imports"
+REPORT_DIR = WORKSPACE_ROOT / "reports" / "imports"
 LIBRARY_IMPORT_DIR = DEFAULT_LIBRARY_DIR
 SYSTEM_METADATA_FILENAMES = {".ds_store", "thumbs.db", "desktop.ini"}
 DOCUMENT_EXTENSIONS = {".doc", ".docx", ".rtf", ".txt", ".md", ".tex"}

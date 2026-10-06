@@ -17,18 +17,29 @@ Run these commands from the complete repository folder:
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-python3 -m paper_monitor ui --port 8765
+python3 -m paper_monitor.workspace create "$PWD/tmp/development-database"
+GEWU_WORKSPACE_ROOT="$PWD/tmp/development-database" python3 -m paper_monitor ui --port 8876
 ```
 
-This starts the browser-hosted UI. Open `http://127.0.0.1:8765`; the service
-health endpoint is `http://127.0.0.1:8765/api/health`. The native macOS App adds
+This starts the browser-hosted UI. Open `http://127.0.0.1:8876`; the service
+health endpoint is `http://127.0.0.1:8876/api/health`. The native macOS App adds
 platform integration beyond the browser-hosted interface. Avoid starting a
 second service while the App's service is already running on the same port.
 
-For the supplied native launcher, macOS 14 or later and a working `python3`
-command are required. Keep the App and project files together in a regular
-local folder; the App is not a standalone installer. Initial setup needs network
-access to install dependencies. See [distribution and startup troubleshooting](../DISTRIBUTION.md).
+Daily use should open `/Applications/Gewu Insight.app`, with research data in a
+separate user-selected `Gewu Database` folder. See
+[standalone macOS setup](MACOS_DMG_PREVIEW.md). Development uses an explicit,
+isolated workspace; do not point test copies at live research files. Reuse the
+development directory after the first creation command.
+
+After a source-folder database has been migrated, `.gewu-development-only`
+prevents the old implicit CLI launch from creating a second database in the
+checkout. Set `GEWU_WORKSPACE_ROOT` explicitly for development. The build seed
+can be retained as `assets/macos-app-template.zip`; `build_macos_app.sh` extracts
+it temporarily when the old source App is absent. To run legacy tests that read
+bundle resources directly, extract the template temporarily, run the checks,
+then remove that extracted development bundle. Do not launch it against formal
+data. Standalone builds always stage their own App.
 
 ## Architecture and state
 
@@ -101,6 +112,12 @@ Move and classify managed files through the App; manual filesystem changes can
 leave saved paths inconsistent with physical locations.
 
 ## Safe updates and backups
+
+For the one-time separation of an existing source checkout and its research
+data, give the [Chinese Codex migration instructions](SOURCE_DATA_MIGRATION.md)
+to the collaborator's Codex before updating. Codex handles shutdown, backups,
+local changes, pull, migration and startup verification. This workflow does not
+require a DMG; subsequent source updates reuse the selected directory.
 
 Before a major update or migration:
 

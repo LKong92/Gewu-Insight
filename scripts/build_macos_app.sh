@@ -5,6 +5,10 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd -P)"
 SOURCE="$PROJECT_DIR/scripts/PaperMonitorApp.m"
 INSTALLED_APP="$PROJECT_DIR/Gewu Insight.app"
 OUTPUT_APP="$INSTALLED_APP"
+if [[ ! -d "$INSTALLED_APP" ]]; then
+  OUTPUT_APP="$PROJECT_DIR/dist/Gewu Insight.app"
+fi
+SEED_WORKDIR=""
 DEVELOPMENT_ADHOC=0
 while (( $# )); do
   case "$1" in
@@ -14,6 +18,13 @@ while (( $# )); do
   esac
 done
 [[ "$OUTPUT_APP" = /* ]] || { echo "--output must be an absolute path." >&2; exit 2; }
+if [[ ! -d "$INSTALLED_APP" ]]; then
+  [[ -f "$PROJECT_DIR/assets/macos-app-template.zip" ]] || { echo "Missing macOS App build template." >&2; exit 1; }
+  SEED_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/gewu-app-seed.XXXXXX")"
+  trap '[[ -z "$SEED_WORKDIR" ]] || rm -rf "$SEED_WORKDIR"' EXIT
+  ditto -x -k "$PROJECT_DIR/assets/macos-app-template.zip" "$SEED_WORKDIR"
+  INSTALLED_APP="$SEED_WORKDIR/Gewu Insight.app"
+fi
 BUILD_PYTHON="${GEWU_BUILD_PYTHON:-$PROJECT_DIR/.venv/bin/python}"
 [[ -x "$BUILD_PYTHON" ]] || BUILD_PYTHON="$(command -v python3)"
 SIGNING_HELPER="$PROJECT_DIR/scripts/macos_signing.py"
@@ -45,6 +56,7 @@ cleanup() {
     fi
   fi
   rm -rf "$SIGN_WORKDIR"
+  [[ -z "$SEED_WORKDIR" ]] || rm -rf "$SEED_WORKDIR"
   return "$result"
 }
 trap cleanup EXIT

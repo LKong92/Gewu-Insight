@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import timedelta
 from pathlib import Path
 
-from .config import DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, load_config
+from .config import DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, ROOT, load_config
 from .download import download_paper
 from .importers.inventory import import_library_inventory
 from .monitor import apply_fast_section_hints, default_windows, run_journal_monitor
@@ -66,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    from .workspace import acquire_database_lock, check_database
+    if not os.environ.get("GEWU_WORKSPACE_ROOT") and (ROOT / ".gewu-development-only").exists():
+        raise RuntimeError("Research data has moved out of this checkout. Open /Applications/Gewu Insight.app for daily use. For development, explicitly set GEWU_WORKSPACE_ROOT to an isolated workspace.")
+    if Path(args.db).is_file():
+        check_database(args.db)
+    acquire_database_lock(args.db)
     storage = Storage(args.db)
     raw_config = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     storage.seed_journal_subscriptions(
