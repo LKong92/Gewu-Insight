@@ -1,21 +1,11 @@
 @echo off
 setlocal
-cd /d "%~dp0"
-title Gewu Insight - Desktop from Source
-set PYTHONUTF8=1
-set PYTHONIOENCODING=utf-8
-if not exist ".venv\Scripts\python.exe" (
-    echo First-time setup is required. Run these commands in this folder:
-    echo   py -3 -m venv .venv
-    echo   .venv\Scripts\python.exe -m pip install -r requirements.txt
-    echo Then double-click this launcher again.
+title Gewu Insight
+set "GEWU_INSTALLED=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Gewu Insight\Gewu Insight.lnk"
+if not exist "%GEWU_INSTALLED%" (
+    echo Gewu Insight is not installed for this Windows account.
+    echo Install the local Gewu Insight Setup.exe, then use the Start menu.
     pause
     exit /b 1
 )
-".venv\Scripts\python.exe" -B "scripts\windows_source.py" %*
-if errorlevel 1 (
-    echo.
-    echo Startup failed. See the message above.
-    pause
-    exit /b 1
-)
+start "" "%GEWU_INSTALLED%" %*

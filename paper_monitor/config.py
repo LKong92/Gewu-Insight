@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+import sys
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,9 +11,16 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE_ROOT = Path(os.environ.get("GEWU_WORKSPACE_ROOT") or ROOT).expanduser().resolve()
+_development_root = (Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+                     / "Gewu Insight" / "Development" / hashlib.sha256(str(ROOT).encode()).hexdigest()[:12])
+WORKSPACE_ROOT = Path(os.environ.get("GEWU_WORKSPACE_ROOT") or
+                      (_development_root if sys.platform == "win32" else ROOT)).expanduser().resolve()
 DATA_ROOT = Path(os.environ.get("GEWU_DATA_ROOT") or (WORKSPACE_ROOT / "data")).expanduser().resolve()
-DEFAULT_CONFIG_PATH = ROOT / "config" / "journals.json"
+_user_config = WORKSPACE_ROOT / "config" / "journals.json"
+DEFAULT_CONFIG_PATH = _user_config if _user_config.is_file() else ROOT / "config" / "journals.json"
+RUNTIME_ROOT = Path(os.environ.get("GEWU_RUNTIME_ROOT") or
+                    (Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+                     / "Gewu Insight" / "Databases" / hashlib.sha256(os.path.normcase(str(WORKSPACE_ROOT)).encode()).hexdigest()[:32]))
 DEFAULT_DB_PATH = DATA_ROOT / "paper_monitor.sqlite"
 DEFAULT_DAILY_REPORT_DIR = WORKSPACE_ROOT / "reports" / "daily"
 DEFAULT_ANALYSIS_DIR = WORKSPACE_ROOT / "reports" / "analyses"

@@ -67,6 +67,7 @@ from .config import (
     DEFAULT_SPACES_DIR,
     ROOT,
     WORKSPACE_ROOT,
+    RUNTIME_ROOT,
     load_config,
 )
 from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha256_for_file
@@ -367,7 +368,7 @@ AUTHOR_MONITOR_ENRICHMENT_RETRY_DAYS = 7
 AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS = 0.45
 NCBI_EUTILS_TOOL = "GewuInsight"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
-PDF_THUMB_CACHE_DIR = (WORKSPACE_ROOT / "cache" / "pdf_thumbs") if sys.platform == "win32" else Path("/private/tmp/paper_monitor_pdf_thumbs")
+PDF_THUMB_CACHE_DIR = (RUNTIME_ROOT / "Cache" / "pdf_thumbs") if sys.platform == "win32" else Path("/private/tmp/paper_monitor_pdf_thumbs")
 PDF_THUMB_CACHE_MAX_BYTES = 256 * 1024 * 1024
 PDF_THUMB_CACHE_TARGET_BYTES = 192 * 1024 * 1024
 LOCAL_FILE_RESPONSE_CHUNK_BYTES = 1024 * 1024
@@ -382,7 +383,7 @@ COMMENT_REPORT_LIST_LIMIT = 200
 COMMENT_REPORT_CONTEXT_LIMIT = 100
 COMMENT_REPORT_UNMATCHED_CONTEXT_LIMIT = 100
 COMMENT_REPORT_HIGHLIGHT_LIMIT = 10
-WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
+WEBKIT_NETWORK_CACHE_DIR = (RUNTIME_ROOT / "Cache" / "network") if sys.platform == "win32" else Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
 SUBJECTS_CONFIG_PATH = WORKSPACE_ROOT / "config" / "subjects.json"
@@ -506,10 +507,21 @@ def run_ui_server(
         temporary_endpoint = endpoint.with_suffix(".tmp")
         temporary_endpoint.write_text(url, encoding="utf-8")
         temporary_endpoint.replace(endpoint)
+        RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
+        runtime_endpoint = RUNTIME_ROOT / ".gewu-api-url"
+        runtime_temporary = runtime_endpoint.with_suffix(".tmp")
+        runtime_temporary.write_text(url, encoding="utf-8")
+        runtime_temporary.replace(runtime_endpoint)
     print(f"Journal Monitor UI: {url}")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url + "/#workspace=" + server.workspace_access.bootstrap())).start()
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        if sys.platform == "win32":
+            endpoint.unlink(missing_ok=True)
+            runtime_endpoint.unlink(missing_ok=True)
 
 
 class PaperMonitorUiHandler(BaseHTTPRequestHandler):
@@ -520,8 +532,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     server_version = "GewuInsightUI/0.1"
 
     def handle(self):
-        with scholar_access.database(self.configured_db_path):
-            super().handle()
+        from .service_lifecycle import enter, leave
+        if sys.platform == "win32":
+            try:
+                enter(self)
+            except RuntimeError:
+                return
+        try:
+            with scholar_access.database(self.configured_db_path):
+                super().handle()
+        finally:
+            leave(self)
 
     def end_headers(self):
         if getattr(self, "workspace_cookie_pending", False):
@@ -530,6 +551,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def trusted_local_request(self, *, browser: bool = False) -> bool:
         """Validate origin before choosing the workspace or scoped AI boundary."""
+        from .service_lifecycle import STOP
+        if STOP.is_set():
+            self.send_error_json(HTTPStatus.SERVICE_UNAVAILABLE, "Gewu Insight is shutting down; wait before retrying.")
+            return False
         host = self.headers.get("Host", "").lower()
         port = self.server.server_port
         allowed = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
@@ -819,6 +844,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not self.trusted_local_request(browser=parsed.path == "/api/browser"):
             return
         try:
+            if parsed.path == "/api/app/shutdown" and sys.platform == "win32":
+                from .service_lifecycle import drain
+                self.send_json({"stopping": True})
+                def stop_service():
+                    drain()
+                    self.server.shutdown()
+                threading.Thread(target=stop_service, name="gewu-shutdown", daemon=False).start()
+                return
             if parsed.path.startswith("/api/v1/"):
                 from .ai_http import handle_api
                 handle_api(self)

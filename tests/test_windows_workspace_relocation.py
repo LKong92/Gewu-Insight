@@ -93,19 +93,19 @@ class WorkspaceRelocationTests(unittest.TestCase):
                 relocate(self.source, self.target)
         self.assertFalse(self.target.exists())
 
-    def test_missing_managed_file_blocks_copy(self):
+    def test_preexisting_missing_file_is_reported_and_stays_missing(self):
         self.paper.unlink()
-        with self.assertRaises(FileNotFoundError):
-            relocate(self.source, self.target)
-        self.assertFalse(self.target.exists())
+        result = relocate(self.source, self.target)
+        self.assertTrue(result['preexisting_missing_files'])
+        self.assertFalse((self.target / self.paper.relative_to(self.source)).exists())
 
-    def test_embedded_unknown_path_requires_review(self):
+    def test_historical_embedded_paths_are_not_blindly_rewritten(self):
         import json
         with database(self.db) as c:
             c.execute("INSERT INTO app_settings VALUES('unplanned', ?)", (json.dumps([str(self.paper)]),))
-        with self.assertRaisesRegex(ValueError, "Unplanned workspace reference"):
-            relocate(self.source, self.target)
-        self.assertFalse(self.target.exists())
+        relocate(self.source, self.target)
+        with database(self.target / 'data/paper_monitor.sqlite') as c:
+            self.assertEqual(json.loads(c.execute("SELECT value FROM app_settings WHERE key='unplanned'").fetchone()[0]), [str(self.paper)])
 
     def test_failed_copy_keeps_source_and_does_not_select_partial_destination(self):
         original = self.paper.read_bytes()

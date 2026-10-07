@@ -703,10 +703,20 @@ CREATE INDEX IF NOT EXISTS idx_metadata_refreshes_paper_mode ON paper_metadata_r
 
 class Storage:
     def __init__(self, db_path: Path = DEFAULT_DB_PATH) -> None:
+        import sys
+        if sys.platform == "win32":
+            from .windows_database import guard_storage
+            guard_storage(db_path)
+            from .service_lifecycle import enter
+            enter(self)
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
+        # Reject newer schemas before any PRAGMA or schema-changing write.
+        if int(self.conn.execute("PRAGMA user_version").fetchone()[0]) > STORAGE_SCHEMA_VERSION:
+            self.conn.close()
+            raise ValueError("This Gewu Database requires a newer version of Gewu Insight.")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=15000")
@@ -1845,7 +1855,11 @@ class Storage:
             self._sync_paper_source_projection(paper_id)
 
     def close(self) -> None:
-        self.conn.close()
+        try:
+            self.conn.close()
+        finally:
+            from .service_lifecycle import leave
+            leave(self)
 
     @staticmethod
     def _identity_text_key(value: Any) -> str:

@@ -1,7 +1,7 @@
 """Conservative offline relocation of a Windows workspace, never an in-place move.
 
-Only verified, scalar operational paths are rewritten. Unknown embedded paths,
-reparse points, missing managed files and unrecognized shortcuts stop the copy.
+Only known operational paths are rewritten. Historical provenance is retained.
+Preexisting missing files are reported; reparse points and unknown shortcuts stop the copy.
 This is not the macOS Library importer. The caller switches the saved selection
 only after this function returns, and retains the source for rollback.
 """
@@ -26,7 +26,11 @@ PATH_COLUMNS = {
     ("papers", "main_pdf_path"), ("papers", "merged_pdf_path"),
     ("papers", "analysis_path"), ("resources", "stored_path"),
     ("author_monitors", "avatar_override_path"),
+    ("papers", "source_path"), ("inventory_import_batches", "inventory_path"),
+    ("inventory_import_batches", "report_path"), ("resource_duplicate_archive", "backup_directory"),
 }
+JSON_COLUMNS = {("papers", "supplement_pdf_paths"), ("ai_write_requests", "result_json"),
+                ("author_monitor_card_cache", "payload_json"), ("theme_results", "hits_json")}
 DB_RELATIVE = Path("data/paper_monitor.sqlite")
 
 
@@ -83,10 +87,51 @@ def relocated_path(value: str, source: Path, destination: Path) -> Path:
     old = Path(value)
     if not old.is_absolute():
         raise ValueError("Managed path must be absolute.")
-    relative = old.resolve(strict=True).relative_to(source)
-    if not old.is_file():
-        raise ValueError("Managed path does not identify a file.")
+    relative = old.absolute().relative_to(source)
+    if not relative.parts or relative.parts[0].casefold() not in {"data", "reports", "config", "backups"}:
+        raise ValueError("Operational path is outside the managed research directories.")
     return destination / relative
+
+
+def rebase(value, source, destination):
+    if isinstance(value, list):
+        return [rebase(item, source, destination) for item in value]
+    if isinstance(value, dict):
+        return {key: rebase(item, source, destination) for key, item in value.items()}
+    if isinstance(value, str) and Path(value).is_absolute() and Path(value).is_relative_to(source):
+        return str(relocated_path(value, source, destination))
+    return value
+
+
+def revised_value(table, column, value, row_values, source, destination):
+    if (table, column) in PATH_COLUMNS or (table == "resources" and column == "source_path" and not row_values.get("stored_path")):
+        return rebase(value, source, destination)
+    if (table, column) in JSON_COLUMNS:
+        parsed = json.loads(value)
+        revised = rebase(parsed, source, destination)
+        return json.dumps(revised, ensure_ascii=False) if revised != parsed else value
+    if table == "papers" and column == "raw_json":
+        parsed = json.loads(value)
+        before = json.dumps(parsed)
+        def visit(raw):
+            if not isinstance(raw, dict):
+                return
+            imported = raw.get("import")
+            if isinstance(imported, dict) and "stored_path" in imported:
+                imported["stored_path"] = rebase(imported["stored_path"], source, destination)
+            layout = raw.get("file_layout")
+            if isinstance(layout, dict):
+                for key in ("canonical_path", "associated_aliases"):
+                    if key in layout:
+                        layout[key] = rebase(layout[key], source, destination)
+            for item in raw.get("manual_identifier_metadata_history", []):
+                if isinstance(item, dict):
+                    visit(item.get("raw"))
+        visit(parsed)
+        return json.dumps(parsed, ensure_ascii=False) if json.dumps(parsed) != before else value
+    # Source paths on copied resources, import roots, snapshots and request
+    # payloads are provenance. Never replace arbitrary strings in user notes.
+    return value
 
 
 def database_plan(connection, source: Path, destination: Path):
@@ -98,13 +143,14 @@ def database_plan(connection, source: Path, destination: Path):
         expected = []
         for row in rows:
             revised = list(row[1:])
+            values = dict(zip(columns, revised))
             for index, column in enumerate(columns):
                 value = revised[index]
                 if not contains_root(value, source):
                     continue
-                if (table, column) not in PATH_COLUMNS:
-                    raise ValueError(f"Unplanned workspace reference in {table}.{column}; source unchanged.")
-                new = str(relocated_path(value, source, destination))
+                new = revised_value(table, column, value, values, source, destination)
+                if new == value:
+                    continue
                 revised[index] = new
                 changes.append((table, column, row[0], value, new))
             expected.append(tuple(revised))
@@ -128,7 +174,11 @@ def relocate(source: Path, destination: Path) -> dict:
     if destination.parent.resolve(strict=True) != destination.parent:
         raise ValueError("Destination parent must be its physical directory.")
     db_source = source / DB_RELATIVE
-    with workspace_lock(source):
+    from .windows_database import FileLease
+    for directory in ("file-layout-recovery", "folder-rename-recovery", "ai-import-recovery"):
+        if any((source / "data" / directory).rglob("*.json")):
+            raise ValueError("Complete interrupted file operations in the original App before migrating.")
+    with workspace_lock(source), FileLease(source / ".gewu-database.lock"):
         # Prevent CLI/service database writes as well as another desktop start.
         guard = sqlite3.connect(db_source.as_uri() + "?mode=rw", uri=True, timeout=1)
         read = sqlite3.connect(db_source.as_uri() + "?mode=ro", uri=True, timeout=1)
@@ -138,12 +188,18 @@ def relocate(source: Path, destination: Path) -> dict:
                 raise ValueError("Source database failed integrity_check.")
             original_fk = read.execute("PRAGMA foreign_key_check").fetchall()
             changes, expected = database_plan(read, source, destination)
-            paths = sorted(source.rglob("*"))
+            from .storage import STORAGE_SCHEMA_VERSION
+            if read.execute("PRAGMA user_version").fetchone()[0] > STORAGE_SCHEMA_VERSION:
+                raise ValueError("This database requires a newer Gewu Insight.")
+            paths = sorted(p for name in ("data", "reports", "config", "backups")
+                           for p in ([source / name, *(source / name).rglob("*")] if (source / name).exists() else []))
             files = []
             links = {}
+            missing = []
             excluded = {DB_RELATIVE, Path(str(DB_RELATIVE) + "-wal"),
                         Path(str(DB_RELATIVE) + "-shm"), Path(str(DB_RELATIVE) + "-journal"),
-                        Path(".workspace.lock")}
+                        Path(".workspace.lock"), Path(".gewu-database.lock"),
+                        Path("data/.gewu-api-url")}
             for path in paths:
                 relative = path.relative_to(source)
                 if relative in excluded:
@@ -156,12 +212,14 @@ def relocate(source: Path, destination: Path) -> dict:
                         if target is None:
                             raise ValueError(f"Unrecognized shortcut: {relative}")
                         if not target.is_file():
-                            raise FileNotFoundError(f"Missing shortcut target: {relative}")
-                        target = target.resolve(strict=True)
+                            missing.append({"shortcut": str(relative), "target": str(target)})
+                        target = target.absolute()
                         mapped = destination / target.relative_to(source) if target.is_relative_to(source) else target
                         links[relative] = (target, mapped)
                     files.append((relative, digest(path)))
             destination.mkdir()  # Exclusive creation; no overwrite/merge.
+            incomplete = destination / ".gewu-migration-incomplete"
+            incomplete.write_text(str(source), encoding="utf-8")
             with workspace_lock(destination):
                 for path in paths:
                     relative = path.relative_to(source)
@@ -202,9 +260,9 @@ def relocate(source: Path, destination: Path) -> dict:
                             raise ValueError(f"Source file changed: {relative}")
                         if relative in links:
                             old, new = links[relative]
-                            if desktop_files.managed_link_target(destination / relative) != new or not new.is_file():
+                            if desktop_files.managed_link_target(destination / relative) != new or old.is_file() != new.is_file():
                                 raise ValueError(f"Shortcut verification failed: {relative}")
-                            if digest(old) != digest(new):
+                            if old.is_file() and digest(old) != digest(new):
                                 raise ValueError(f"Shortcut target content changed: {relative}")
                             if old != new:
                                 continue
@@ -218,16 +276,23 @@ def relocate(source: Path, destination: Path) -> dict:
                         raise ValueError("Copied database failed integrity_check.")
                     if Counter(copy.execute("PRAGMA foreign_key_check").fetchall()) != Counter(original_fk):
                         raise ValueError("Foreign key violations changed.")
-                    for _, _, _, old, new in changes:
-                        if digest(Path(old)) != digest(Path(new)):
-                            raise ValueError("Managed resource hash mismatch.")
+                    for table, column, rowid, old, new in changes:
+                        if (table, column) in PATH_COLUMNS or (table == "resources" and column == "source_path"):
+                            if Path(old).is_file():
+                                if digest(Path(old)) != digest(Path(new)):
+                                    raise ValueError("Managed resource hash mismatch.")
+                            elif not Path(old).exists():
+                                missing.append({"table": table, "column": column, "rowid": rowid, "path": old})
                     schema_sql = "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"
                     if copy.execute(schema_sql).fetchall() != read.execute(schema_sql).fetchall():
                         raise ValueError("Database schema changed.")
                     copy.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 finally:
                     copy.close()
+            incomplete.unlink()
             return {"source": str(source), "destination": str(destination),
+                    "preexisting_missing_files": missing,
+                    "browser_profile_retained_at_source": str(source / "webview"),
                     "files_verified": len(files), "shortcuts_verified": len(links),
                     "shortcuts_retargeted": sum(old != new for old, new in links.values()),
                     "path_cells_updated": len(changes), "tables_compared": len(expected),
@@ -241,17 +306,44 @@ def relocate(source: Path, destination: Path) -> dict:
             guard.close()
 
 
-if __name__ == "__main__":
+def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--destination", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path,
                         help="New diagnostic report file; never used as Library data.")
-    args = parser.parse_args()
+    parser.add_argument("--select", action="store_true", help="Switch the per-user locator only after all verification and browser-profile preservation succeed.")
+    args = parser.parse_args(argv)
     if args.report.exists():
         parser.error("Report already exists; choose a new path.")
     result = relocate(args.source, args.destination)
-    with args.report.open("x", encoding="utf-8") as output:
-        json.dump(result, output, ensure_ascii=False, indent=2)
+    from .windows_database import prepare, preserve_browser_profile, save_locator, FileLease
+    try:
+        prepared = prepare(args.destination)
+        with FileLease(Path(prepared["runtime"]) / ".database-session.lock"):
+            preserve_browser_profile(args.source, prepared["runtime"])
+        result["identity"] = prepared["identity"]
+        result["runtime"] = prepared["runtime"]
+        # Write verification before changing the startup pointer.
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        with args.report.open("x", encoding="utf-8") as output:
+            json.dump(result, output, ensure_ascii=False, indent=2)
+    except Exception:
+        (args.destination / ".gewu-migration-incomplete").write_text(str(args.source), encoding="utf-8")
+        raise
+    if args.select:
+        save_locator(args.destination, prepared["identity"])
+        result["selection_changed"] = True
+        # The locator is already committed. A diagnostic write failure must not
+        # turn a verified selected database back into an incomplete migration.
+        try:
+            args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

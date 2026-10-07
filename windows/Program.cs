@@ -14,8 +14,16 @@ internal static class Program
     {
         TaskbarIdentity.Initialize();
         ApplicationConfiguration.Initialize();
-        try { Application.Run(new WorkspaceWindow(args)); }
-        catch (Exception error) { MessageBox.Show(error.Message, "Gewu Insight could not start", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        try {
+            if (args.Length == 3 && args[0] == "--configure-database") {
+                if (args[1] is not ("new" or "existing")) throw new ArgumentException("Choose new or existing Gewu Database.");
+                WorkspaceLocation.Prepare(AppContext.BaseDirectory, "", args[2], args[1] == "new", true);
+                return;
+            }
+            Application.Run(new WorkspaceWindow(args));
+        }
+        catch (OperationCanceledException) { Environment.ExitCode = 1; }
+        catch (Exception error) { Environment.ExitCode = 1; MessageBox.Show(error.Message, "Gewu Insight could not start", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 }
 
@@ -47,6 +55,7 @@ internal sealed partial class WorkspaceWindow : Form
     readonly BrowserFavicons favicons;
     readonly string root;
     readonly string dataRoot;
+    readonly DatabaseLocation database;
     readonly string python;
     readonly HttpClient client = new(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
     string workspaceToken = "";
@@ -57,6 +66,8 @@ internal sealed partial class WorkspaceWindow : Form
     Rectangle browserBounds;
     bool browserVisible;
     bool stopping;
+    bool closeApproved;
+    bool chooseDatabaseOnClose;
     StreamWriter? log;
     FileStream? workspaceLock;
 
@@ -64,8 +75,9 @@ internal sealed partial class WorkspaceWindow : Form
     {
         string Option(string key, string fallback) { int index = Array.IndexOf(args, key); return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback; }
         root = Path.GetFullPath(Option("--source", AppContext.BaseDirectory));
-        dataRoot = WorkspaceLocation.Resolve(args);
         python = Option("--python", Path.Combine(root, ".venv", "Scripts", "python.exe"));
+        database = WorkspaceLocation.Resolve(args, root, python);
+        dataRoot = database.Workspace;
         Text = "Gewu Insight — Windows Preview";
         Icon = new Icon(Path.Combine(AppContext.BaseDirectory, "GewuInsight.ico"), 256, 256);
         MinimumSize = new Size(900, 640); Size = new Size(1360, 900); StartPosition = FormStartPosition.CenterScreen;
@@ -76,11 +88,32 @@ internal sealed partial class WorkspaceWindow : Form
         ResizeBegin += async (_, _) => { suggestions.Hide(); await EmitAsync(new { @event = "suggestions-dismissed" }); };
         Activated += (_, _) => { if (!startup.Visible) { var view = selected?.View?.Visible == true ? selected.View : workspace; ActiveControl = view; view.Focus(); } };
         Shown += async (_, _) => { try { await StartAsync(); } catch (Exception error) { startup.Text = "Startup failed\n" + error.Message; } };
-        FormClosing += (_, _) => { stopping = true; applicationLifetime.Cancel(); browserPageMenu?.Dispose(); favicons.Dispose(); CancelCapture(); StopServer(); };
-        FormClosed += (_, _) => { loaderWindow?.Dispose(); foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose(); };
+        FormClosing += async (_, e) => {
+            if (closeApproved) { applicationLifetime.Cancel(); browserPageMenu?.Dispose(); favicons.Dispose(); CancelCapture(); StopServer(); return; }
+            e.Cancel = true;
+            if (stopping) return;
+            stopping = true;
+            try {
+                await StopServerGracefullyAsync();
+                closeApproved = true;
+                Close();
+            } catch (Exception error) {
+                stopping = false;
+                chooseDatabaseOnClose = false;
+                MessageBox.Show(this, "Background work has not finished. The database remains locked. Wait, then close again.\n" + error.Message, "Gewu Insight is still closing");
+            }
+        };
+        FormClosed += (_, _) => {
+            loaderWindow?.Dispose(); foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose();
+            if (chooseDatabaseOnClose) Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, ArgumentList = { "--choose-database" } });
+        };
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("File");
-        file.DropDownItems.Add("Open Data Folder", null, (_, _) => Process.Start(new ProcessStartInfo(dataRoot) { UseShellExecute = true }));
+        file.DropDownItems.Add("Open Gewu Database", null, (_, _) => Process.Start(new ProcessStartInfo(dataRoot) { UseShellExecute = true }));
+        file.DropDownItems.Add("Choose Gewu Database…", null, (_, _) => {
+            chooseDatabaseOnClose = true;
+            Close();
+        });
         file.DropDownItems.Add("Library Loader", null, async (_, _) => await ShowLibraryLoaderAsync());
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var edit = new ToolStripMenuItem("Edit");
@@ -144,10 +177,10 @@ internal sealed partial class WorkspaceWindow : Form
 
     async Task StartAsync()
     {
-        Directory.CreateDirectory(Path.Combine(dataRoot, "logs"));
+        Directory.CreateDirectory(Path.Combine(database.Runtime, "Logs"));
         try { workspaceLock = new FileStream(Path.Combine(dataRoot, ".workspace.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-        catch (IOException) { throw new IOException("This Library is already open in another Gewu Insight window. Close that window first."); }
-        log = new StreamWriter(Path.Combine(dataRoot, "logs", "windows-launcher.log"), append: true) { AutoFlush = true };
+        catch (IOException) { throw new IOException("This Gewu Database is already open or unavailable. Close its other instance and check disk access."); }
+        log = new StreamWriter(Path.Combine(database.Runtime, "Logs", "windows-launcher.log"), append: true) { AutoFlush = true };
         log.WriteLine("Workspace: " + dataRoot);
         using (var socket = new TcpListener(IPAddress.Loopback, 0)) { socket.Start(); origin = new Uri($"http://127.0.0.1:{((IPEndPoint)socket.LocalEndpoint).Port}/"); }
         await StartServerAsync();
@@ -156,8 +189,8 @@ internal sealed partial class WorkspaceWindow : Form
         // The remote Browser has a separate profile and never receives this token.
         try { CoreWebView2Environment.GetAvailableBrowserVersionString(); }
         catch (WebView2RuntimeNotFoundException) { throw new InvalidOperationException("Microsoft Edge WebView2 Runtime is required. Install the Evergreen Runtime from https://developer.microsoft.com/microsoft-edge/webview2/ and reopen Gewu Insight."); }
-        var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataRoot, "webview", "workspace"));
-        remoteEnvironment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataRoot, "webview", "browser"));
+        var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(database.Runtime, "Browser", "workspace"));
+        remoteEnvironment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(database.Runtime, "Browser", "browser"));
         await workspace.EnsureCoreWebView2Async(environment);
         ConnectWorkspaceRecovery();
         workspace.GotFocus += (_, _) => DismissMenus();
@@ -210,13 +243,21 @@ internal sealed partial class WorkspaceWindow : Form
     async Task StartServerAsync()
     {
         var bundled = Path.Combine(root, "service", "python.exe");
-        var start = new ProcessStartInfo(File.Exists(bundled) ? bundled : python) { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
+        if (!File.Exists(bundled) && Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar).Equals(
+            Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            throw new IOException("The installed runtime is missing. Reinstall Gewu Insight.");
+        var start = new ProcessStartInfo(File.Exists(bundled) ? bundled : python) { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8, StandardErrorEncoding = System.Text.Encoding.UTF8 };
+        start.ArgumentList.Add("-X"); start.ArgumentList.Add("utf8");
         start.ArgumentList.Add("-B");
         if (File.Exists(bundled)) start.ArgumentList.Add(Path.Combine(root, "service", "service_entry.py"));
         else { start.ArgumentList.Add("-m"); start.ArgumentList.Add("paper_monitor"); }
         foreach (var argument in new[] { "--db", Path.Combine(dataRoot, "data", "paper_monitor.sqlite"), "ui", "--host", "127.0.0.1", "--port", origin!.Port.ToString() }) start.ArgumentList.Add(argument);
         start.Environment["GEWU_WORKSPACE_ROOT"] = dataRoot;
         start.Environment["GEWU_DATA_ROOT"] = Path.Combine(dataRoot, "data");
+        start.Environment["GEWU_DATABASE_IDENTITY"] = database.Identity;
+        start.Environment["GEWU_RUNTIME_ROOT"] = database.Runtime;
+        start.Environment["GEWU_DESKTOP_HOST"] = Environment.ProcessId.ToString();
         start.Environment["PYTHONUTF8"] = "1";
         start.Environment["PYTHONIOENCODING"] = "utf-8";
         server = Process.Start(start) ?? throw new IOException("Could not start the local service.");
@@ -225,14 +266,27 @@ internal sealed partial class WorkspaceWindow : Form
         server.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (log!) log.WriteLine(e.Data); };
         server.BeginOutputReadLine(); server.BeginErrorReadLine();
         for (int i = 0; i < 600; i++) {
-            if (server.HasExited) throw new IOException("The local service stopped. See logs/windows-launcher.log.");
+            if (server.HasExited) throw new IOException("The local service stopped. See " + Path.Combine(database.Runtime, "Logs", "windows-launcher.log"));
             try { using var response = await client.GetAsync(new Uri(origin, "api/health")); if (response.IsSuccessStatusCode) return; } catch (HttpRequestException) { }
             await Task.Delay(200, applicationLifetime.Token);
         }
         throw new TimeoutException("The local service did not become ready in two minutes.");
     }
 
-    void StopServer() { if (server != null) { try { if (!server.HasExited) { server.Kill(entireProcessTree: true); server.WaitForExit(5000); } } catch (InvalidOperationException) { } server.Dispose(); server = null; } }
+    async Task StopServerGracefullyAsync()
+    {
+        if (server == null || server.HasExited) return;
+        if (workspaceToken.Length == 0) RefreshWorkspaceSession();
+        try { using var response = await client.PostAsync(new Uri(origin!, "api/app/shutdown"), new StringContent("{}")); }
+        catch (HttpRequestException) when (server.HasExited) { return; }
+        await server.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
+    }
+
+    void StopServer() {
+        if (server == null) return;
+        if (!server.HasExited) throw new IOException("The service is still using this Gewu Database. Close the App after background work finishes.");
+        server.Dispose(); server = null;
+    }
     bool Trusted(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) && origin != null && uri.Scheme == origin.Scheme && uri.Host == origin.Host && uri.Port == origin.Port;
     static bool PublicUrl(string url)
     {

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(sys.platform == "win32", "Windows workspace lock")
 class WindowsSourceTests(unittest.TestCase):
-    def test_missing_saved_library_never_creates_a_replacement(self):
+    def test_development_never_uses_installed_database_locator(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
             selection = home / ".gewu-insight/preview-workspace.txt"
@@ -29,8 +29,8 @@ class WindowsSourceTests(unittest.TestCase):
             missing = home / "missing"
             selection.write_text(str(missing), encoding="utf-8")
             with patch("pathlib.Path.home", return_value=home):
-                with self.assertRaisesRegex(ValueError, "Selected Library is unavailable"):
-                    workspace_path(None)
+                self.assertNotEqual(workspace_path(None), missing)
+                self.assertIn('Development', str(workspace_path(None)))
             self.assertFalse(missing.exists())
 
     def test_new_workspace_does_not_reuse_existing_files(self):
@@ -47,10 +47,10 @@ class WindowsSourceTests(unittest.TestCase):
         import win32job
         import win32process
 
-        with tempfile.TemporaryDirectory(prefix="gewu-source-test-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="gewu-source-test-") as temporary, tempfile.TemporaryDirectory(prefix="gewu-runtime-test-") as localappdata:
             workspace = Path(temporary)
             env = os.environ.copy()
-            env.update(GEWU_DOCUMENTATION_MODE="1", PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+            env.update(GEWU_DOCUMENTATION_MODE="1", PYTHONUTF8="1", PYTHONIOENCODING="utf-8", LOCALAPPDATA=localappdata)
             command = [sys.executable, "-B", str(ROOT / "scripts/windows_source.py"),
                        "--workspace", str(workspace), "--web", "--no-open"]
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

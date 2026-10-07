@@ -36,6 +36,7 @@ SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=GewuInsight.ico
 DisableProgramGroupPage=yes
+DisableDirPage=no
 UninstallDisplayIcon={app}\Gewu Insight.exe
 RestartApplications=no
 
@@ -56,12 +57,121 @@ Filename: "{app}\Gewu Insight.exe"; Description: "Open Gewu Insight"; Flags: now
 [Code]
 var
   WebView2ProgressPage: TOutputMarqueeProgressWizardPage;
+  DatabaseModePage: TInputOptionWizardPage;
+  DatabaseDirectoryPage: TInputDirWizardPage;
+  KeepDatabaseSelection: Boolean;
+  SavedDatabasePath: String;
+
+function InitializeSetup(): Boolean;
+begin
+  { Per-user installation must run as the daily user, never a different elevated
+    administrator. This also makes reinstall discovery and ownership unambiguous. }
+  Result := not IsAdminLoggedOn;
+  if not Result then
+    MsgBox('Run Setup normally from your Windows account, without Run as administrator. Gewu Insight installs for the current user and preserves that user''s database location.', mbError, MB_OK);
+end;
 
 procedure InitializeWizard();
+var
+  LegacyDatabasePath: AnsiString;
+  RequestedDatabasePath: String;
 begin
+  SavedDatabasePath := GetIniString('database', 'path', '', ExpandConstant('{%USERPROFILE}\.gewu-insight\database-location.ini'));
+  if SavedDatabasePath = '' then begin
+    if LoadStringFromFile(ExpandConstant('{%USERPROFILE}\.gewu-insight\preview-workspace.txt'), LegacyDatabasePath) then
+      SavedDatabasePath := Utf8Decode(LegacyDatabasePath);
+  end;
+  SavedDatabasePath := Trim(SavedDatabasePath);
+  DatabaseModePage := CreateInputOptionPage(wpSelectDir, 'Gewu Database',
+    'Choose where to keep your research data',
+    'The database is separate from the software installation. Uninstalling Gewu Insight keeps your research data.', True, False);
+  DatabaseModePage.Add('Create new Gewu Database');
+  DatabaseModePage.Add('Use existing Gewu Database');
+  DatabaseDirectoryPage := CreateInputDirPage(DatabaseModePage.ID, 'Gewu Database location',
+    'Select the database root directory',
+    'An existing database contains data\paper_monitor.sqlite. For a new database, choose a new or empty folder.', False, 'Gewu Database');
+  DatabaseDirectoryPage.Add('Gewu Database:');
+  if SavedDatabasePath <> '' then begin
+    DatabaseModePage.SelectedValueIndex := 1;
+    DatabaseDirectoryPage.Values[0] := SavedDatabasePath;
+  end else begin
+    DatabaseModePage.SelectedValueIndex := 0;
+    DatabaseDirectoryPage.Values[0] := ExpandConstant('{%USERPROFILE}\Gewu Database');
+  end;
+  RequestedDatabasePath := ExpandConstant('{param:DATABASEDIR|}');
+  if RequestedDatabasePath <> '' then DatabaseDirectoryPage.Values[0] := RequestedDatabasePath;
+  if ExpandConstant('{param:DATABASEMODE|}') = 'existing' then DatabaseModePage.SelectedValueIndex := 1;
+  if ExpandConstant('{param:DATABASEMODE|}') = 'new' then DatabaseModePage.SelectedValueIndex := 0;
   WebView2ProgressPage := CreateOutputMarqueeProgressPage(
     'Installing Microsoft WebView2',
     'WebView2 is required to display Gewu Insight.');
+end;
+
+function DatabaseSelectionError(): String;
+var
+  DatabasePath, InstallPath: String;
+  Entry: TFindRec;
+begin
+  Result := '';
+  DatabasePath := RemoveBackslashUnlessRoot(Trim(DatabaseDirectoryPage.Values[0]));
+  InstallPath := RemoveBackslashUnlessRoot(WizardDirValue);
+  if (Length(DatabasePath) < 3) or (DatabasePath[2] <> ':') or (DatabasePath[3] <> '\') then begin
+    Result := 'Choose an absolute local disk path, such as D:\Research\Gewu Database.'; Exit;
+  end;
+  if (CompareText(DatabasePath, InstallPath) = 0)
+    or (CompareText(Copy(DatabasePath, 1, Length(InstallPath) + 1), InstallPath + '\') = 0)
+    or (CompareText(Copy(InstallPath, 1, Length(DatabasePath) + 1), DatabasePath + '\') = 0) then begin
+    Result := 'Choose separate software and database directories.'; Exit;
+  end;
+  if DatabaseModePage.SelectedValueIndex = 1 then begin
+    if not FileExists(DatabasePath + '\data\paper_monitor.sqlite') then
+      Result := 'The existing Gewu Database was not found. Reconnect its disk or select its root directory. No empty database will be created.';
+  end else if DirExists(DatabasePath) then begin
+    if FindFirst(DatabasePath + '\*', Entry) then begin
+      try
+        repeat
+          if (Entry.Name <> '.') and (Entry.Name <> '..') then
+            Result := 'A new Gewu Database needs an empty directory. Existing files will not be overwritten or merged.';
+        until not FindNext(Entry);
+      finally
+        FindClose(Entry);
+      end;
+    end;
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Error: String;
+begin
+  Result := True;
+  if CurPageID = DatabaseDirectoryPage.ID then begin
+    Error := DatabaseSelectionError();
+    Result := Error = '';
+    if not Result then MsgBox(Error, mbError, MB_OK);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ExitCode: Integer;
+  Mode, Directory: String;
+begin
+  if CurStep <> ssPostInstall then Exit;
+  Directory := Trim(DatabaseDirectoryPage.Values[0]);
+  { Leave an unchanged locator intact on updates, including its expected identity.
+    The application validates disk availability, identity, locks and schema. }
+  KeepDatabaseSelection := (SavedDatabasePath <> '') and
+    (CompareText(Directory, SavedDatabasePath) = 0) and
+    FileExists(ExpandConstant('{%USERPROFILE}\.gewu-insight\database-location.ini')) and
+    (DatabaseModePage.SelectedValueIndex = 1);
+  if KeepDatabaseSelection then Exit;
+  if DatabaseModePage.SelectedValueIndex = 0 then Mode := 'new' else Mode := 'existing';
+  if not ExecAsOriginalUser(ExpandConstant('{app}\Gewu Insight.exe'),
+    '--configure-database ' + Mode + ' "' + Directory + '"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+    RaiseException('Database selection could not start. Open Gewu Insight to select your database.');
+  if ExitCode <> 0 then
+    RaiseException('Database selection failed. The previous location is retained. Open Gewu Insight to choose a valid database.');
 end;
 
 function HasWebView2At(Root: Integer): Boolean;
@@ -84,7 +194,8 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ExitCode: Integer;
 begin
-  Result := '';
+  Result := DatabaseSelectionError();
+  if Result <> '' then Exit;
   if HasWebView2() then begin
     Log('Using the existing Microsoft WebView2 Runtime.');
     Exit;

@@ -31,6 +31,11 @@ def mcp_config(token, port, db_path=None):
     env = {'GEWU_API_URL': f'http://127.0.0.1:{port}', 'GEWU_API_TOKEN': token}
     if sys.platform == 'win32' and db_path is not None:
         env['GEWU_API_URL_FILE'] = str(Path(db_path).resolve().parent / '.gewu-api-url')
+        import os
+        if os.environ.get('GEWU_DATABASE_IDENTITY'):
+            from .config import RUNTIME_ROOT
+            env['GEWU_API_URL_FILE'] = str(RUNTIME_ROOT / '.gewu-api-url')
+            env['GEWU_DATABASE_IDENTITY'] = os.environ['GEWU_DATABASE_IDENTITY']
     return {'mcpServers': {'gewu-insight': {'command': sys.executable,
             'args': [str(root / 'scripts' / 'gewu_mcp.py')],
             'env': env}}}
@@ -82,6 +87,9 @@ def handle_api(handler):
         authenticate(storage, authorization)
         parsed = urlparse(handler.path)
         path = parsed.path
+        expected_database = handler.headers.get('X-Gewu-Database', '')
+        if expected_database and storage.get_setting('gewu_database_uuid', '') != expected_database:
+            fail(409, 'database_identity_mismatch', 'This connection belongs to another Gewu Database.')
         args = {key: values[0] for key, values in parse_qs(parsed.query).items()}
         if path == '/api/v1/uploads' and handler.command == 'POST':
             from .ai_uploads import receive

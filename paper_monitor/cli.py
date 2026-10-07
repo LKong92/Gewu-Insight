@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if sys.platform == "win32":
+        import os
+        from .windows_database import acquire_session
+        if args.db.resolve() != DEFAULT_DB_PATH.resolve():
+            raise ValueError("Set GEWU_WORKSPACE_ROOT before starting the service; database and managed file paths must share one root.")
+        acquire_session(args.db, os.environ.get("GEWU_DATABASE_IDENTITY", ""))
     storage = Storage(args.db)
     raw_config = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     storage.seed_journal_subscriptions(

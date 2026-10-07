@@ -176,11 +176,14 @@ class GewuClient:
         self.url_file = os.environ.get('GEWU_API_URL_FILE', '') if url is None else ''
         self.url = (url or os.environ.get('GEWU_API_URL', 'http://127.0.0.1:8765')).rstrip('/')
         self.token = token or os.environ.get('GEWU_API_TOKEN', '')
+        self.database_identity = os.environ.get('GEWU_DATABASE_IDENTITY', '') if url is None else ''
         self.validate_url(self.url)
         if not self.token.startswith('gewu_ai_') or len(self.token) > 160 or any(c.isspace() for c in self.token):
             raise ValueError('Configure this connection with the token issued in Gewu Setting > AI Access.')
         # Ignore system proxies, and never forward this token to redirects.
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
+        if self.database_identity:
+            self.opener.addheaders = [('X-Gewu-Database', self.database_identity)]
         self._delivery_dir = None
         self._deliveries = {}
 

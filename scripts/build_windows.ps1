@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory=$true)][string]$PythonRuntime,
     [string]$InnoCompiler = '',
     [Parameter(Mandatory=$true)][string]$Version,
-    [string]$WebView2Bootstrapper = ''
+    [string]$WebView2Bootstrapper = '',
+    [string]$ReuseServicePayload = '',
+    [switch]$RebuildGuide
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -44,13 +46,20 @@ foreach ($dependency in $dependencies.libraries.PSObject.Properties.Name) {
     New-Item -ItemType Directory -Path $destination -Force | Out-Null
     $notices | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $destination }
 }
-& $Python scripts/package_windows_service.py --runtime $PythonRuntime --output (Join-Path $payload 'service')
+$serviceArguments = @('scripts/package_windows_service.py', '--runtime', $PythonRuntime, '--output', (Join-Path $payload 'service'))
+if ($ReuseServicePayload) {
+    Assert-GewuPayloadManifest -Path $ReuseServicePayload | Out-Host
+    $serviceArguments += @('--reuse-service', (Join-Path $ReuseServicePayload 'service'))
+}
+& $Python @serviceArguments
 if ($LASTEXITCODE -ne 0) { throw 'Python service packaging failed' }
 foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $notice) -Destination $payload
 }
-& $Python scripts/build_windows_preview_guide.py --version $Version
-if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide generation failed' }
+if ($RebuildGuide) {
+    & $Python scripts/build_windows_preview_guide.py --version $Version
+    if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide generation failed' }
+}
 foreach ($guide in @('Windows_Preview_Guide.html', 'Windows_Preview_Guide.pdf')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot ('windows/' + $guide)) -Destination $payload
 }

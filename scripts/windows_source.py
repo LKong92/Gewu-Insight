@@ -22,22 +22,11 @@ def workspace_path(explicit: Path | None, *, create: bool = False) -> Path:
         if create and workspace.exists() and any(workspace.iterdir()):
             raise ValueError("A new workspace must be an empty directory.")
         return workspace
-    selection = Path.home() / ".gewu-insight/preview-workspace.txt"
-    if selection.exists():
-        workspace = Path(selection.read_text(encoding="utf-8-sig").strip())
-        if not workspace.is_absolute() or not (workspace / "data/paper_monitor.sqlite").is_file():
-            raise ValueError(f"Selected Library is unavailable. Check {selection}; no new Library was created.")
-        return workspace.resolve()
-    preview = Path.home() / "Gewu Insight Preview"
-    if (preview / "data/paper_monitor.sqlite").is_file():
-        return preview.resolve()
-    legacy = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Gewu Insight Preview"
-    if (legacy / "data/paper_monitor.sqlite").exists():
-        raise ValueError("An existing Preview Library needs its physical folder selected with --workspace.")
-    source = Path.home() / "Gewu Insight Source"
-    if source.exists() and any(source.iterdir()) and not (source / "data/paper_monitor.sqlite").is_file():
-        raise ValueError("The source workspace contains files but no Library. Select a workspace explicitly.")
-    return source.resolve()
+    # Development never reads the installed application's database locator.
+    import hashlib
+    key = hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
+    return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "Gewu Insight" / "Development" / key
+
 
 
 class WorkspaceLock:
@@ -135,10 +124,18 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--desktop-exe cannot be combined with --web.")
     try:
         workspace = workspace_path(args.workspace, create=args.new_workspace)
-        workspace.mkdir(parents=True, exist_ok=True)
+        sys.path.insert(0, str(ROOT))
+        from paper_monitor.windows_database import prepare
+        os.environ["GEWU_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["GEWU_DATA_ROOT"] = str(workspace / "data")
+        prepared = prepare(workspace, create=args.new_workspace or (args.workspace is None and not workspace.exists()))
+        os.environ["GEWU_DATABASE_IDENTITY"] = prepared["identity"]
+        os.environ["GEWU_RUNTIME_ROOT"] = prepared["runtime"]
         if not args.web:
             return desktop_launch(workspace, args.desktop_exe)
-        with WorkspaceLock(workspace):
+        from paper_monitor.windows_database import acquire_session
+        acquire_session(workspace / "data/paper_monitor.sqlite", prepared["identity"])
+        if args.web:
             # Set these before importing product modules, whose defaults are computed on import.
             os.environ["GEWU_WORKSPACE_ROOT"] = str(workspace)
             os.environ["GEWU_DATA_ROOT"] = str(workspace / "data")
