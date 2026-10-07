@@ -25,6 +25,12 @@ $payload = Join-Path $repoRoot "dist/windows-trial-$Version"
 if (Test-Path -LiteralPath $payload) {
     throw 'Use a new version or a fresh payload directory; this builder never deletes or merges an existing payload.'
 }
+if ($RebuildGuide) {
+    & $Python scripts/build_windows_preview_guide.py --version $Version
+    if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide generation failed' }
+}
+& $Python scripts/build_windows_preview_guide.py --version $Version --check
+if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide must match the payload version. Use -RebuildGuide for the requested guide update.' }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 & $Dotnet publish windows/GewuInsight.Windows.csproj -c Release -r win-x64 --self-contained true -p:Version=$Version -o $payload --nologo
@@ -55,10 +61,6 @@ if ($ReuseServicePayload) {
 if ($LASTEXITCODE -ne 0) { throw 'Python service packaging failed' }
 foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $notice) -Destination $payload
-}
-if ($RebuildGuide) {
-    & $Python scripts/build_windows_preview_guide.py --version $Version
-    if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide generation failed' }
 }
 foreach ($guide in @('Windows_Preview_Guide.html', 'Windows_Preview_Guide.pdf')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot ('windows/' + $guide)) -Destination $payload

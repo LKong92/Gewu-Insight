@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from paper_monitor import ui_server as ui
 from paper_monitor.browser_capture import BrowserCaptureService, identifier, normalize_snapshot
 from paper_monitor.storage import Storage
@@ -120,6 +121,125 @@ class BrowserCaptureTests(unittest.TestCase):
 
     def count(self, table):
         return self.storage.conn.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]
+
+    def pdf_with_displaced_ellipsis(self, *, literal=False, extra_doi=''):
+        # Drawing order puts a distant pull quote after the footer. The footer's
+        # Tm followed by the quote's cm reproduces pypdf's joined DOI + ellipsis.
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject({NameObject('/Type'): NameObject('/Font'),
+            NameObject('/Subtype'): NameObject('/Type1'), NameObject('/BaseFont'): NameObject('/Helvetica'),
+            NameObject('/Encoding'): NameObject('/WinAnsiEncoding')})
+        page[NameObject('/Resources')] = DictionaryObject({NameObject('/Font'):
+            DictionaryObject({NameObject('/F1'): writer._add_object(font)})})
+        stream = DecodedStreamObject()
+        data = (b'q 1 0 0 1 72 700 cm BT /F1 20 Tf (A quantum sensing paper) Tj ET Q\n'
+                b'q 1 0 0 1 310 58 cm BT /F1 7 Tf 1 0 0 1 0 0 Tm '
+                b'(Published online; 10.1234/first' + (b'\205' if literal else b'') + b') Tj ET Q\n')
+        if not literal:
+            data += (b'q 1 0 0 1 246 390 cm BT /F1 17 Tf (\205) Tj ET Q\n'
+                     b'q 1 0 0 1 263 390 cm BT /F1 17 Tf (discovery and verification) Tj ET Q\n')
+        if extra_doi:
+            data += b'BT /F1 10 Tf 1 0 0 1 72 120 Tm (' + extra_doi.encode('ascii') + b') Tj ET\n'
+        stream.set_data(data)
+        page[NameObject('/Contents')] = writer._add_object(stream)
+        writer.add_metadata({'/Title': 'A quantum sensing paper'})
+        content = io.BytesIO()
+        writer.write(content)
+        return content.getvalue()
+
+    def test_browser_rechecks_displaced_ellipsis_and_saves_existing_paper_once(self):
+        paper = self.paper()
+        content = self.pdf_with_displaced_ellipsis()
+        page = PdfReader(io.BytesIO(content)).pages[0]
+        self.assertIn('10.1234/first…', page.extract_text())
+        self.assertEqual(ui.doi_candidates_from_text(page.extract_text(extraction_mode='layout')), ['10.1234/first'])
+        capture = self.begin()
+        self.service.upload(capture, content)
+        # Other import paths still use the unchanged shared extractor.
+        shared = ui.extract_identifier_from_pdf_or_title(capture.path, {}, title_lookup=lambda _: {})
+        self.assertEqual(shared['identifier'], '10.1234/first…')
+        self.assertEqual(capture.pdf_identifier, ('doi', '10.1234/first'))
+        reviewed = self.review(capture)
+        self.assertTrue(reviewed['can_save'], reviewed)
+        self.assertEqual(reviewed['paper']['gewu_key'], paper['storage_key'])
+        result = self.save(capture, include_pdf=True, file_type='published_version')
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(self.save(capture, include_pdf=True), result)
+        self.assertEqual([self.count(t) for t in ('papers', 'resources', 'library_items')], [1, 1, 1])
+        resource = self.storage.list_paper_resources('first')[0]
+        self.assertEqual(Path(self.storage.resource_local_path(resource)).read_bytes(), content)
+
+    def test_browser_rechecked_doi_still_blocks_a_different_article(self):
+        self.paper(doi='10.1234/other')
+        capture = self.begin(doi='10.1234/other')
+        self.service.upload(capture, self.pdf_with_displaced_ellipsis())
+        self.assertEqual(capture.pdf_identifier, ('doi', '10.1234/first'))
+        self.assertFalse(self.review(capture)['can_save'])
+        with self.assertRaises(ValueError):
+            self.save(capture, include_pdf=True)
+        self.assertEqual([self.count(t) for t in ('resources', 'library_items')], [0, 0])
+
+    def test_browser_does_not_trim_literal_or_ambiguous_pdf_doi(self):
+        self.paper()
+        for content in (self.pdf_with_displaced_ellipsis(literal=True),
+                        self.pdf_with_displaced_ellipsis(extra_doi='10.1234/reference')):
+            with self.subTest(content_size=len(content)):
+                capture = self.begin()
+                self.service.upload(capture, content)
+                self.assertEqual(capture.pdf_identifier, ('doi', '10.1234/first…'))
+                self.assertFalse(self.review(capture)['can_save'])
+                with self.assertRaises(ValueError):
+                    self.save(capture, include_pdf=True)
+        self.assertEqual([self.count(t) for t in ('resources', 'library_items')], [0, 0])
+
+    def test_browser_layout_failure_preserves_identifier_review(self):
+        from pypdf._page import PageObject
+        extract = PageObject.extract_text
+        def fail_layout(page, *args, **kwargs):
+            if kwargs.get('extraction_mode') == 'layout':
+                raise ValueError('Unsupported layout')
+            return extract(page, *args, **kwargs)
+        self.paper()
+        capture = self.begin()
+        with patch.object(PageObject, 'extract_text', fail_layout):
+            self.service.upload(capture, self.pdf_with_displaced_ellipsis())
+        self.assertEqual(capture.pdf_identifier, ('doi', '10.1234/first…'))
+        self.assertFalse(self.review(capture)['can_save'])
+
+    def test_browser_ellipsis_recheck_uses_only_the_selected_title_page(self):
+        for literal, expected in ((False, '10.1234/first'), (True, '10.1234/first…')):
+            with self.subTest(literal=literal):
+                writer = PdfWriter()
+                writer.add_blank_page(width=612, height=792)
+                writer.append(PdfReader(io.BytesIO(self.pdf_with_displaced_ellipsis(literal=literal))))
+                writer.append(PdfReader(io.BytesIO(self.pdf_with_displaced_ellipsis())))
+                writer.add_metadata({'/Title': 'A quantum sensing paper'})
+                content = io.BytesIO()
+                writer.write(content)
+                capture = self.begin()
+                self.service.upload(capture, content.getvalue())
+                self.assertEqual(capture.pdf_identifier, ('doi', expected))
+
+    def test_ordinary_browser_pdf_does_not_request_layout_recheck(self):
+        from pypdf._page import PageObject
+        from reportlab.pdfgen import canvas
+        content = io.BytesIO()
+        writer = canvas.Canvas(content)
+        writer.setTitle('A quantum sensing paper')
+        writer.drawString(72, 700, 'A quantum sensing paper')
+        writer.drawString(72, 100, 'doi: 10.1234/first')
+        writer.save()
+        extract = PageObject.extract_text
+        modes = []
+        def record_mode(page, *args, **kwargs):
+            modes.append(kwargs.get('extraction_mode'))
+            return extract(page, *args, **kwargs)
+        capture = self.begin()
+        with patch.object(PageObject, 'extract_text', record_mode):
+            self.service.upload(capture, content.getvalue())
+        self.assertEqual(capture.pdf_identifier, ('doi', '10.1234/first'))
+        self.assertNotIn('layout', modes)
 
     def test_long_publisher_filename_remains_a_readable_pdf_after_save(self):
         names = [

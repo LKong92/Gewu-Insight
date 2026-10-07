@@ -356,7 +356,7 @@
     scheduleLayout();
   }
   let capturePanel = null;
-  const captureFields = ["Unknown", "Published version", "Preprint", "Accepted manuscript", "Corrected published version", "Correction notice", "Supplementary material", "Peer review file", "Perspective", "News and Views", "Summary", "Analysis", "Source Data", "Source Code", "Other"];
+  const captureFields = ["Unknown", "Published version", "Preprint", "Accepted manuscript", "Corrected published version", "Correction notice", "Retraction notice", "Expression of concern", "Withdrawal notice", "Addendum", "Supplementary material", "Peer review file", "Perspective", "News and Views", "Summary", "Analysis", "Source Data", "Source Code", "Other"];
   function closeCapture() {
     const c = capturePanel;
     if (!c || c.saving) return;

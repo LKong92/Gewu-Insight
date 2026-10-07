@@ -1,6 +1,6 @@
 // Generated DOM and in-memory API only; never accesses the user's browser data.
 const assert = require('node:assert/strict');
-const fs = require('node:fs'), path = require('node:path');
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const {chromium} = require('playwright');
 const {execFileSync} = require('node:child_process');
 const root = path.resolve(__dirname,'..'), read = p => fs.readFileSync(path.join(root,p),'utf8');
@@ -111,7 +111,7 @@ function workspaceFunction(name) {
       assert.ok(fit.right<=width); assert.ok(fit.scroll<=fit.client+1);
     }
     await page.setViewportSize({width:1200,height:900});
-    await page.screenshot({path:'/private/tmp/gewu-capture-ui.png'});
+    await page.screenshot({path:path.join(os.tmpdir(),'gewu-capture-ui.png')});
     await page.click('[data-capture="folder"]');
     const menu=page.locator('.browser-capture-folder-menu.open');
     await menu.locator('[data-workspace-root-id="1"].library-add-folder-option').waitFor();
@@ -125,7 +125,7 @@ function workspaceFunction(name) {
     assert.match(await menu.locator('.library-add-selected-path').innerText(),/My Library \/ Reading \/ Quantum \/ Experiments/);
     assert.equal(await page.inputValue('[name="folder_id"]'),'4','navigation alone does not change destination');
     assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').length),0);
-    await page.screenshot({path:'/private/tmp/gewu-capture-picker.png'});
+    await page.screenshot({path:path.join(os.tmpdir(),'gewu-capture-picker.png')});
     await menu.locator('[data-action="confirm-library-add"]').click();
     assert.equal(await page.inputValue('[name="folder_id"]'),'7');
     assert.equal(await page.evaluate(()=>monitorSaves.length),0,'capture picker never calls Monitor ingestion');
@@ -150,7 +150,7 @@ function workspaceFunction(name) {
     await page.setViewportSize({width:1200,height:900});
 
     await details();
-    await page.screenshot({path:'/private/tmp/gewu-capture-details-expanded.png'});
+    await page.screenshot({path:path.join(os.tmpdir(),'gewu-capture-details-expanded.png')});
     await details(); await page.click('[data-capture="download"]');
     assert.equal(await page.locator('[data-capture="save"]').isDisabled(),true);
     const transfer=await page.evaluate(()=>commands.filter(c=>c.action==='capture-download').at(-1));
@@ -188,7 +188,7 @@ function workspaceFunction(name) {
       const button=await page.locator('#browserMessageAction').boundingBox();
       assert.ok(button.x>=0&&button.x+button.width<=width,'Show in Library fits the window');
     }
-    await page.screenshot({path:'/private/tmp/gewu-capture-save-success.png'});
+    await page.screenshot({path:path.join(os.tmpdir(),'gewu-capture-save-success.png')});
     await page.evaluate(()=>{failNavigation=true;});
     await page.click('#browserMessageAction');
     await page.waitForFunction(()=>document.querySelector('#browserMessageText').textContent.includes('Library unavailable'));
@@ -320,6 +320,20 @@ function workspaceFunction(name) {
     await monitorMenu.locator('button[data-folder-id="5"]').click();
     await monitorMenu.locator('[data-action="confirm-library-add"]').click();
     assert.deepEqual(await page.evaluate(()=>monitorSaves),[{id:'monitor-paper',folderId:5}],'Monitor Add to Library still saves directly');
+    await page.evaluate(()=>{deferBegin=false;});
+    id=await start(); await deliver(id);
+    await page.waitForFunction(()=>!document.querySelector('[data-capture="save"]').disabled);
+    for (const value of ['expression_of_concern','withdrawal_notice','addendum','retraction_notice']) {
+      await page.selectOption('[name="file_type"]', value);
+      assert.equal(await page.inputValue('[name="file_type"]'), value, 'notice types are selectable in Browser');
+    }
+    await details(); await page.click('[data-capture="download"]');
+    await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:''}));
+    await page.waitForFunction(()=>document.querySelector('[name="include_pdf"]').checked);
+    await page.click('[data-capture="save"]');
+    await page.waitForFunction(()=>!document.querySelector('.browser-capture-panel'));
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').at(-1).file_type),'retraction_notice');
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').at(-1).file_type_manual),true);
     assert.deepEqual(errors,[]);
     console.log('Capture metadata, privacy, review/save/cancel, retry, stale events, cache refresh, exact Library/Space navigation and three viewport sizes passed.');
   } finally { await browser.close(); }

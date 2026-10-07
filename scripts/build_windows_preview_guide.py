@@ -27,8 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "windows"
 HTML = OUT / "Windows_Preview_Guide.html"
 PDF = OUT / "Windows_Preview_Guide.pdf"
-EDITION = "October 6, 2026"
-VERSION = "0.1.23"
+EDITION = "October 7, 2026"
+VERSION = "0.1.25"
 
 
 def fragment(value):
@@ -79,7 +79,8 @@ def windows_html():
     replace_section(welcome, "Cross-platform core, platform-specific integration", f"""<h2>Windows desktop edition</h2>
 <p>This manual describes Gewu Insight {VERSION} for Windows. Install the versioned Setup.exe, then open <strong>Gewu Insight</strong> from the Start menu. The installer includes Python, .NET and application dependencies. It reuses Microsoft WebView2 or installs it from Microsoft when needed.</p>
 <p>The six workspaces share the same paper identities, file classifications and SQLite records. Windows supplies File Explorer, file associations, Recycle Bin, a built-in PDF reader and a WebView2 Browser. Apple Passwords/AutoFill, Safari source sync and macOS system Quick Look are not Windows features.</p>
-<p>Your existing workspace is normally <code>%USERPROFILE%\\Gewu Insight Preview</code>. Use <strong>File &gt; Open Data Folder</strong> to locate the actual selected workspace. The selection is recorded in <code>%USERPROFILE%\\.gewu-insight\\preview-workspace.txt</code>. Program files and research data are separate.</p>
+<p>Your research files and SQLite records live in the selected <strong>Gewu Database</strong>, independently of the installed program and any development checkout. The default for a new database is <code>%USERPROFILE%\\Gewu Database</code>; an existing database may be elsewhere. Use <strong>File &gt; Open Gewu Database</strong> to locate the actual folder.</p>
+<p>The startup selection is recorded in <code>%USERPROFILE%\\.gewu-insight\\database-location.ini</code>. SQLite owns the database identity and research state; the locator only remembers which database to open.</p>
 <p>The default program folder is <code>%LOCALAPPDATA%\\Programs\\Gewu Insight</code>. Existing installation and Library selections take precedence. Updating the program does not move your Library; uninstalling retains research data.</p>
 """)
     replace_section(welcome, "Open this guide again", """
@@ -100,24 +101,39 @@ def windows_html():
 <p>Windows offers <strong>Gewu Insight for all files</strong>. The macOS hybrid and all-native options are not shown. Space opens the supported built-in reader or a file card for the selected resource.</p>
 <p><strong>Open in Default App</strong> is separate: it follows Windows file associations. Gewu Insight has no separate default-PDF-reader setting. Set the associated application in Windows when needed.</p>
 """)
+    first = soup.find("article", id="first-session")
+    for node in reversed(fragment("""<h2>Open your Gewu Database first</h2>
+<ol class="steps"><li>Install the versioned Setup.exe and open <strong>Gewu Insight</strong> from the Start menu. Setup selects the program directory and database directory independently. A configured installation remembers its database.</li><li>In <strong>Choose Gewu Database</strong>, choose <strong>Use existing Gewu Database</strong> for an existing collection. Select the whole folder containing <code>data/paper_monitor.sqlite</code>, not the SQLite file or the inner data folder.</li><li>Choose <strong>Create new Gewu Database</strong> only for a new collection, using a new or empty folder. This is separate from creating a Space in the current Library.</li><li>Use <strong>File &gt; Open Gewu Database</strong> to reveal the active folder. <strong>File &gt; Choose Gewu Database…</strong> closes the current session and opens the selector. Finish background work and save website drafts before switching.</li></ol>
+<p>If the remembered database is unavailable, reconnect its disk or locate the intended existing folder. Gewu does not silently replace it with an empty database. A populated database moved to a different path also needs its managed file references and Windows shortcuts verified; selecting a copied folder alone is not a migration.</p>
+""")):
+        first.select_one(".lead").insert_after(node)
     replace_topic(soup, "backup-migrate", "Back Up and Upgrade", """
-<p class="lead">Back up the selected workspace and keep the installer for your current version. The executable alone is not your Library.</p>
-<h2>Create a consistent backup</h2><ol class="steps"><li>Use <strong>File &gt; Open Data Folder</strong> to find the selected workspace. Save website drafts and finish or stop background tasks.</li><li>Close the main Gewu window or choose <strong>File &gt; Exit</strong>. This stops its local service. Copy the entire workspace while it is closed, including <code>data/paper_monitor.sqlite</code>, any accompanying WAL/SHM files, managed Library/Space files, Associated Files and notes.</li><li>Preserve external folders used by Shortcuts separately. Keep the workspace-selection file and the installer for the current version as recovery material.</li><li>Verify the backup opens on a separate copy before relying on it. Keep the original unchanged until the replacement has been checked.</li></ol>
+<p class="lead">Back up the selected Gewu Database and keep the installer for your current version. The executable alone is not your Library.</p>
+<h2>Keep the three locations separate</h2><table class="plain-table"><tr><th>Location</th><th>Purpose</th></tr><tr><td>Installed program</td><td>Normally <code>%LOCALAPPDATA%\\Programs\\Gewu Insight</code>. Setup updates the application, bundled runtimes and guide.</td></tr><tr><td>Selected Gewu Database</td><td>Contains <code>data</code>, <code>reports</code>, <code>config</code> and <code>backups</code>, including SQLite, managed Library/Space files and notes. It stays in place during a program update.</td></tr><tr><td>Source checkout</td><td>Development code and build tools. Daily use starts the installed App from the Start menu; editing source does not update the installed App.</td></tr></table>
+<h2>Create a consistent backup</h2><ol class="steps"><li>Use <strong>File &gt; Open Gewu Database</strong> to find the selected folder. Save website drafts and finish or stop background tasks.</li><li>Choose <strong>File &gt; Exit</strong> and wait for the App and service to stop. Copy the entire database folder from this closed state, including hidden files, <code>data/paper_monitor.sqlite</code>, any accompanying WAL/SHM files, managed Library/Space files, Associated Files, notes, configuration and backups.</li><li>Preserve external originals used by Shortcuts separately. Keep Windows .lnk files intact; a shortcut does not contain its target's bytes. Historical import-source paths are provenance and need not be active file dependencies.</li><li>Keep <code>%USERPROFILE%\\.gewu-insight\\database-location.ini</code>, the current installer and relevant AI-client configuration as separate recovery material. Browser profiles are separate from the research folder.</li><li>Verify SQLite integrity, the copied file list and representative files on a separate copy. Store the backup outside the live database and keep the original until the replacement has been checked.</li></ol>
 <p>SQLite is authoritative. Copying only JSON exports, the program folder or a database file while it is changing is not a full backup. Do not replace the active database with an older file just to address a display problem.</p>
 <h2>Update the installed application</h2><p>After a verified backup, close Gewu Insight and run the newer versioned Setup.exe. Open <strong>Gewu Insight</strong> from the Start menu, then check the selected data folder, existing papers and file access. Check the installed version in Windows <strong>Settings &gt; Apps &gt; Installed apps</strong>. Keep the previous installer and backup until verification is complete. Do not open the Library with an older incompatible version.</p>
-<h2>Browser and credential boundaries</h2><p>Bookmarks and history are in SQLite. WebView2 website data is separate, under <code>webview/browser</code> in the workspace; it is not a portable sign-in export. Expect to sign in again on another computer. Browser tabs and unsent forms are memory-only and are not restored after quitting.</p>
+<h2>Move or select a database</h2><p>For a collection already separate from the program, a routine App update keeps the same folder, identity, Gewu Keys and file classifications. Uninstalling retains research data, the locator and browser sign-ins. A move to another path needs an offline, verified migration of operational file paths and Windows shortcuts; retain the original and do not merge two populated database folders. Do not run the source service and installed App against the same collection.</p>
+<h2>Browser and credential boundaries</h2><p>Bookmarks and history are in SQLite. WebView2 website profiles live separately under <code>%LOCALAPPDATA%\\Gewu Insight\\Databases\\&lt;identity&gt;\\Browser</code>; logs and cache use the adjacent <code>Logs</code> and <code>Cache</code> folders. The profile is not a portable sign-in export. Expect to sign in again on another computer. Browser tabs and unsent forms are memory-only and are not restored after quitting.</p>
 <p>Metadata API keys and AI Access information can be present in workspace data. Keep full backups private. Exporting bookmarks produces bookmark HTML, not cookies, passwords or browsing history.</p>
 <h2>Transfer selected research files</h2><p>Use <a href="#desktop-copy">Make a Portable Desktop Copy</a> for a selected collection. Retain its export manifest and use Folder Loader to restore the file relationships. A portable collection is not a full backup of settings, monitor history and the database. Whole-workspace macOS-to-Windows migration requires separate validation of paths and platform files.</p>
 """)
 
     browser = soup.find("article", id="browser")
+    for node in fragment("""<h2>Review PDF identity before saving</h2>
+<p>Save to Gewu matches the PDF to the selected article. An article's correction metadata pointing back to its own DOI does not by itself make the article a notice. A genuine correction or other publication notice is reviewed under its original article; check the displayed target and file classification. If the original article cannot be resolved, enter its Gewu Key and confirm the attachment.</p>
+<p>If PDF drawing order joins a distant ellipsis to a title-page DOI, Gewu checks the layout of that same page. It accepts the complete DOI only when the evidence is unambiguous. Different article identifiers still require review, and the saved PDF bytes are unchanged.</p>
+"""):
+        browser.append(node)
     replace_section(browser, "Use macOS Passwords", """
 <h2>Website sign-in on Windows</h2><p>Complete normal publisher or institutional sign-in yourself in Browser. Its WebView2 profile is separate from Chrome and Edge. Gewu does not import their cookies or credentials. Apple Passwords and its AutoFill trigger are not available in this Windows application.</p>
 """)
     # The Mac-specific client tutorial is not a valid Windows connection recipe.
     ai = soup.find("article", id="ai-access")
     replace_section(ai, "Example: connect Codex on macOS", """
-<h2>Connect a local MCP client on Windows</h2><ol class="steps"><li>Keep Gewu Insight running. In <strong>Settings &gt; AI Access</strong>, enable access and create a named connection with only the required collections and operations.</li><li>Use <strong>Copy MCP Configuration</strong>. Copy the generated command, arguments and environment values into your client's local STDIO server configuration. Keep each path, including spaces, as one argument.</li><li>The installed application provides its own Python runtime and MCP adapter. Use the exact generated paths; no separate Python installation is needed.</li><li>Preserve <code>GEWU_API_URL_FILE</code> when generated. It follows the current local port after an App restart. Keep <code>GEWU_API_TOKEN</code> private; do not paste it into a chat. The token is shown only at creation.</li><li>Reload the client's MCP connection. Verify a permitted collection before requesting files or writes. Moving the application or Library requires a newly generated configuration.</li></ol>
+<h2>Connect a local MCP client on Windows</h2><ol class="steps"><li>Keep Gewu Insight running on the intended database. In <strong>Settings &gt; AI Access</strong>, enable access and create a named connection with only the required collections and operations.</li><li>Use <strong>Copy MCP Configuration</strong>. Copy the generated command, arguments and environment values into your client's local STDIO server configuration. Keep each path, including spaces, as one argument.</li><li>The installed application provides its own Python runtime and MCP adapter. Use the exact generated paths; no separate Python installation is needed.</li><li>Preserve <code>GEWU_API_URL_FILE</code> and <code>GEWU_DATABASE_IDENTITY</code> when generated. They follow the current local port and bind the connection to the selected database. Keep <code>GEWU_API_TOKEN</code> private; the token is shown only at creation.</li><li>Reload the client's MCP connection, list tools and check a familiar authorized Gewu Key and its Paper Files before requesting writes.</li></ol>
+<p>Codex, DeepSeek Harness, Claude Code and other clients supporting a local STDIO MCP server can use this adapter. Map the generated command, arguments and environment into that client's configuration format. Create a separate named Gewu connection for each client. Client model login or API keys are separate from the Gewu token; <code>GEWU_API_URL</code> is a local API address, not a remote MCP server URL.</p>
+<h2>Reconnect after an App or database move</h2><p>A verified migration preserves connection permissions and scope; moving the folder does not itself require a new token. Keep the installed App open on the intended database. Update changed runtime, adapter or endpoint paths from its generated configuration, retaining the existing client's own token and unrelated settings. Preserve the database identity and URL-file fields. If these values did not change, keep them. The adapter command points to the installed program, not the research folder.</p>
 <p>The client must run where it can access the adapter's local files. A returned file path is not a cloud attachment. This manual does not change your AI client's configuration or its model settings.</p>
 """)
     # Remaining h2 after the replaced tutorial is retained (where present).
@@ -143,6 +159,7 @@ def windows_html():
     replace_section(startup, "Normal startup", """
 <h2>Normal startup</h2><p>Open <strong>Gewu Insight</strong> from the Start menu and wait for the startup screen to finish. Use one window for a workspace; its lock prevents a second desktop process from writing to the same Library. If the selected database is missing, startup stops instead of silently creating an empty replacement.</p>
 <p>The installed application includes its runtime dependencies. Keep the selected Library available. If startup fails after an interrupted installation, close the application and rerun its versioned Setup.exe.</p>
+<p>Missing, read-only, identity-mismatched or newer-schema databases stop startup with an explanation. Locate the correct database or use the required newer App; do not delete the database to clear an error. When closing, Gewu waits for active requests and database work before releasing its locks.</p>
 """)
     replace_section(startup, "Automatic local-server recovery", """
 <h2>Automatic local-server recovery</h2><p>The Windows shell retries an unexpectedly stopped service within a bounded restart budget. Workspace-renderer recovery is also bounded. Repeated failures show a recovery message instead of restarting indefinitely.</p>
@@ -210,7 +227,7 @@ def windows_html():
         ("If macOS denies Safari file access", "Windows supports manual Sync from Chrome using one selected local bookmark file and subtree. Safari source sync is not offered. Import an exported bookmark HTML file when no supported local source is available; source files are not modified."),
         ("WebView2 follows macOS networking", "Browser uses WebView2 and the current system network configuration. Gewu does not change proxies or Clash rules. Verify the actual route for publisher, PDF, login and CDN hosts independently; institutional access remains subject to the website."),
         ("A secure-connection error such as", "A secure-connection error can reflect network, VPN, routing, system time or certificate problems. Restore the connection, then reload once. The error alone does not prove an expired site certificate. Certificate verification remains enabled."),
-        ("Browser website data and its disposable favicon cache are managed", "Browser website data is under webview/browser in the selected Windows workspace. It is separate from SQLite bookmarks/history and Monitor caches. Do not assume that copying it transfers usable sign-ins to another computer."),
+        ("Browser website data and its disposable favicon cache are managed", "Browser website data is under %LOCALAPPDATA%/Gewu Insight/Databases/<identity>/Browser. Logs and Cache are adjacent, separate from SQLite bookmarks/history and the selected Gewu Database. Copying browser data does not guarantee usable sign-ins on another computer."),
         ("A failed database deletion restores the moved file when macOS", ""),
         ("Choose Help > Contact Us", "Choose Help > Contact Us to open info@gewu-insight.com in your default email application. Include the installed version, affected workflow and steps to reproduce; omit passwords, tokens and private research data. Review and send the message yourself."),
         ("A Library copy creates another reference", "A Library copy creates another placement of the same paper. Windows secondary main-file locations use .lnk shortcuts, and secondary Associated Files locations point to the canonical bundle. Versions and attachments remain associated with that paper; a placement copy does not create another unrelated identity."),
@@ -251,6 +268,7 @@ def windows_html():
             ("the Mac's local time zone", "the computer's local time zone"),
             ("selected in macOS", "selected in Windows"),
             ("macOS launcher diagnostics", "Windows launcher diagnostics"),
+            ("logs/windows-launcher.log", "%LOCALAPPDATA%/Gewu Insight/Databases/<identity>/Logs/windows-launcher.log"),
             ("native Start Gewu Insight.cmd", "Windows desktop application"),
             ("macOS system Preview", "macOS system Quick Look"),
             ("not shared with Safari", "not shared with Chrome or Edge"),
@@ -264,7 +282,7 @@ def windows_html():
         if "~/Library/Safari/Bookmarks.plist" in value:
             li.string = "Select Chrome's Bookmarks file from the intended local profile, normally under %LOCALAPPDATA%/Google/Chrome/User Data/Default/ or a Profile directory. Only that selected file is read. Choose its folder/subtree, then confirm the manual one-way sync."
         elif "earlier local server may still own port 8765" in value:
-            li.string = "Close the existing Gewu Insight window normally before reopening the selected workspace. If startup still fails, inspect logs/windows-launcher.log in the data folder; do not remove the database or start an older Preview."
+            li.string = "Close the existing Gewu Insight window normally before reopening the selected database. If startup still fails, inspect %LOCALAPPDATA%/Gewu Insight/Databases/<identity>/Logs/windows-launcher.log; do not remove the database or start an older incompatible App."
 
     # Remove Mac-only bookmark/menu instructions and native keyboard promises.
     for node in list(soup.select("article p, article li, article tr")):
@@ -504,10 +522,22 @@ def main():
     global VERSION
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=VERSION)
+    parser.add_argument("--check", action="store_true", help="Verify the existing HTML/PDF match the build version without rewriting them.")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):
         parser.error("--version must have the form major.minor.patch")
     VERSION = args.version
+    if args.check:
+        from pypdf import PdfReader
+        title = f"Gewu Insight User Guide - Windows {VERSION}"
+        soup = BeautifulSoup(HTML.read_text(encoding="utf-8"), "html.parser")
+        reader = PdfReader(PDF)
+        if (soup.title.get_text() != title or
+                not soup.select_one(".guide-revision").get_text().startswith(f"Windows {VERSION} ·") or
+                reader.metadata.title != title or f"Windows {VERSION}" not in reader.pages[0].extract_text()):
+            parser.error("User Guide version mismatch; rebuild both editions with --version " + VERSION)
+        print(f"HTML and PDF User Guide match Windows {VERSION}.")
+        return
     soup, common = windows_html()
     HTML.write_text(str(soup), encoding="utf-8")
     build_pdf(soup, common)

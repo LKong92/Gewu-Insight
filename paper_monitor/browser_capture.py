@@ -40,6 +40,29 @@ def identifier(value: str) -> tuple[str, str]:
     return "", ""
 
 
+def _recheck_pdf_doi_ellipsis(found, reader, pdf_path, metadata_title, page_texts, layout_titles):
+    """Confirm a displaced ellipsis from this Browser PDF's same title page."""
+    value = found.get("identifier", "")
+    if found.get("kind") != "doi" or found.get("source") != "pdf_title_page" or not value.endswith("…"):
+        return found
+    from . import ui_server as ui
+    titles = ui.article_title_candidates_for_identifier({}, metadata_title, pdf_path, layout_titles=layout_titles)
+    title_page = ui.title_page_text_for_identifier(page_texts, titles)
+    if not title_page:
+        return found
+    index = next(i for i, text in enumerate(page_texts) if clean_text(text) == title_page)
+    try:
+        # PDF drawing order can join a footer DOI to a distant pull quote.
+        # Reuse the validated reader; do not consult URLs or reference pages.
+        layout_text = reader.pages[index].extract_text(extraction_mode="layout") or ""
+    except Exception:
+        return found
+    candidates = ui.doi_candidates_from_text(layout_text)
+    if candidates == [value[:-1]]:
+        return {**found, "identifier": candidates[0]}
+    return found
+
+
 def persistent_url(value: str) -> str:
     try:
         return history_url(value) or ""
@@ -97,6 +120,8 @@ class Capture:
     resolved: dict = field(default_factory=dict)
     reviewed_identifiers: set | None = None
     target_key: str = ""
+    notice_paper: dict | None = None
+    notice: dict | None = None
 
     @property
     def path(self) -> Path:
@@ -170,6 +195,7 @@ class BrowserCaptureService:
             metadata_title, all_pages = ui.pdf_identifier_page_texts(capture.path, reader=reader)
             found = ui.extract_identifier_from_pdf_or_title(capture.path, {}, title_lookup=lambda _: {},
                 pdf_evidence=(metadata_title, all_pages, layouts))
+            found = _recheck_pdf_doi_ellipsis(found, reader, capture.path, metadata_title, all_pages, layouts)
             capture.pdf_identifier = (found.get("kind", ""), found.get("identifier", ""))
             titles = first_page.get("titles", layouts)
             pages = all_pages[:1]
@@ -185,6 +211,7 @@ class BrowserCaptureService:
                                       and not re.search(r"https?://|\bdoi\.org/", text, re.I)), "")[:1000]
             capture.pdf_ready = True
             capture.paper = None
+            capture.notice_paper = capture.notice = None
 
     @staticmethod
     def suggested_file_type(capture: Capture) -> tuple[str, str]:
@@ -192,6 +219,12 @@ class BrowserCaptureService:
         if not capture.pdf_ready:
             return "unknown", ""
         from . import ui_server as ui
+        from . import publication_notices as notices
+        notice_kind = (capture.notice or {}).get('kind') or next((
+            notices.title_kind(title) for title in (capture.pdf_metadata_title, capture.pdf_title)
+            if notices.title_kind(title)), '')
+        if notice_kind:
+            return notice_kind, "Publication notice; this PDF will be attached to the selected original article."
         text = " ".join([capture.pdf_name, capture.pdf_metadata_title, capture.pdf_title, capture.pdf_heading]).casefold()
         if re.search(r"supplement(?:ary|al)?[\s_-]*(?:information|material|data|appendix)|supporting[\s_-]*information|\b\w+_moesm\d+_esm\b", text):
             return "supplementary_material", "Supplementary material identified in this PDF."
@@ -278,6 +311,28 @@ class BrowserCaptureService:
         candidates = ui.search_crossref_publications(value, kind="doi", timeout=8, max_retries=1)
         return ui.paper_from_publication_candidate(candidates[0]) if candidates else None
 
+    @staticmethod
+    def _attachment_notice(storage, paper):
+        """Browser-only: a self-update alone does not turn an article into a notice.
+
+        Keep shared ingestion guards and retained evidence untouched. Explicit
+        notice titles/types still qualify even when their relation is incomplete.
+        """
+        from . import publication_notices as notices
+        notice = notices.describe_known(storage, paper)
+        own = normalize_doi(paper.get('doi') or paper.get('DOI'))
+        if notice and own and notice['related_dois'] == [own]:
+            raw = dict(notices._raw(paper))
+            evidence = dict(paper)
+            for record in (evidence, raw):
+                record.pop('update-to', None)
+            if isinstance(raw.get('crossref'), dict):
+                raw['crossref'] = {k: v for k, v in raw['crossref'].items() if k != 'update-to'}
+            evidence['raw'] = raw
+            if not notices.describe(evidence):
+                return None
+        return notice
+
     def review(self, capture: Capture, storage, payload: dict) -> dict:
         from . import ui_server as ui
         with capture.lock:
@@ -285,6 +340,8 @@ class BrowserCaptureService:
             capture.paper = None
             capture.reviewed_identifiers = None
             capture.target_key = ""
+            if not payload.get('target_key'):
+                capture.notice_paper = capture.notice = None
             meta = capture.snapshot["metadata"]
             explicit = clean_text(str(payload.get("identifier") or ""))[:512]
             page_id = identifier(meta["doi"] or meta["arxiv"] or capture.snapshot["url"])
@@ -364,6 +421,30 @@ class BrowserCaptureService:
                     if kind == "arxiv":
                         candidate["paper_id"] = "arxiv_" + value
                         candidate["raw"]["arxiv_id"] = value
+            # Resolve the attachment target during review, so the displayed
+            # article is the one Save will actually receive. No writes here.
+            if candidate and not payload.get('target_key'):
+                capture.notice = self._attachment_notice(storage, candidate)
+                if capture.notice:
+                    capture.notice_paper = dict(candidate)
+                    related = capture.notice['related_dois']
+                    candidate = existing = None
+                    if len(related) == 1 and related[0] != capture.notice['doi']:
+                        candidate = existing = self.existing(storage, 'doi', related[0])
+                        if not candidate and payload.get('resolve', True):
+                            cache_key = 'doi:' + related[0]
+                            if cache_key not in capture.resolved:
+                                try:
+                                    capture.resolved[cache_key] = self.resolve('doi', related[0])
+                                except Exception:
+                                    capture.resolved[cache_key] = None
+                            candidate = capture.resolved.get(cache_key)
+                            if candidate and normalize_doi(candidate.get('doi')) != related[0]:
+                                candidate = None
+                        if candidate and self._attachment_notice(storage, candidate):
+                            candidate = existing = None
+                    warning = ("Publication notice: the PDF will be saved under the original article shown below."
+                               if candidate else "Choose the original article using its Gewu Key, then confirm this PDF belongs to it.")
             target_conflict = ""
             target_key = clean_text(str(payload.get("target_key") or "")).lower()
             if target_key:
@@ -372,6 +453,8 @@ class BrowserCaptureService:
                 target = storage.paper_for_key(target_key)
                 if not target:
                     raise ValueError("Gewu Key not found. Check the key or return to automatic identification.")
+                if self._attachment_notice(storage, target):
+                    raise ValueError("Choose the original article's Gewu Key, rather than a publication notice.")
                 target_ids = paper_identity.identifiers(storage, target)
                 evidence = {item for item in (page_id, detected, (kind, value)) if item[1]}
                 mismatched = any(item not in target_ids for item in evidence)
@@ -382,6 +465,9 @@ class BrowserCaptureService:
                 candidate = existing = target
                 capture.target_key = target["storage_key"]
                 warning = "Target selected manually. Existing article metadata will be preserved."
+                if capture.notice:
+                    capture.notice = dict(capture.notice, related_dois=[normalize_doi(target['doi'])] if target.get('doi') else [],
+                                          browser_target_key=target['storage_key'])
             capture.paper = dict(candidate) if candidate else None
             if existing:
                 capture.reviewed_identifiers = paper_identity.identifiers(storage, existing)
@@ -459,14 +545,16 @@ class BrowserCaptureService:
             if file_type not in FILE_TYPES:
                 raise ValueError("Choose a supported PDF file type.")
             paper = dict(capture.paper)
-            notice = notices.describe_known(storage,paper)
+            notice = capture.notice or self._attachment_notice(storage, paper)
+            notice_paper = capture.notice_paper or paper
             notice_id = None
             if notice:
-                parent = notices.target(storage,notice)
-                notice_id = notices.record(storage,paper,notice,parent,commit=True)
-                if not parent:
-                    raise notices.NoticeReviewRequired('Publication notice retained for relation review. Import the original article first and supply its DOI relation; no independent paper was created. You can also attach this PDF to the original article as a notice in Paper Files.')
-                paper = parent
+                if not capture.notice_paper:
+                    parent = notices.target(storage,notice)
+                    if not parent:
+                        notices.record(storage,paper,notice,commit=True)
+                        raise notices.NoticeReviewRequired('Choose the original article using its Gewu Key, then confirm this PDF belongs to it.')
+                    paper = parent
                 file_type = notice['kind']
             # Recheck canonical identity immediately before writing: another
             # capture may have saved it while this review panel was open.
@@ -474,7 +562,7 @@ class BrowserCaptureService:
             if len(matches) > 1:
                 raise ValueError("More than one article matches. Review the target again.")
             matched = matches[0] if matches else None
-            if not notice and capture.reviewed_identifiers is not None and (not matched or paper_identity.identifiers(storage, matched) != capture.reviewed_identifiers):
+            if capture.reviewed_identifiers is not None and (not matched or paper_identity.identifiers(storage, matched) != capture.reviewed_identifiers):
                 raise ValueError("The target identifiers changed while this panel was open. Review the article again.")
             if matched:
                 if storage.paper_identity_conflict_reasons(matched, paper):
@@ -482,6 +570,8 @@ class BrowserCaptureService:
                 paper = matched
             elif not storage.upsert_paper(paper):
                 raise ValueError("The article identity conflicts with an existing record.")
+            if notice:
+                notice_id = notices.record(storage,notice_paper,notice,paper,commit=True)
             paper_id = paper["paper_id"]
             destination = self.destination(capture, storage, paper_id, folders, payload)
             folder_id = destination["folder_id"] or int(storage.ensure_library_folder(parent_id=1, name="unsorted")["id"])
