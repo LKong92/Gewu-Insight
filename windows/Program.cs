@@ -50,7 +50,7 @@ internal sealed class BrowserPage
 internal sealed partial class WorkspaceWindow : Form
 {
     readonly WebView2 workspace = new() { Dock = DockStyle.Fill };
-    readonly Label startup = new() { Text = "Gewu Insight\nStarting your research workspace…", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter };
+    readonly StartupView startup = new();
     readonly List<BrowserPage> pages = [];
     readonly BrowserFavicons favicons;
     readonly string root;
@@ -87,7 +87,11 @@ internal sealed partial class WorkspaceWindow : Form
         Deactivate += async (_, _) => { suggestions.Hide(); await EmitAsync(new { @event = "suggestions-dismissed" }); };
         ResizeBegin += async (_, _) => { suggestions.Hide(); await EmitAsync(new { @event = "suggestions-dismissed" }); };
         Activated += (_, _) => { if (!startup.Visible) { var view = selected?.View?.Visible == true ? selected.View : workspace; ActiveControl = view; view.Focus(); } };
-        Shown += async (_, _) => { try { await StartAsync(); } catch (Exception error) { startup.Text = "Startup failed\n" + error.Message; } };
+        Shown += async (_, _) => {
+            startup.Refresh();
+            try { await StartAsync(); }
+            catch (Exception error) { startup.SetStatus("Startup failed", error.Message); startup.Show(); startup.BringToFront(); }
+        };
         FormClosing += async (_, e) => {
             if (closeApproved) { applicationLifetime.Cancel(); browserPageMenu?.Dispose(); favicons.Dispose(); CancelCapture(); StopServer(); return; }
             e.Cancel = true;

@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Version,
     [string]$WebView2Bootstrapper = '',
     [string]$ReuseServicePayload = '',
+    [string]$GuideVersion = '',
     [switch]$RebuildGuide
 )
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,9 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Set-Location -LiteralPath $repoRoot
 . (Join-Path $PSScriptRoot 'windows_release.ps1')
 if ($Version -notmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z') { throw 'Version must have the form major.minor.patch.' }
+if (-not $GuideVersion) { $GuideVersion = $Version }
+if ($GuideVersion -notmatch '\A[0-9]+\.[0-9]+\.[0-9]+\z' -or [version]$GuideVersion -gt [version]$Version) { throw 'GuideVersion must be a valid edition no newer than the payload.' }
+if ($RebuildGuide -and $GuideVersion -ne $Version) { throw 'A rebuilt guide must use the payload version.' }
 if ($InnoCompiler -and -not $WebView2Bootstrapper) {
     throw 'Setup needs the official WebView2 Evergreen Bootstrapper.'
 }
@@ -29,8 +33,9 @@ if ($RebuildGuide) {
     & $Python scripts/build_windows_preview_guide.py --version $Version
     if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide generation failed' }
 }
-& $Python scripts/build_windows_preview_guide.py --version $Version --check
-if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide must match the payload version. Use -RebuildGuide for the requested guide update.' }
+& $Python scripts/build_windows_preview_guide.py --version $GuideVersion --check
+if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide must match the selected guide edition. Use -RebuildGuide only for a requested guide update.' }
+if ($GuideVersion -ne $Version) { Write-Output "Reusing unchanged Windows User Guide edition $GuideVersion for Windows $Version." }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 & $Dotnet publish windows/GewuInsight.Windows.csproj -c Release -r win-x64 --self-contained true -p:Version=$Version -o $payload --nologo

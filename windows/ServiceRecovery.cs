@@ -22,7 +22,7 @@ internal sealed partial class WorkspaceWindow
                 try {
                     while (rendererRestarts.Count > 0 && DateTime.UtcNow - rendererRestarts.Peek() > TimeSpan.FromMinutes(1)) rendererRestarts.Dequeue();
                     if (rendererRestarts.Count >= 3) {
-                        startup.Text = "The workspace renderer could not recover. Close and reopen Gewu Insight.";
+                        startup.SetStatus("Workspace unavailable", "The workspace renderer could not recover. Close and reopen Gewu Insight.");
                         startup.Show(); startup.BringToFront(); return;
                     }
                     rendererRestarts.Enqueue(DateTime.UtcNow);
@@ -66,7 +66,7 @@ internal sealed partial class WorkspaceWindow
         if (stopping || !workspaceReady || recoveringService || server != exited) return;
         recoveringService = true;
         CancelCapture(); suggestions.Hide(); browserVisible = false; browserActive = false; favicons.Active = false;
-        LayoutBrowser(); startup.Text = "Reconnecting to your research workspace…"; startup.Show(); startup.BringToFront();
+        LayoutBrowser(); startup.SetStatus("Reconnecting Gewu Insight", "Reconnecting to your research workspace…"); startup.Show(); startup.BringToFront();
         try {
             for (int attempt = 0; attempt < 3 && !stopping; attempt++) {
                 while (serviceRestarts.Count > 0 && DateTime.UtcNow - serviceRestarts.Peek() > TimeSpan.FromMinutes(1)) serviceRestarts.Dequeue();
@@ -96,7 +96,7 @@ internal sealed partial class WorkspaceWindow
                 } catch (OperationCanceledException) when (stopping) { return; }
                 catch (Exception error) { log?.WriteLine("Service recovery: " + error.Message); }
             }
-            if (!stopping) { StopServer(); startup.Text = "The local service could not recover.\nClose and reopen Gewu Insight. See logs/windows-launcher.log."; }
+            if (!stopping) { StopServer(); startup.SetStatus("Workspace unavailable", "The local service could not recover.\nClose and reopen Gewu Insight. See logs/windows-launcher.log."); }
         } finally { recoveringService = false; }
     }
 }

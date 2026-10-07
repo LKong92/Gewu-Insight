@@ -10,6 +10,8 @@
     <Content Include="../../windows/GewuInsight.ico" Link="GewuInsight.ico" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="../../windows/workspace.js" LogicalName="GewuInsight.Windows.workspace.js" />
     <EmbeddedResource Include="../../windows/pdf-preview.js" LogicalName="GewuInsight.Windows.pdf-preview.js" />
+    <EmbeddedResource Include="../../assets/gewu-insight-app-icon.png" LogicalName="GewuInsight.Windows.startup-icon.png" />
+    <EmbeddedResource Include="../../assets/branding/GewuSealGlyphs.png" LogicalName="GewuInsight.Windows.startup-seal.png" />
     <EmbeddedResource Include="../../paper_monitor/pdf_source_hosts.txt" LogicalName="GewuInsight.Windows.pdf_source_hosts.txt" />
     <EmbeddedResource Include="../../scripts/GewuBrowserCaptureProbe.js" LogicalName="GewuInsight.Windows.capture.js" />
   </ItemGroup>
