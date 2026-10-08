@@ -6,11 +6,17 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Gewu Insight</AssemblyName>
-    <Version>0.1.0</Version>
+    <!-- Use the same product metadata as the macOS bundle builder. -->
+    <_ProductMetadata>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../paper_monitor/__init__.py'))</_ProductMetadata>
+    <GewuProductVersion>$([System.Text.RegularExpressions.Regex]::Match('$(_ProductMetadata)', '__version__\s*=\s*"([^"]+)"').Groups[1].Value)</GewuProductVersion>
+    <GewuProductBuild>$([System.Text.RegularExpressions.Regex]::Match('$(_ProductMetadata)', '__build__\s*=\s*"([^"]+)"').Groups[1].Value)</GewuProductBuild>
+    <Version>$(GewuProductVersion)</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>GewuInsight.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyMetadata Include="GewuProductVersion" Value="$(GewuProductVersion)" />
+    <AssemblyMetadata Include="GewuProductBuild" Value="$(GewuProductBuild)" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <Content Include="GewuInsight.ico" CopyToOutputDirectory="PreserveNewest" />
     <!-- A distinct Shell icon location avoids the cache of the original padded
@@ -20,10 +26,15 @@
     <EmbeddedResource Include="pdf-preview.js" LogicalName="GewuInsight.Windows.pdf-preview.js" />
     <EmbeddedResource Include="../assets/gewu-insight-app-icon.png" LogicalName="GewuInsight.Windows.startup-icon.png" />
     <EmbeddedResource Include="../assets/branding/GewuSealGlyphs.png" LogicalName="GewuInsight.Windows.startup-seal.png" />
+    <EmbeddedResource Include="../assets/branding/GewuAboutCalligraphy.png" LogicalName="GewuInsight.Windows.about-calligraphy.png" />
     <EmbeddedResource Include="../paper_monitor/pdf_source_hosts.txt" LogicalName="GewuInsight.Windows.pdf_source_hosts.txt" />
     <EmbeddedResource Include="../scripts/GewuBrowserCaptureProbe.js" LogicalName="GewuInsight.Windows.capture.js" />
     <EmbeddedResource Include="../scripts/GewuBrowserNavigationProbe.js" LogicalName="GewuInsight.Windows.navigation.js" />
   </ItemGroup>
+  <Target Name="ValidateProductVersion" BeforeTargets="BeforeBuild">
+    <Error Condition="'$(GewuProductVersion)' == '' Or '$(GewuProductBuild)' == ''" Text="Shared product version/build metadata is missing." />
+    <Error Condition="'$(Version)' != '$(GewuProductVersion)'" Text="Windows version must match paper_monitor/__init__.py and the macOS product version." />
+  </Target>
   <Target Name="RemoveUnusedWebViewWpf" BeforeTargets="ResolveAssemblyReferences">
     <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>
   </Target>

@@ -29,7 +29,9 @@ AppPublisher=Gewu Insight
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0.19041
+; The bundled .NET 10 runtime supports Windows 10 starting with 1607.
+; Do not require 2004: that unnecessarily excludes 1607/1809 LTSC and 1909.
+MinVersion=10.0.14393
 OutputDir={#OutputDir}
 Compression=lzma2
 SolidCompression=yes
@@ -39,6 +41,9 @@ DisableProgramGroupPage=yes
 DisableDirPage=no
 UninstallDisplayIcon={app}\Gewu Insight.exe
 RestartApplications=no
+
+[Messages]
+WindowsVersionNotSupported=Gewu Insight requires 64-bit Windows 10 version 1607 (build 14393) or later. This x64 installer does not support 32-bit Windows or Windows 10 on ARM.
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

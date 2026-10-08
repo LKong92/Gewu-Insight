@@ -67,7 +67,6 @@ internal sealed partial class WorkspaceWindow : Form
     bool browserVisible;
     bool stopping;
     bool closeApproved;
-    bool chooseDatabaseOnClose;
     StreamWriter? log;
     FileStream? workspaceLock;
 
@@ -103,22 +102,15 @@ internal sealed partial class WorkspaceWindow : Form
                 Close();
             } catch (Exception error) {
                 stopping = false;
-                chooseDatabaseOnClose = false;
                 MessageBox.Show(this, "Background work has not finished. The database remains locked. Wait, then close again.\n" + error.Message, "Gewu Insight is still closing");
             }
         };
         FormClosed += (_, _) => {
             loaderWindow?.Dispose(); foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose();
-            if (chooseDatabaseOnClose) Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, ArgumentList = { "--choose-database" } });
         };
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("File");
         file.DropDownItems.Add("Open Gewu Database", null, (_, _) => Process.Start(new ProcessStartInfo(dataRoot) { UseShellExecute = true }));
-        file.DropDownItems.Add("Choose Gewu Database…", null, (_, _) => {
-            chooseDatabaseOnClose = true;
-            Close();
-        });
-        file.DropDownItems.Add("Library Loader", null, async (_, _) => await ShowLibraryLoaderAsync());
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var edit = new ToolStripMenuItem("Edit");
         foreach (var (label, chord, keys) in new[] { ("Undo", "Ctrl+Z", "^z"), ("Redo", "Ctrl+Y", "^y"), ("Cut", "Ctrl+X", "^x"), ("Copy", "Ctrl+C", "^c"), ("Paste", "Ctrl+V", "^v"), ("Select All", "Ctrl+A", "^a") }) {
@@ -174,6 +166,8 @@ internal sealed partial class WorkspaceWindow : Form
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("User Guide", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.html")) { UseShellExecute = true }));
         help.DropDownItems.Add("Contact Us", null, (_, _) => Process.Start(new ProcessStartInfo("mailto:info@gewu-insight.com") { UseShellExecute = true }));
+        help.DropDownItems.Add(new ToolStripSeparator());
+        help.DropDownItems.Add("About Gewu Insight", null, (_, _) => ShowAboutWindow());
         menu.Items.AddRange([file, edit, viewMenu, loader, settings, help]); MainMenuStrip = menu; Controls.Add(menu);
     }
 

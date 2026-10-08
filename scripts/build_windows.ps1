@@ -74,6 +74,8 @@ foreach ($guide in @('Windows_Preview_Guide.html', 'Windows_Preview_Guide.pdf'))
 Gewu Insight - Windows $Version
 
 This complete desktop package includes Python, .NET and the application dependencies.
+Requires 64-bit Windows 10 version 1607 (build 14393) or later; Windows 11 is also supported.
+This x64 package does not support 32-bit Windows or Windows 10 on ARM.
 Start Gewu Insight.exe from the installed application folder or Start menu.
 Setup uses an existing Microsoft WebView2 Runtime when available.
 If WebView2 is missing, Setup downloads and installs it from Microsoft; internet access is required only for this step.

@@ -59,18 +59,16 @@ internal static class WorkspaceLocation
             return Prepare(root, python, args[index + 1], args.Contains("--new-workspace"), false);
         }
         if (args.Contains("--source")) throw new IOException("Development requires an explicit isolated --workspace.");
-        if (!args.Contains("--choose-database")) {
-            try {
-                var saved = Invoke(root, python, "locate");
-                if (saved.ValueKind != JsonValueKind.Null)
-                    return Prepare(root, python, saved.GetProperty("workspace").GetString()!, false, false, saved.GetProperty("identity").GetString()!);
-                string legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gewu-insight", "preview-workspace.txt");
-                if (File.Exists(legacy)) return Prepare(root, python, File.ReadAllText(legacy).Trim(), false, true);
-            } catch (Exception error) {
-                if (MessageBox.Show(error.Message + "\n\nLocate an existing Gewu Database?", "Gewu Database unavailable", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                    throw new OperationCanceledException();
-                return Choose(root, python, existingOnly: true);
-            }
+        try {
+            var saved = Invoke(root, python, "locate");
+            if (saved.ValueKind != JsonValueKind.Null)
+                return Prepare(root, python, saved.GetProperty("workspace").GetString()!, false, false, saved.GetProperty("identity").GetString()!);
+            string legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gewu-insight", "preview-workspace.txt");
+            if (File.Exists(legacy)) return Prepare(root, python, File.ReadAllText(legacy).Trim(), false, true);
+        } catch (Exception error) {
+            if (MessageBox.Show(error.Message + "\n\nLocate an existing Gewu Database?", "Gewu Database unavailable", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                throw new OperationCanceledException();
+            return Choose(root, python, existingOnly: true);
         }
         return Choose(root, python);
     }
