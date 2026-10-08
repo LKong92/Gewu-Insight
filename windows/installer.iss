@@ -26,6 +26,8 @@ VersionInfoVersion={#AppVersion}.0
 VersionInfoProductVersion={#AppVersion}.0
 VersionInfoProductTextVersion={#AppVersion}
 AppPublisher=Gewu Insight
+; Keep installation per-user even when the current account already has admin
+; privileges. Privilege availability does not identify how Setup was launched.
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -66,15 +68,6 @@ var
   DatabaseDirectoryPage: TInputDirWizardPage;
   KeepDatabaseSelection: Boolean;
   SavedDatabasePath: String;
-
-function InitializeSetup(): Boolean;
-begin
-  { Per-user installation must run as the daily user, never a different elevated
-    administrator. This also makes reinstall discovery and ownership unambiguous. }
-  Result := not IsAdminLoggedOn;
-  if not Result then
-    MsgBox('Run Setup normally from your Windows account, without Run as administrator. Gewu Insight installs for the current user and preserves that user''s database location.', mbError, MB_OK);
-end;
 
 procedure InitializeWizard();
 var
