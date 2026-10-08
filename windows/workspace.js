@@ -4,6 +4,67 @@
   if (location.origin !== __WORKSPACE_ORIGIN__) return;
   const send = (channel, payload = {}) => chrome.webview.postMessage({channel, payload});
   window.gewuPlatform = {os: 'windows', capture: true, captureDownload: true, build: 'preview'};
+  // App-owned confirmations avoid WebView2's origin-labelled script dialog.
+  // A modal dialog makes the workspace inert and keeps keyboard focus inside.
+  let deletionDialog = null;
+  const guardDeletionKey = event => {
+    if (!deletionDialog) return;
+    // Install before the workspace's capture-phase keyboard shortcuts.
+    event.stopImmediatePropagation();
+    if (event.type === 'keydown' && event.key === 'Escape') {
+      event.preventDefault(); deletionDialog.close();
+    } else if (event.type === 'keydown' && event.key === 'Tab') {
+      // WebView2 can otherwise move focus out to the native window controls.
+      event.preventDefault();
+      const buttons = Array.from(deletionDialog.querySelectorAll('button'));
+      const current = buttons.indexOf(document.activeElement);
+      buttons[(current + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length].focus();
+    }
+  };
+  window.addEventListener('keydown', guardDeletionKey, true);
+  window.addEventListener('keyup', guardDeletionKey, true);
+  window.gewuConfirmDeletion = ({title, message, detail = '', button = 'Delete'}) => {
+    if (deletionDialog) return Promise.resolve(false);
+    return new Promise(resolve => {
+      const previousFocus = document.activeElement;
+      const dialog = document.createElement('dialog');
+      deletionDialog = dialog;
+      dialog.className = 'gewu-delete-dialog';
+      dialog.setAttribute('aria-labelledby', 'gewuDeleteTitle');
+      dialog.setAttribute('aria-describedby', 'gewuDeleteMessage gewuDeleteDetail');
+      const icon = document.createElement('img');
+      icon.src = '/api/app-icon'; icon.alt = ''; icon.className = 'gewu-delete-icon';
+      const heading = document.createElement('h2');
+      heading.id = 'gewuDeleteTitle'; heading.textContent = title;
+      const body = document.createElement('p');
+      body.id = 'gewuDeleteMessage'; body.textContent = message;
+      const note = document.createElement('p');
+      note.id = 'gewuDeleteDetail'; note.className = 'gewu-delete-detail'; note.textContent = detail;
+      const actions = document.createElement('div'); actions.className = 'gewu-delete-actions';
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.textContent = 'Cancel';
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.textContent = button; remove.className = 'gewu-delete-action'; remove.autofocus = true;
+      actions.append(cancel, remove); dialog.append(icon, heading, body, note, actions);
+      let finished = false;
+      const finish = confirmed => {
+        if (finished) return;
+        finished = true;
+        window.removeEventListener('pagehide', onPageHide);
+        dialog.close(); dialog.remove(); deletionDialog = null;
+        if (previousFocus?.isConnected) previousFocus.focus({preventScroll: true});
+        resolve(confirmed);
+      };
+      const onPageHide = () => finish(false);
+      cancel.addEventListener('click', () => finish(false));
+      remove.addEventListener('click', () => finish(true));
+      dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false); });
+      dialog.addEventListener('close', () => finish(false));
+      window.addEventListener('pagehide', onPageHide, {once: true});
+      document.body.append(dialog);
+      dialog.showModal(); remove.focus({preventScroll: true});
+    });
+  };
   window.webkit = {messageHandlers: Object.fromEntries(
     ['browser', 'appReady', 'paperFileChooser', 'authorPhotoChooser', 'nativeFileDrag', 'libraryItemDrag', 'publisherPdfDownload', 'libraryLoaderWindow'].map(channel => [channel, {postMessage: payload => send(channel, payload)}]))};
   const pending = new Map();
@@ -46,6 +107,18 @@
   addEventListener('DOMContentLoaded', () => {
     const style = document.createElement('style');
     style.textContent = `
+      .gewu-delete-dialog{box-sizing:border-box;width:360px;max-width:calc(100vw - 40px);max-height:calc(100vh - 40px);padding:24px 24px 20px;border:1px solid #c8c8ca;border-radius:14px;background:#ececee;color:#202024;box-shadow:0 18px 64px #17243c40;font:13px/1.45 "Segoe UI",sans-serif;text-align:center;overflow:auto}
+      .gewu-delete-dialog::backdrop{background:rgba(24,34,51,.22)}
+      .gewu-delete-dialog .gewu-delete-icon{display:block;width:64px;height:64px;object-fit:contain;margin:0 auto 16px}
+      .gewu-delete-dialog h2{font:600 17px/1.3 "Segoe UI",sans-serif;color:#202024;margin:0 0 10px;overflow-wrap:anywhere}
+      .gewu-delete-dialog p{font:13px/1.45 "Segoe UI",sans-serif;color:#202024;margin:0 0 12px;white-space:pre-line;overflow-wrap:anywhere}
+      .gewu-delete-dialog .gewu-delete-detail{max-height:320px;overflow:auto}
+      .gewu-delete-dialog .gewu-delete-actions{display:flex;gap:8px;margin-top:20px}
+      .gewu-delete-dialog button{flex:1;min-width:0;min-height:32px;padding:6px 12px;border:1px solid #c8c8ca;border-radius:7px;background:#fff;color:#202024;font:400 13px/1.3 "Segoe UI",sans-serif;cursor:pointer}
+      .gewu-delete-dialog button:hover{background:#edf0f5}
+      .gewu-delete-dialog button.gewu-delete-action{background:#087cf0;border-color:#087cf0;color:#fff}
+      .gewu-delete-dialog button.gewu-delete-action:hover{background:#006dde}
+      .gewu-delete-dialog button:focus-visible{outline:3px solid #759de5;outline-offset:3px}
       .view-switcher,.sidebar-view-switcher{left:8px!important;right:62px;overflow-x:auto;scrollbar-width:none}
       .view-switch{flex-shrink:0;padding-left:10px!important;padding-right:10px!important}
       .window-drag-region{pointer-events:none}

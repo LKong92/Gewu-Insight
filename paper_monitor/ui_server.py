@@ -39770,7 +39770,10 @@ INDEX_HTML = """<!doctype html>
       const deletePreview = requiresRecycleConfirmation
         ? await previewRecycleDeletion({type, id: Number(id)})
         : {requires_confirmation: false};
-      if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion("this Recycle item", deletePreview))) return;
+      const selectedName = type === "folder" ? libraryFolderById(id)?.name
+        : libraryItemById(id)?.display_name || libraryItemById(id)?.paper?.title;
+      const deleteLabel = window.gewuConfirmDeletion && selectedName ? `“${selectedName}”` : "this Recycle item";
+      if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion(deleteLabel, deletePreview))) return;
       return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
         const parentId = type === "item"
           ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
@@ -39864,6 +39867,23 @@ INDEX_HTML = """<!doctype html>
 
     function confirmRecycleDeletion(targetLabel = "this Recycle selection", preview = {}) {
       if (!preview?.requires_confirmation) return Promise.resolve(true);
+      if (window.gewuConfirmDeletion) {
+        const paperCount = Number(preview.metadata_paper_count || 0);
+        const shortcutCount = Number(preview.shortcut_only_paper_count || 0);
+        const hasFiles = [preview.local_copy_paths, preview.folder_paths, preview.orphan_local_copy_paths]
+          .some(paths => Array.isArray(paths) && paths.length);
+        const details = [];
+        if (paperCount) details.push(`${paperCount} paper${paperCount === 1 ? "" : "s"} will be permanently removed from Gewu Insight.`);
+        if (hasFiles) details.push("Files and folders in this selection will move to Windows Recycle Bin.");
+        if (shortcutCount) details.push("Only the Recycle entries for papers still used elsewhere in Gewu Insight will be removed.");
+        details.push("Original files outside Gewu Insight will be kept.");
+        return window.gewuConfirmDeletion({
+          title: "Delete File",
+          message: `Delete ${targetLabel}?`,
+          detail: details.join("\\n\\n"),
+          button: "Delete"
+        });
+      }
       const pathList = Array.isArray(preview.local_copy_paths) ? preview.local_copy_paths : [];
       const metadataCount = Number(preview.metadata_paper_count || 0);
       const shortcutOnlyCount = Number(preview.shortcut_only_paper_count || 0);
@@ -39901,6 +39921,17 @@ INDEX_HTML = """<!doctype html>
         );
       }
       return Promise.resolve(window.confirm(lines.join("\\n")));
+    }
+
+    function confirmPaperFileDeletion(name) {
+      if (window.gewuConfirmDeletion) {
+        return window.gewuConfirmDeletion({
+          title: "Delete File",
+          message: `Remove “${name}” from this paper?`,
+          detail: "Its file in Gewu Insight will move to Windows Recycle Bin, if present. Original files outside Gewu Insight will be kept."
+        });
+      }
+      return Promise.resolve(window.confirm(`Delete “${name}” from this paper?\\n\\nIts private managed copy, if present, will be moved to macOS Trash.`));
     }
 
     function libraryFolderContentCounts(folderId) {
@@ -47328,7 +47359,7 @@ INDEX_HTML = """<!doctype html>
       panel.querySelectorAll('[data-action="delete-paper-file"]').forEach((button) => button.addEventListener("click", async () => {
         const resourceId = Number(button.dataset.paperFileId || 0);
         const name = String(button.dataset.paperFileName || "Attached File");
-        if (!resourceId || !window.confirm(`Delete “${name}” from this paper?\n\nIts private managed copy, if present, will be moved to macOS Trash.`)) return;
+        if (!resourceId || !(await confirmPaperFileDeletion(name))) return;
         button.disabled = true;
         try {
           const data = await deletePaperFile(paper.paper_id, resourceId);
@@ -49944,7 +49975,7 @@ INDEX_HTML = """<!doctype html>
         return true;
       }
       const name = file?.display_name || String(file?.local_path || "").split("/").pop() || "Attached File";
-      if (!window.confirm(`Delete “${name}” from this paper?\n\nIts private managed copy, if present, will be moved to macOS Trash.`)) return true;
+      if (!(await confirmPaperFileDeletion(name))) return true;
       const filesBeforeDelete = orderedLibraryPaperResources(paperId);
       const deletedIndex = filesBeforeDelete.findIndex((candidate) => Number(candidate.id || 0) === resourceId);
       state.deletingPaperResources.add(deletionKey);

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict'), vm = require('node:vm');
 const html = require('node:fs').readFileSync(0, 'utf8');
 const names = ['publicationNoticesMarkup', 'libraryPaperResourcesColumnMarkup', 'paperFilesPanelMarkup',
   'orderedLibraryPaperResources', 'moveLibraryPaperResourceSelection',
-  'deleteSelectedLibraryPaperResource', 'handleLibraryPaperResourceKeydown'];
+  'confirmPaperFileDeletion', 'deleteSelectedLibraryPaperResource', 'handleLibraryPaperResourceKeydown'];
 const code = names.map(name => {
   const start = html.search(new RegExp('    (?:async )?function ' + name + '\\('));
   assert.ok(start >= 0, name);

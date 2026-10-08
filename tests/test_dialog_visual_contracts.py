@@ -6,12 +6,13 @@ from paper_monitor.ui_server import INDEX_HTML
 
 
 class DialogVisualContractTests(unittest.TestCase):
-    def test_recycle_delete_uses_the_same_native_confirmation_as_paper_files(self) -> None:
+    def test_recycle_delete_retains_macos_confirmation_and_uses_windows_app_dialog(self) -> None:
         dialog = INDEX_HTML.split("function confirmRecycleDeletion", 1)[1].split(
             "function libraryFolderContentCounts", 1
         )[0]
 
         self.assertIn('window.confirm(lines.join("\\n"))', dialog)
+        self.assertIn('return window.gewuConfirmDeletion({', dialog)
         self.assertIn("Managed local cop", dialog)
         self.assertIn("macOS Trash", dialog)
         self.assertIn("Original imported source files outside Gewu Insight will not be touched.", dialog)

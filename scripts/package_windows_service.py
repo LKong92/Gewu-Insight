@@ -34,6 +34,9 @@ source = output / "app"
 source.mkdir()
 for name in ("paper_monitor", "assets"):
     shutil.copytree(root / name, source / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+# The Windows menu and the local /user-guide.pdf route must serve the same PDF.
+# Keep the shared macOS source document untouched.
+shutil.copy2(root / "windows/Windows_Preview_Guide.pdf", source / "paper_monitor/Gewu_Insight_User_Guide.pdf")
 (source / "config").mkdir()
 (source / "scripts").mkdir()
 shutil.copy2(root / "scripts" / "gewu_mcp.py", source / "scripts" / "gewu_mcp.py")
