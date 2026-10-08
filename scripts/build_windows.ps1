@@ -7,6 +7,8 @@ param(
     [string]$WebView2Bootstrapper = '',
     [string]$ReuseServicePayload = '',
     [string]$GuideVersion = '',
+    [string]$PayloadDirectory = '',
+    [string]$InstallerDirectory = '',
     [switch]$RebuildGuide
 )
 $ErrorActionPreference = 'Stop'
@@ -25,9 +27,13 @@ if ($WebView2Bootstrapper) {
     Assert-GewuWebView2Bootstrapper -Path $WebView2Bootstrapper
 }
 Assert-GewuOfficialDependency -Path (Join-Path $PythonRuntime 'python.exe') -Publisher 'Python Software Foundation'
-$payload = Join-Path $repoRoot "dist/windows-trial-$Version"
+$payload = if ($PayloadDirectory) { [IO.Path]::GetFullPath($PayloadDirectory) } else { Join-Path $repoRoot "dist/windows-trial-$Version" }
+$installerOutput = if ($InstallerDirectory) { [IO.Path]::GetFullPath($InstallerDirectory) } else { Join-Path $repoRoot 'dist/installers' }
 if (Test-Path -LiteralPath $payload) {
     throw 'Use a new version or a fresh payload directory; this builder never deletes or merges an existing payload.'
+}
+if ($InnoCompiler -and (Test-Path -LiteralPath (Join-Path $installerOutput "Gewu-Insight-Windows-$Version-x64-Setup.exe"))) {
+    throw 'Installer already exists. Choose a fresh InstallerDirectory to preserve the previous package.'
 }
 if ($RebuildGuide) {
     & $Python scripts/build_windows_preview_guide.py --version $Version
@@ -89,11 +95,11 @@ Get-ChildItem -LiteralPath $payload -File -Recurse | ForEach-Object {
     [PSCustomObject]@{Path = [IO.Path]::GetRelativePath($payload, $_.FullName); SHA256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash; Bytes = $_.Length}
 } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $payload 'manifest.json') -Encoding utf8
 if ($InnoCompiler) {
-    & $InnoCompiler "/DPayloadDir=$payload" "/DOutputDir=$(Join-Path $repoRoot 'dist/installers')" "/DAppVersion=$Version" "/DWebView2Bootstrapper=$WebView2Bootstrapper" windows/installer.iss
+    & $InnoCompiler "/DPayloadDir=$payload" "/DOutputDir=$installerOutput" "/DAppVersion=$Version" "/DWebView2Bootstrapper=$WebView2Bootstrapper" windows/installer.iss
     if ($LASTEXITCODE -ne 0) { throw 'Unsigned installer build failed' }
-    $installerPath = Join-Path $repoRoot "dist/installers/Gewu-Insight-Windows-$Version-x64-Setup.exe"
+    $installerPath = Join-Path $installerOutput "Gewu-Insight-Windows-$Version-x64-Setup.exe"
     & (Join-Path $PSScriptRoot 'test_windows_release.ps1') -PayloadPath $payload -InstallerPath $installerPath -Version $Version `
-        -WebView2Bootstrapper $WebView2Bootstrapper -ReportPath (Join-Path $repoRoot "dist/installers/Gewu-Insight-Windows-$Version-preflight.json")
+        -WebView2Bootstrapper $WebView2Bootstrapper -ReportPath (Join-Path $installerOutput "Gewu-Insight-Windows-$Version-preflight.json")
     Write-Output "Windows installer (not installed): $installerPath"
 }
 Write-Output "Complete Windows desktop payload: $payload"

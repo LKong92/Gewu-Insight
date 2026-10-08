@@ -1,40 +1,49 @@
-# Gewu Insight 1.0.0 · Build 1
+# Gewu Insight 1.0.0
 
-This is the macOS baseline for everyday research and writing. The release name
-marks a settled workflow, with a fully reviewed User Guide, rather than a new
-round of feature changes or a guarantee about every external provider.
+Gewu Insight is a desktop research workspace for collecting papers, organizing
+their files and versions, following new literature, and keeping reading notes
+with the research they describe.
 
-The Library and Spaces organize shared paper identities and classified Paper
-Files. My Publications, Journal Monitor, Subject Monitor, Author Monitor and
-Browser connect discovery to the same collection. Refresh Info provides single,
-folder, full-Library and import workflows with shared limits. AI Access grants
-scoped reads and append-only Markdown analyses through MCP.
+## Research workspace
 
-The revised Guide explains the configurable Add to Library destination,
-Browser's reuse of existing locations, manual DOI/arXiv correction, Default file
-placement, fuzzy text search, Markdown Quick Look, and deletion across shared
-locations. Metadata refresh now has one workflow chapter, including cooldowns,
-partial results and Pause/Continue. The first-session chapter includes a practical
-research-to-writing route. The App contains the same printable manual as the
-repository. Save to Gewu also adopts the existing flat settings style, with a
-smaller title and compact controls; its review and saving behavior is unchanged.
+- Organize papers in Library folders, Shortcuts and Spaces.
+- Keep manuscripts, published articles, supplementary files and notes together
+  in Paper Files, with a selected Default file for reading.
+- Follow journals, subjects and authors, and manage My Publications.
+- Read PDFs and Markdown, browse scholarly websites, and save supported papers
+  into the same collection.
+- Connect compatible AI clients through MCP with explicitly scoped access to
+  selected research and append-only analysis notes.
 
-Version and Build are independent of the icon cache checksum. Future small fixes
-can use 1.0.1, 1.0.2 and so on; a rebuilt package of the same version increments
-Build. No additional version or Git tag is created automatically by this policy.
+## Windows
 
-## Boundaries
+Requires Windows 10 version 1607 or later, or Windows 11, on an Intel/AMD x64 PC.
+Download `Gewu-Insight-Windows-1.0.0-x64-Setup.exe`, follow Setup, and open
+**Gewu Insight** from the Start menu. Python, .NET and application dependencies
+are included. Setup reuses Microsoft WebView2 or installs it from Microsoft
+when needed.
 
-- This edition documents the macOS 14+ universal native launcher. The separate
-  experimental Windows branch retains its own integration and release process.
-- Provider access, institutional sign-in and rate limits still apply. A refreshed
-  record may be partially complete; the detailed source results remain visible.
-- Search supports text/identifier matching, typo tolerance and word variants.
-  It does not promise translation, synonym expansion or model-based semantic search.
-- This documentation and version change does not rewrite the user's papers,
-  identifiers, classification, Default selection, preferences or AI grants.
-- Back up SQLite together with managed files before upgrading. Browser sessions
-  and OS-managed credentials have separate lifecycles documented in the Guide.
+Choose the program and Gewu Database folders independently. The default program
+folder is `%LOCALAPPDATA%\Programs\Gewu Insight`; a new database defaults to
+`%USERPROFILE%\Gewu Database`. Select **Use existing Gewu Database** to keep
+using an existing collection. Uninstalling the program retains research data.
+The Windows installer is unsigned.
 
-See the [User Guide PDF](../paper_monitor/Gewu_Insight_User_Guide.pdf) and
-[distribution instructions](../DISTRIBUTION.md).
+## macOS
+
+Requires macOS 14 or later on Apple Silicon or Intel. Download
+`Gewu-Insight-macOS-1.0.0.dmg`, open the disk image, and drag **Gewu Insight.app**
+to **Applications**. Open the App from Applications and choose a new or existing
+Gewu Database folder. Python and application dependencies are included.
+The macOS package uses an ad-hoc integrity signature and is not Developer ID
+signed or notarized.
+
+## Data and help
+
+Research data is stored locally in the selected Gewu Database, separately from
+the program. Back up that folder and any externally linked originals. Online
+literature services require internet access and remain subject to publisher and
+institutional access. Optional LibreOffice and TeX tools are installed separately.
+
+Choose **Help > User Guide** for the bundled manual. The Gewu Insight Academic
+and Non-Commercial Research License and included third-party notices apply.

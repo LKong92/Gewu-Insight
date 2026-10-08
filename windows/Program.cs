@@ -77,7 +77,7 @@ internal sealed partial class WorkspaceWindow : Form
         python = Option("--python", Path.Combine(root, ".venv", "Scripts", "python.exe"));
         database = WorkspaceLocation.Resolve(args, root, python);
         dataRoot = database.Workspace;
-        Text = "Gewu Insight — Windows Preview";
+        Text = "Gewu Insight";
         Icon = new Icon(Path.Combine(AppContext.BaseDirectory, "GewuInsight.ico"), 256, 256);
         MinimumSize = new Size(900, 640); Size = new Size(1360, 900); StartPosition = FormStartPosition.CenterScreen;
         favicons = new BrowserFavicons(PublicUrl, (host, data) => EmitAsync(new { @event = "favicon", host, data_url = data }));

@@ -158,8 +158,8 @@ class AIAccessTests(unittest.TestCase):
         self.assertEqual(status, 200); self.assertIn('Set-Cookie', headers)
         self.assertEqual(self.request('/api/workspace-session', {}, headers={'X-Gewu-Bootstrap': ticket})[0], 401)
         self.assertEqual(self.request('/api/workspace-session', {}, headers={'X-Gewu-Bootstrap': self.token})[0], 401)
-        self.assertEqual(WorkspaceAccess(self.path).token, self.server.workspace_access.token)
         if sys.platform == 'win32':
+            self.assertNotEqual(WorkspaceAccess(self.path).token, self.server.workspace_access.token)
             import win32security
             descriptor = win32security.GetFileSecurity(str(self.path.parent / '.gewu-workspace-token'),
                 win32security.DACL_SECURITY_INFORMATION | win32security.OWNER_SECURITY_INFORMATION)
@@ -168,6 +168,7 @@ class AIAccessTests(unittest.TestCase):
             self.assertEqual(acl.GetAce(0)[2], descriptor.GetSecurityDescriptorOwner())
             self.assertTrue(descriptor.GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED)
         else:
+            self.assertEqual(WorkspaceAccess(self.path).token, self.server.workspace_access.token)
             self.assertEqual((self.path.parent / '.gewu-workspace-token').stat().st_mode & 0o777, 0o600)
 
     def test_mcp_endpoint_export_follows_restart_and_rejects_remote_destination(self):

@@ -150,6 +150,26 @@ begin
   end;
 end;
 
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
+  MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+var
+  Mode: String;
+begin
+  if DatabaseModePage.SelectedValueIndex = 0 then
+    Mode := 'Create new Gewu Database'
+  else
+    Mode := 'Use existing Gewu Database (keep current research data)';
+  Result := 'Program installation folder:' + NewLine +
+    Space + WizardDirValue + NewLine +
+    Space + 'Application files only; updates replace this software.' + NewLine + NewLine +
+    'Gewu Database folder:' + NewLine +
+    Space + Trim(DatabaseDirectoryPage.Values[0]) + NewLine +
+    Space + Mode + NewLine +
+    Space + 'Research data, Paper Files and analysis notes; retained on uninstall.' + NewLine + NewLine +
+    'The program and database use separate folders. Click Back to change either location.';
+  if MemoTasksInfo <> '' then Result := Result + NewLine + NewLine + MemoTasksInfo;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExitCode: Integer;
