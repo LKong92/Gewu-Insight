@@ -4,20 +4,23 @@
 connected—from discovery to reuse.**
 
 Gewu Insight brings continuous literature discovery, organization, and reading
-into one workspace. Each paper retains a shared identity as metadata,
-publication versions, supporting files, and research context accumulate,
-building a lasting research record that researchers can inspect, revisit,
-and reuse.
+into one workspace. It organizes scientific works as persistent, stateful
+research objects: each paper retains a shared identity as metadata, publication
+versions, supporting files, project associations, and analyses accumulate.
+Researchers and authorized AI clients can return to the same record, inspect
+earlier materials, and continue their work. This provides an inspectable
+scientific memory layer, with questions and scientific judgment directed by
+the researcher.
 
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
-[Website](http://gewu-insight.com) · [Quick start](#quick-start-on-macos) ·
+[Website](https://gewu-insight.com) · [Quick start](#quick-start) ·
 [Explore the workspace](#explore-the-workspace) ·
 [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) ·
 [AI & MCP](#work-with-an-ai-client) · [Citation](#citation) ·
 [License](#copyright-and-license)
 
-**Version 1.0.0 · Build 1** · Native macOS App · Source-available research software
+**Version 1.0.0** · macOS and Windows · Source-available research software
 
 Academic/non-commercial research use is permitted under the custom
 [LICENSE](LICENSE). Commercial use requires separate prior written authorization.
@@ -44,41 +47,60 @@ Academic/non-commercial research use is permitted under the custom
   publication record, and optionally let an authorized AI client read papers
   and append analyses with source references.
 
-## Quick start on macOS
+## Quick start
 
-**Source/data separation update:** the launchable App formerly tracked in this
-repository is now an archived build template. Before updating an existing
-checkout, give your Codex the [Chinese migration instructions](docs/SOURCE_DATA_MIGRATION.md)
-to back up and migrate your own data and configure your launch entry. A DMG is
-not required. For a new source setup, use [Manual setup](docs/DEVELOPMENT.md#manual-setup).
-The folder-based App instructions below describe the earlier distribution.
+Download the installer for your platform from the release page's **Assets**.
+Both packages include Python and application dependencies. GitHub's **Source
+code ZIP** is for source-based setup, not an App installer.
 
-**Requirements:** macOS 14 or later, a working `python3` command, and network
-access for the initial dependency installation and online research services.
-The supplied native launcher supports Apple silicon and Intel Macs.
+| Platform | Requirements | Download |
+| --- | --- | --- |
+| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) |
+| Windows | Windows 10 version 1607+ (build 14393+) or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Revision 2 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2) |
 
-1. **Get the whole project.** Use this repository's **Code → Download ZIP** or
-   clone it. Extract or keep the complete folder in a regular local location,
-   such as `~/Applications/Gewu-Insight`.
-2. **Open `Gewu Insight.app` inside that folder.** Keep it beside
-   `paper_monitor`, `config`, and the other project files. The App is a launcher
-   for this folder-based installation, not a standalone installer.
-3. **Allow the first setup to finish.** The launcher prepares the local Python
-   environment, installs dependencies, and starts the local service and App.
-4. **Try one paper.** Drag a PDF into a Library folder, or visit an article in
-   **Browser** and choose **Save to Gewu**. Inspect its **Paper Files** and
-   **Paper Details**, then create a Space for the project you are working on.
+### macOS
 
-Open **Help → User Guide** in the App for illustrated instructions. If startup
-fails, see [installation and troubleshooting](DISTRIBUTION.md#recipient-requirements)
-and `logs/paper_monitor_launcher.log`; do not delete the database to repair startup.
-For a terminal-based setup, see [the development guide](docs/DEVELOPMENT.md#manual-setup).
+1. Download **Gewu-Insight-macOS-1.0.0.dmg** and open it.
+2. Drag **Gewu Insight.app** to **Applications**, eject the disk image, and open
+   the installed App.
+3. Choose **Create New Database** or **Open Existing Database**. Keep your
+   **Gewu Database** in a separate folder outside the App. The App menu's
+   **Database Location…** shows the active folder.
+
+### Windows
+
+1. Download **Gewu-Insight-Windows-1.0.0-x64-Setup.exe** and run Setup.
+2. Choose the program and **Gewu Database** folders. To retain an existing
+   collection, select **Use existing Gewu Database** and its root folder.
+3. Open **Gewu Insight** from the Start menu. Python and .NET are bundled;
+   Setup needs internet access if Microsoft WebView2 must be installed.
+
+Read the release's checksum and first-launch notes. The macOS package uses
+ad-hoc integrity signing and is not Apple-notarized; the Windows installer is
+unsigned. Optional LibreOffice and TeX tools are installed separately.
+
+**Try one paper:** drag a PDF into a Library folder, or visit an article in
+**Browser** and choose **Save to Gewu**. Inspect **Paper Files** and **Paper
+Details**, then create a Space for a project. Open **Help → User Guide** for
+the manual bundled with your platform. The [website](https://gewu-insight.com)
+also provides both platform guides.
+
+**Updating an existing installation:** close the App and back up the selected
+Gewu Database and its files first. Replacing the App preserves the separate
+database location. Older source-folder installations should follow the
+[migration instructions](docs/SOURCE_DATA_MIGRATION.md) before updating.
+For source-based setup, use [Manual setup](docs/DEVELOPMENT.md#manual-setup).
+
+If startup fails, follow your platform's release notes and User Guide. Installed
+macOS App logs are in `~/Library/Logs/Gewu Insight`; do not delete the database
+to repair startup.
 
 ## Explore the workspace
 
 Six main tabs connect discovery, reading, organization, and your own publications.
-Spaces and shortcuts are part of the Library workspace. These screenshots show
-the real macOS App; select an image to inspect it at full size.
+The Library tab provides access to Library, independent Spaces, and shortcuts.
+Spaces are project roots at the same organizational level as Library. These
+screenshots show the real macOS App; select an image to inspect it at full size.
 
 <table>
   <tr>
@@ -138,14 +160,15 @@ into another Gewu workspace; see the [User Guide](paper_monitor/Gewu_Insight_Use
 Browser tab controls, bookmark import and sync, downloads, and system Passwords
 behavior are covered in the [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf)
 and [Browser documentation](#documentation). Website links from the other
-workspaces open in Browser; local PDFs open in macOS Preview.
+workspaces open in Browser; on macOS, local PDFs open in Preview.
 
 ## One paper, connected files and evidence
 
 A paper's **Gewu Key** connects its identifiers, metadata, files, and placements
 across the workspace. Adding that paper to another folder or Space reuses the
-shared record. An ordinary standalone non-PDF file can also be stored in the
-Library, without being assigned a public Gewu Key.
+shared record. A paper can begin as a metadata-only record and acquire files
+later under the same Key. An ordinary standalone non-PDF file can also be stored
+in the Library, without being assigned a public Gewu Key.
 
 **Paper Files** keeps the Published version, accepted manuscript, preprints,
 supplements, annotated copies, and other attachments associated with that paper.
@@ -153,10 +176,19 @@ You can inspect classifications and choose which file is **Default**. An explici
 Default is retained when other versions arrive; supplements do not automatically
 replace the main article simply because they are PDFs.
 
+Supported corrections, retractions, and other publication notices stay linked
+to the original article, with their own notice metadata and any saved files.
+They do not create a separate research-paper identity or become the automatic
+Default. A corrected full article is a separate publication version. **Refresh
+Info** checks explicit Crossref update relations for papers with a DOI; it does
+not automatically download notice PDFs. Coverage depends on the supplied
+relations, and saved papers are not periodically checked merely because they
+are in the Library. See [publication updates](paper_monitor/user_guide.html#paper-publication-updates).
+
 Use in-app **Quick Look** to preview PDFs and Markdown notes, or open a local PDF
-in **Preview**. Managed documents remain real files: the Default occupies the
+in **Preview** on macOS. Managed documents remain real files: the Default occupies the
 main managed location, and other Paper Files belong in **Associated Files**.
-Additional placements can use Finder aliases to the same originals. Move,
+On macOS, additional placements can use Finder aliases to the same originals. Move,
 rename, and reassign managed files through the App so records and disk paths
 stay coordinated. See [managed file layout](docs/MANAGED_FILE_LAYOUT.md).
 
@@ -167,13 +199,26 @@ MCP adapter so an AI client can work with explicitly authorized collections.
 Enabling access does not itself call a model, upload a library, or start an
 analysis job.
 
-A typical workflow is: select a paper → let the client read its authorized files
-→ save a Markdown analysis with source file and page references → review the
-note in Paper Files. A later authorized session can retrieve the saved paper
-and analysis to continue the work.
+Use the generated connection configuration with a client that supports local
+stdio MCP. **Codex** and **DeepSeek Harness** are working examples documented in
+the setup guide; other compatible clients, including **Claude Code**, can use
+the same connection method and permission model. Model inference runs through
+the external client.
 
-In **Setting → AI Access**, create a named connection, choose its collection
-and expiry, and grant the operations it needs:
+A typical workflow is: select a paper → read its authorized source files and
+earlier analyses → save a new Markdown analysis → review it in Paper Files.
+A later authorized session can retrieve the same record and continue from
+the retained sources and notes. Saving is an explicit client action; there is
+no automatic synchronization of AI conversations.
+
+Analyses may link to a source file. When a link is supplied, both its file ID
+and SHA-256 hash are required; page references are optional. A new file-linked
+save checks the source bytes and rejects a changed file until the client reads
+it again. Notes without a source-file link do not receive this check. These
+records support source inspection; researchers assess the interpretation.
+
+In **Setting** (macOS) or **Settings** (Windows) **→ AI Access**, create a named
+connection, choose its collection and expiry, and grant the operations it needs:
 
 - **Read:** metadata, directory browsing, and file contents have defined access
   boundaries; file reading and directory browsing are separately enabled.
@@ -184,10 +229,12 @@ and expiry, and grant the operations it needs:
   within selected Library and Space roots. My Publications write access is
   not exposed.
 
-Paper imports require metadata supplied by the AI client and reuse existing
-DOI/arXiv identities. They do **not** automatically run Resolve; resolving an
-existing paper is a separate permission and call. Connections can expire or be
-revoked, and existing connections do not gain new write permissions on upgrade.
+Paper imports require metadata supplied by the AI client and reuse matching
+DOI/arXiv identities. **A PDF is optional:** import the prepared metadata first,
+then attach a file under the same Gewu Key when it becomes available. Imports
+do **not** automatically download a PDF or run Resolve; resolving an existing
+paper is a separate permission and call. Connections can expire or be revoked,
+and existing connections do not gain new write permissions on upgrade.
 
 Your AI client may send authorized content to its chosen model provider. These
 grants govern API/MCP access; they do not restrict a program's independent
@@ -198,9 +245,15 @@ sources. See [AI Access setup, tools, and permissions](docs/AI_ACCESS.md).
 
 **SQLite is the source of truth** for paper identities, relationships, file
 records, and workspace state. PDFs and attachments remain on disk; reports and
-exports do not replace the database. Back up the database **and all managed file
-roots together**, or back up the complete project while the App and service are
-stopped. See [backup and update instructions](docs/DEVELOPMENT.md#safe-updates-and-backups).
+exports do not replace the database.
+
+The installed App and your **Gewu Database** are stored separately. With the App
+and its service stopped, back up the **complete selected database folder**,
+any additional managed file roots, and externally linked originals. Copying the
+App or source checkout alone does not back up your research. A pre-upgrade
+SQLite snapshot or a portable folder export does not replace this full backup.
+See [backup and recovery](paper_monitor/user_guide.html#backup-migrate) and the
+platform's bundled User Guide.
 
 The workspace uses a local-first architecture, with online services supporting
 discovery, metadata, citation counts, and publisher access. Availability can depend on a
@@ -210,28 +263,30 @@ Configure optional service keys in **Setting → Literature Data Source**.
 
 ## Platform support
 
-- **macOS** — the current native desktop release, with Finder, Preview, Quick
-  Look, Dock, and native drag-and-drop integration. This is the primary
-  development and validation platform.
-- **Windows** — developed separately on the experimental Windows branch.
-  This macOS baseline and its screenshots do not establish Windows feature parity;
-  consult that branch's own build instructions and limitations.
+- **macOS** — a standalone desktop release with Finder, Preview, Quick Look,
+  Dock, and native drag-and-drop integration. The manuscript's reported
+  evaluation was performed on macOS.
+- **Windows** — a separately packaged desktop release for Windows 10/11 x64,
+  with its own installer and User Guide. See the
+  [Windows release notes](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2)
+  for requirements and platform details.
 
 The Python, SQLite, and web-interface core is separated from native desktop
-integration. See [release scope](docs/RELEASE_1.0.0.md) and
-[distribution requirements](DISTRIBUTION.md).
+integration. Screenshots in this README show macOS; use your platform's release
+notes and User Guide for installation and native behavior.
 
 ## Documentation
 
 | Start here | What it covers |
 | --- | --- |
-| [Illustrated User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) | Daily workflows, settings, shortcuts, backup, and troubleshooting; also available through Help → User Guide. |
+| [macOS User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) · [Both platform guides](https://gewu-insight.com/#resources) | Daily workflows, settings, shortcuts, backup, and troubleshooting; each App includes its own guide under Help → User Guide. |
 | [AI Access & MCP](docs/AI_ACCESS.md) | Client setup, collection grants, reading, analysis saves, imports, moves, and renames. |
 | [Browser: Save to Gewu](docs/BROWSER_CAPTURE.md) | Reviewing article identity, PDF candidates, file types, and import destinations. |
 | [Browser: keyboard & bookmarks](docs/BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md) | Navigation, bookmark import/export, and explicit one-way sync. |
 | [Browser: PDFs](docs/BROWSER_PDF_PREVIEW.md) · [Passwords](docs/BROWSER_PASSWORD_AUTOFILL.md) | PDF viewing and the boundaries of system password integration. |
 | [Managed file layout](docs/MANAGED_FILE_LAYOUT.md) | Default files, Associated Files, aliases, and recovery boundaries. |
-| [Installation & distribution](DISTRIBUTION.md) | Folder-based installation, startup diagnostics, and clean packages. |
+| [macOS release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) · [Windows release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2) | Current installers, requirements, checksums, and first-launch notes. |
+| [Older source-installation migration](docs/SOURCE_DATA_MIGRATION.md) | Back up and separate research data from a legacy source checkout before updating. |
 | [Development guide](docs/DEVELOPMENT.md) | Manual setup, architecture, CLI commands, builds, updates, and verification. |
 | [Licensing explained](docs/LICENSING.md) · [Contributing](CONTRIBUTING.md) | Research use and sharing, reserved commercial rights, and contribution terms. |
 
@@ -250,6 +305,10 @@ here after it is posted. Until then, the provisional reference is:
 
 Citation metadata is also available in [CITATION.cff](CITATION.cff) for GitHub's
 **Cite this repository** feature.
+
+The manuscript's evaluation uses the fixed software snapshot
+[commit `539d00d`](https://github.com/LKong92/Gewu-Insight/tree/539d00dd1a3b0f5857912223868ca232d56680c9).
+Use that snapshot when reproducing the reported results.
 
 <!-- After arXiv posting, update this reference and CITATION.cff together with
      the confirmed author list, title, year, arXiv identifier and canonical URL. -->
