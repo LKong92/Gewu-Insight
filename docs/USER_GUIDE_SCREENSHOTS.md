@@ -1,7 +1,7 @@
 # User Guide screenshot inventory
 
 Edition: October 10, 2026 · Version 1.0.0 / Build 1.
-HTML and PDF share 38 packaged PNG captures. The October 10 pass replaces the Space and shortcut illustrations with full-screen captures of the current App artwork. Other figures remain unchanged, including the clean empty Add Monitored Author form.
+HTML and PDF share 38 packaged PNG captures. The October 10 pass replaces the Space and shortcut illustrations with full-screen captures of the current App artwork, and recaptures the User Guide window without a mouse pointer or control overlay. Other figures remain unchanged, including the clean empty Add Monitored Author form.
 
 ## Capture rules and retained capture history
 
@@ -19,7 +19,7 @@ HTML and PDF share 38 packaged PNG captures. The October 10 pass replaces the Sp
 
 | Topic | Capture | Captured / reviewed | Contents |
 |---|---|---|---|
-| Guided Tour | [user-guide-window.png](../assets/user-guide/screenshots/user-guide-window.png) | Oct 6 | The User Guide window. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF. |
+| Guided Tour | [user-guide-window.png](../assets/user-guide/screenshots/user-guide-window.png) | Oct 10 | The User Guide window. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF. Recaptured with the pointer outside the window and no control overlay. |
 | Library Layout | [library-paper-files.png](../assets/user-guide/screenshots/library-paper-files.png) | Sep 13; reviewed Oct 2 | Library and Paper Files. This real paper has two already-classified files: Preprint and Published version. The published file is marked Default. Its folder placement, related files, and Paper Details remain connected. |
 | Folders, Shortcuts, and Spaces | [space-workspace.png](../assets/user-guide/screenshots/space-workspace.png) | Oct 10 | A Space with an open folder. AI remains the heading across its folder and content columns. Literature Project has its own heading beneath it. The Space heading stops at the Details divider; the right-hand Details pane keeps its full height. |
 | Folders, Shortcuts, and Spaces | [add-shortcut.png](../assets/user-guide/screenshots/add-shortcut.png) | Sep 13; reviewed Oct 2 | Add Shortcut. Choose an existing Library folder through the column picker. Add creates a navigation shortcut to that folder. |
