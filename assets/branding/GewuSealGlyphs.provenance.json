@@ -1,0 +1,54 @@
+{
+  "asset": "GewuSealGlyphs.png",
+  "selected_date": "2026-10-10",
+  "creation": "Generated with AI assistance for Gewu Insight using the built-in image_gen tool.",
+  "generation_input_images": [
+    {
+      "description": "Previously accepted compact AI-generated motif",
+      "sha256": "75f3b02535e16633ac0d55ebdf88924bf260da86cf929da5c2c097010be21be5"
+    }
+  ],
+  "context": "The refinement uses the earlier text-generated Gewu motif as its image input; no commercial font image was supplied.",
+  "text": "格物洞見",
+  "layout": {
+    "top_right": "格",
+    "bottom_right": "物",
+    "top_left": "洞",
+    "bottom_left": "見"
+  },
+  "selected_preview_sha256": "ff5c787728d4bab493b1488e0a99436b249f937762c44b602cf15eaf473fef96",
+  "production_sha256": "ac0025861a5ddff1286b500333dea1612b4a73a2828b07829bf588739ae27b07",
+  "production_processing": {
+    "user_authorized": true,
+    "method": "Per-pixel luminance-to-alpha conversion and uniform gray color; no redraw, crop, resize, stroke movement or smoothing.",
+    "dimensions": [
+      1254,
+      1254
+    ],
+    "rgb": [
+      186,
+      192,
+      198
+    ],
+    "alpha": "round(max(0, 245 - luminance) * 255 / 245)",
+    "display_opacity": "Applied separately by the existing startup and empty-space renderers."
+  },
+  "generation_prompt": "精细编辑这张已选定的四字篆书图案。请保留它的四个字、字序、每字部件结构和主要线条走向，只做风格与占画面积的小幅精修，不要重新设计成另一套字。右上格、右下物、左上洞、左下見，右列竖读格物，左列竖读洞見。用户已经基本认可这版，必须保持识别结构与整体气质。修改一：图案在同样正方形画布中适当变大，四边留白缩小到约9%，四字整体占画布宽高约82%，不裁切任何笔画。修改二：削弱现在过于圆滑、胶管般圆头的感觉，让笔画转折与端头稍有篆刻的方折棱角，保留小篆必要的优雅圆转，做到方中有圆、圆中有方。约三分之一关键转折变成含蓄的方肩，端头略平而不尖，不要变成现代黑体、普通汉字或像素方块。让四字外沿的上、下、左、右大致各自齐平，视觉上隐约形成一个紧密方形印面，像由文字本身构成印章的边缘；绝对不要画外框、边框、分隔线或底色块。字间留窄而清楚的白隙，线宽维持当前厚实程度。純黑实心笔画、纯白背景，边缘清洁平滑，无纹理、墨斑、杂点、做旧、阴影或额外文字。保持正方形画布，只输出这一枚图案。",
+  "rights_status": "Provenance only; no legal clearance, copyright-free or exclusive-rights claim.",
+  "selection": "User requested a larger, slightly angular refinement of the accepted compact motif on October 10, 2026.",
+  "reference_generation": {
+    "generation_input_images": [],
+    "selected_preview_sha256": "75f3b02535e16633ac0d55ebdf88924bf260da86cf929da5c2c097010be21be5",
+    "generation_prompt": "为科研软件设计一枚有真正篆书美感的「格物洞見」四字图案。不是现代汉字粗体，不是楷书、黑体或圆体改造，也不是把普通字塞进四个方框。请像熟悉秦代小篆和汉印章法的篆刻家那样重新安排篆字结构。四字布局：右上格、右下物、左上洞、左下見；竖读右列格物，左列洞見。篆法以圆转盘曲、匀劲古拙为核心，采用真正古篆象形化的部件，适度屈曲回环，曲线与含蓄方折相接，使每字的线条均衡穿插。洞的水旁是篆书流动弧形水纹，格的木旁是古篆树形，不是现代直横撇捺；見应有篆书的目与弯曲人足，物的牛勿使用古篆圆转结构。文字要有古代印章的含蓄神韵，不能看起来像现代排版字体、粗黑标识或几何方块图标。整体四字密排成规整的方形印面，外轮廓平齐，但内部灵活错让、疏密有致。笔画中等偏厚、均匀而有力量，线宽约整个方形宽度的2%，不能是纤细线稿，也不能粗到挤死内部白隙。借鉴一般传统小篆与篆刻章法，不模仿任何具体现代商业字体。不加外边框，不加十字分隔线，不加注释。只输出一枚纯黑色四字篆书图案、纯白背景；黑色笔画光滑实心，没有做旧，没有墨斑，没有纹理，没有杂点，没有红色。正方形画布，印面居中，四周约10%白边。设计应像一枚精心奏刀的文人篆刻印面，而不是四个普通粗体汉字。"
+  },
+  "guide_asset": {
+    "asset": "GewuSealGlyphsGuide.png",
+    "sha256": "a418f44cbf12cb5b6f8c7fa8c9e87ec63abc70805f1a499cb6cb8001e9d803ae",
+    "rgb": [
+      0,
+      0,
+      0
+    ],
+    "alpha": "Identical to the production asset; rendered directly on the page without a background panel."
+  }
+}

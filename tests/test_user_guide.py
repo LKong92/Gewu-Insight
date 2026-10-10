@@ -156,7 +156,7 @@ class UserGuideTests(unittest.TestCase):
         images = {image.get("src"): image for image in article.select("img[src]")}
         self.assertIn("/api/about-calligraphy", images)
         self.assertIn("/api/app-icon", images)
-        self.assertIn("/api/startup-brand-art", images)
+        self.assertIn("/api/startup-brand-art?v=ac0025861a5d", images)
 
         source_links = {
             link.get_text(" ", strip=True): link.get("href")
@@ -165,11 +165,12 @@ class UserGuideTests(unittest.TestCase):
         self.assertEqual(
             source_links,
             {
-                "格": "https://www.shufa5.com/images/shufa/zi/5/35045.gif",
-                "物": "https://www.shufa5.com/images/shufa/zi/6/165906.gif",
-                "洞": "https://www.shufa5.com/images/shufa/zi/2/162202.gif",
-                "見": "https://www.shufa5.com/images/shufa/zi/2/179662.gif",
+                "草书前后赤壁赋卷": "https://www.shanghaimuseum.net/mu/frontend/pg/article/id/CI00000383",
             },
+        )
+        self.assertEqual(
+            article.get_text(" ", strip=True).count("Original work not yet identified."),
+            3,
         )
 
         text = article.get_text(" ", strip=True)
@@ -177,7 +178,8 @@ class UserGuideTests(unittest.TestCase):
             "祝枝山行草集字",
             "a title written by Zhu Zhishan",
             "traditional direction from right to left",
-            "汉仪篆书繁",
+            "generated with AI assistance for Gewu Insight",
+            "格、物、洞、見",
             "The icon's two blue-violet fields",
             "Provenance and reuse",
             "Icon · recognition",
@@ -744,7 +746,7 @@ class UserGuideTests(unittest.TestCase):
             {
                 "/api/about-calligraphy",
                 "/api/app-icon",
-                "/api/startup-brand-art",
+                "/api/startup-brand-art?v=ac0025861a5d",
                 "/user-guide-assets/library-paper-files.png",
                 "/user-guide-assets/space-workspace.png",
                 "/user-guide-assets/library-table.png",

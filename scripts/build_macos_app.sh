@@ -104,6 +104,9 @@ cp "$PROJECT_DIR/scripts/GewuBrowserLoginProbe.js" "$APP/Contents/Resources/Gewu
 cp "$PROJECT_DIR/scripts/GewuBrowserNavigationProbe.js" "$APP/Contents/Resources/GewuBrowserNavigationProbe.js"
 mkdir -p "$(dirname "$BRAND_ART_DEST")"
 cp "$BRAND_ART_SOURCE" "$BRAND_ART_DEST"
+mkdir -p "$APP/Contents/Resources/assets/branding"
+cp "$PROJECT_DIR/assets/branding/README.md" "$PROJECT_DIR/assets/branding/GewuSealGlyphs.provenance.json" \
+  "$APP/Contents/Resources/assets/branding/"
 cp "$ABOUT_CALLIGRAPHY_SOURCE" "$ABOUT_CALLIGRAPHY_DEST"
 if [[ ! -s "$USER_GUIDE_PDF_SOURCE" ]]; then
   echo "The fixed-layout User Guide PDF is missing. Run scripts/build_user_guide_pdf.py first." >&2

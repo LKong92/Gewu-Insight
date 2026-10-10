@@ -94,6 +94,7 @@ Their top-level Python license labels alone do not describe the whole wheel.
 | Contribution policy | Mac includes the earlier policy; Windows omits CONTRIBUTING.md. | Carry the current policy in both packages. This does not supply a signed contributor agreement. |
 | Audit-document references | Both summary notices refer to `docs/DEPENDENCY_LICENSE_AUDIT.md`, which is absent from both packages. | Bundle the referenced audit documents or provide a valid, access-qualified source link. |
 | Windows component overview | The older summary lists only the historical cross-platform Python set, not the extra native dependencies; component notices themselves are present. | Add the Windows-specific inventory and retain all nested notices. |
+| Seal-style artwork | The examined installers predate the October 10 AI-assisted motif replacement in source. | Include the new motif, its provenance and the updated manual in future packages; no existing Release asset has been replaced. |
 | Build provenance | Windows' sidecar does not consolidate exact interpreter/dependency versions or original runtime-input archive digests. | Record those inputs and the WebView2 bootstrapper version/hash in the next build manifest. |
 
 Font and calligraphy redistribution evidence remains unresolved. PDF embedding,

@@ -338,12 +338,17 @@ System fonts used in the generated manual retain their own display/embedding
 terms; no standalone font files are shipped. In particular, document embedding
 permissions do not imply permission to distribute or relicense the fonts.
 
-The seal artwork uses Hanyi seal-script glyphs. The About wordmark was composed
-from four externally sourced historical-calligraphy images, identified in the
-User Guide. The repository does not include proof of the relevant artwork/font
-redistribution permissions. Gewu's LICENSE does not clear those rights. Confirm
-those permissions before public or commercial redistribution; original project
-contributions do not erase rights in the underlying materials.
+The current seal-style motif was generated with AI assistance for Gewu Insight.
+Its provenance is recorded in `assets/branding/README.md`. This describes the
+creation process; it is not a legal clearance or a claim of exclusive rights.
+Previously published installers retain the earlier artwork until separately
+revised; see the released-package audit below.
+
+The About wordmark remains composed from four externally sourced historical-
+calligraphy images, identified in the User Guide. The repository does not include
+proof of the relevant image redistribution permissions. Gewu's LICENSE does not
+clear those rights. The source images' reuse status remains to be confirmed;
+original project contributions do not erase rights in the underlying materials.
 
 Paper figures, journal marks, author portraits and other third-party content
 visible in screenshots remain with their respective owners. Viewing content or

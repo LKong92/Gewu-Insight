@@ -1,7 +1,7 @@
 # User Guide screenshot inventory
 
-Edition: October 6, 2026 · Version 1.0.0 / Build 1.
-HTML and PDF share 38 packaged PNG captures. The October 6 pass retains 36, replaces the Guide opening and adds the actual Database Location dialog. Earlier monitor and Paper Files captures remain accurate; the clean empty Add Monitored Author form is retained.
+Edition: October 10, 2026 · Version 1.0.0 / Build 1.
+HTML and PDF share 38 packaged PNG captures. The October 10 pass replaces the Space and shortcut illustrations with full-screen captures of the current App artwork. Other figures remain unchanged, including the clean empty Add Monitored Author form.
 
 ## Capture rules and retained capture history
 
@@ -21,10 +21,10 @@ HTML and PDF share 38 packaged PNG captures. The October 6 pass retains 36, repl
 |---|---|---|---|
 | Guided Tour | [user-guide-window.png](../assets/user-guide/screenshots/user-guide-window.png) | Oct 6 | The User Guide window. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF. |
 | Library Layout | [library-paper-files.png](../assets/user-guide/screenshots/library-paper-files.png) | Sep 13; reviewed Oct 2 | Library and Paper Files. This real paper has two already-classified files: Preprint and Published version. The published file is marked Default. Its folder placement, related files, and Paper Details remain connected. |
-| Folders, Shortcuts, and Spaces | [space-workspace.png](../assets/user-guide/screenshots/space-workspace.png) | Sep 16; reviewed Oct 2 | A Space with an open folder. AI remains the heading across its folder and content columns. Literature Project has its own heading beneath it. The Space heading stops at the Details divider; the right-hand Details pane keeps its full height. |
+| Folders, Shortcuts, and Spaces | [space-workspace.png](../assets/user-guide/screenshots/space-workspace.png) | Oct 10 | A Space with an open folder. AI remains the heading across its folder and content columns. Literature Project has its own heading beneath it. The Space heading stops at the Details divider; the right-hand Details pane keeps its full height. |
 | Folders, Shortcuts, and Spaces | [add-shortcut.png](../assets/user-guide/screenshots/add-shortcut.png) | Sep 13; reviewed Oct 2 | Add Shortcut. Choose an existing Library folder through the column picker. Add creates a navigation shortcut to that folder. |
 | Folders, Shortcuts, and Spaces | [add-space.png](../assets/user-guide/screenshots/add-space.png) | Sep 13; reviewed Oct 2 | Add Space. Give the independent workspace a name, then choose Add. Cancel closes this form without creating a Space. |
-| Folders, Shortcuts, and Spaces | [shortcut-path.png](../assets/user-guide/screenshots/shortcut-path.png) | Sep 16; reviewed Oct 2 | A shortcut retains its full path. The footer starts at Library and includes the shortcut target and selected folder. The heading identifies the shortcut while Paper Details remains independent. |
+| Folders, Shortcuts, and Spaces | [shortcut-path.png](../assets/user-guide/screenshots/shortcut-path.png) | Oct 10 | A shortcut retains its full path. The footer starts at Library and includes the shortcut target and selected folder. The heading identifies the shortcut while Paper Details remains independent. |
 | Search, List View, and Table View | [library-search.png](../assets/user-guide/screenshots/library-search.png) | Sep 13; reviewed Oct 2 | Search Library. Library search finds saved items across Library and Spaces. Select a result or use Show in Library to reveal its folder location. |
 | Search, List View, and Table View | [library-table.png](../assets/user-guide/screenshots/library-table.png) | Sep 24; reviewed Oct 2 | Table View sorting. The Time added arrow shows newest first. All five sortable headers are shared by Library, Spaces and shortcuts. This existing paper's Published version remains Default, with a separate Summary in Paper Files. |
 | Refresh Info: One Paper, a Folder, or the Library | [loader-metadata.png](../assets/user-guide/screenshots/loader-metadata.png) | Sep 18; reviewed Oct 2 | Refresh All Metadata. This completed folder task shows its scope, Quick/Full mode, task history and per-paper log. Pause and Stop are separate controls. Partial results mean some sources did not supply usable information; completed means the task has ended. |

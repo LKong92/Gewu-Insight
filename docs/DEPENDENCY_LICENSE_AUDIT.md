@@ -80,17 +80,19 @@ macOS 原生界面链接系统框架，具体使用方式见第三方通知。
 完成，现行入口与维护者检查清单见 [CONTRIBUTING.md](../CONTRIBUTING.md)
 及 [LICENSING.md](LICENSING.md#contribution-authorization-checklist)。
 
-## 既有素材记录
+## 当前素材与保留事项
 
-以下保留原审计记录；本轮不调查、替换素材或作出新的授权结论。
-
-1. **字体及书法图像需要权利人确认，属于公开分发与商业授权前的未解决事项。**
-   `GewuSealGlyphs.png` 来源于汉仪篆书繁；仓库没有商业/软件或机构分发
-   授权凭据。汉仪将个人非商业使用与其他授权范围区分，不能假定“科研免费”
-   足以覆盖公开软件分发。`GewuAboutCalligraphy.png` 来自四个 shufa5
-   字形图像，Guide 已承认没有明确开放复用许可。历史作者年代久远不自动
-   证明网站图像、数字化素材及修改后的传播权均已取得。本轮不替换素材，
-   不把自定义 LICENSE 当成对这些素材的权利证明。
+1. **篆书水印已替换，行草集字的来源与权利核查仍保留。**
+   当前 `GewuSealGlyphs.png` 采用项目通过 AI 辅助生成、由用户选定的
+   格物洞見图案；生成记录见 [素材来源](../assets/branding/README.md)。
+   该记录说明制作方式，不构成法律清权或独占权利证明。既有发行包仍保留
+   替换前的素材，不能将当前源码的变化视为已更新所有历史分发物。
+   `GewuAboutCalligraphy.png` 图像未改。Guide 改引明代祝允明（号枝山）及
+   已核对的原作：“洞”对应上海博物馆藏《草书前后赤壁赋卷》中“客有吹洞簫者”。
+   “格、物、見”的具体原帖仍待考，不能把作者归属当作已确认全部原帖。
+   旧获取记录与比对证据保留在本地研究归档。原作与具有独创性的现代加工
+   应分别判断；缺少网站开放许可本身不等于古代字形必须购买授权。
+   自定义 LICENSE 不作为外部图像的权利证明。
 2. **PDF 嵌入字体是独立问题。** 手册实际嵌入了 Avenir Next、Palatino、
    Menlo、Songti SC、Hiragino Sans GB、Arial Unicode MS 的子集。
    本机字体 OS/2 标志中，Avenir/Palatino 为 4（Preview & Print），Menlo
@@ -111,5 +113,4 @@ macOS 原生界面链接系统框架，具体使用方式见第三方通知。
 - [requests 的许可证](https://github.com/psf/requests/blob/v2.32.5/LICENSE)，[pypdf 的许可证](https://github.com/py-pdf/pypdf/blob/main/LICENSE)
 - [LibreOffice 官方许可说明](https://www.libreoffice.org/licenses/)
 - [Pandoc 版权清单](https://github.com/jgm/pandoc/blob/main/COPYRIGHT)，[GNU 关于程序输出及独立程序的 FAQ](https://www.gnu.org/licenses/gpl-faq.html)
-- [汉仪授权说明](https://fund.hanyi.com.cn/license)，[具体字型](https://www.hanyi.com.cn/productdetail?id=450&type=0)
 - [Apple 软件许可入口](https://www.apple.com/legal/sla/)，[字体嵌入条款示例](https://www.apple.com/legal/sla/docs/macOSMonterey.pdf)
