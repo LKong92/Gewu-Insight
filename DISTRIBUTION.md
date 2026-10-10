@@ -1,148 +1,128 @@
 # Distributing Gewu Insight
 
-The current research and writing baseline is **Gewu Insight 1.0.0, Build 1**.
-This project uses macOS folder-based distribution. Keep the App, Python package,
-configuration and assets together; the App alone is not a standalone installer.
+Gewu Insight 1.0.0 is available as separate macOS and Windows installers.
+Both include Python and application dependencies. Source archives and the
+legacy folder-based packaging script are development paths, not the current
+end-user installers.
+
+The repository remains private. GitHub Releases require repository access;
+contact [info@gewu-insight.com](mailto:info@gewu-insight.com) to arrange access
+or package delivery. Do not change visibility as part of a build or update.
+
+## Recipient requirements
+
+| Platform | Requirements | Package and instructions |
+| --- | --- | --- |
+| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) |
+| Windows | Windows 10 version 1607+ or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Revision 2 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2) |
+
+On macOS, open the DMG, drag Gewu Insight.app to Applications, eject the image,
+and open the installed App. On Windows, run Setup and choose the program and
+Gewu Database folders; Python and .NET are included. Setup reuses Microsoft
+WebView2 or installs it from Microsoft when needed, which requires internet.
+Online literature services also require network access. Optional LibreOffice
+and TeX tools are installed separately.
+
+Use the release's checksum, build information, first-launch notes and bundled
+User Guide. The macOS package has an ad-hoc integrity signature and is not
+Developer ID signed or notarized. The Windows installer is unsigned. Do not
+represent either package as having publisher identity verification it lacks.
+
+## Database, updates and troubleshooting
+
+The installed program and selected Gewu Database are separate. Keep the database
+outside the App/program folder. On macOS, choose Create New Database or Open
+Existing Database at first launch; Database Location… in the App menu shows the
+active folder. On Windows, use Setup's Use existing Gewu Database option to
+retain a collection.
+
+Before replacing the program, quit the App and its service, then back up the
+complete selected database folder, all additional managed roots and externally
+linked originals. Copying the App or source checkout alone is not a research
+backup. A migration's SQLite snapshot does not replace a full file backup.
+For old source-folder installations, follow the
+[migration instructions](docs/SOURCE_DATA_MIGRATION.md).
+
+Installed macOS logs are in `~/Library/Logs/Gewu Insight`. For Windows, follow
+the release's bundled User Guide and diagnostics. Do not delete a database to
+repair startup. Missing disks, incompatible databases and occupied ports need
+to be resolved without silently substituting an empty research collection.
 
 ## Research license and commercial rights
 
-Gewu Insight is source-available research software under the custom
-[Academic and Non-Commercial Research License](LICENSE). Academic/non-commercial
-research users may download, install, run and modify it. They may share original
-and modified versions, derivative works and patches free of charge for those
-purposes under the same research-use terms, retaining LICENSE, copyright and
-third-party notices and identifying modifications. Public research forks and
-pull requests within those terms do not require separate permission.
-Commercial use, commercial redistribution, sublicensing and incorporation into
-commercial products or services require separate prior written authorization
-from the copyright holders. See [licensing explained](docs/LICENSING.md).
+Gewu is source-available research software under the custom
+[Academic and Non-Commercial Research License](LICENSE). Original and modified
+versions, derivative works and patches may be shared free of charge for permitted
+research under the same terms, retaining notices and identifying modifications.
+Commercial use and redistribution require separate prior written authorization.
+See [licensing explained](docs/LICENSING.md) and [contributing](CONTRIBUTING.md).
 
-Third-party rights are separate. Before public or commercial distribution,
-review [the dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md), especially
-the outstanding artwork/font permissions. The Gewu license does not clear those
-rights. Do not add a virtual environment, third-party binaries or fonts to a
-release without auditing that exact distribution and retaining required notices.
+Keep LICENSE, CONTRIBUTING.md, THIRD_PARTY_NOTICES.md and all applicable component
+licenses with distributions. Bundled interpreters, dependencies and platform
+runtimes retain their own terms. Review the exact package's versions and notices;
+the earlier source-install audit is not a complete audit of a standalone package.
+Outstanding artwork/font permissions are recorded in the
+[dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md). The Gewu license
+does not supply those permissions.
 
-## Version and build
+## Build paths
 
-`paper_monitor/__init__.py` owns `__version__` and `__build__`. The App builder
-reads them for About and the bundle; the PDF builder reads the same source.
-The icon checksum only selects a cache-safe icon filename. It is not the build
-number. For a future patch, update the version and reset Build to 1; increase
-Build when packaging a revised build of that same version.
-
-Regenerate the manual before packaging:
-
-```bash
-.venv/bin/python scripts/build_user_guide_pdf.py
-scripts/build_macos_app.sh
-```
-
-The HTML edition label and About screenshot must also match the intended
-release. Verify the generated PDF and App signature before sharing.
+- **Standalone macOS DMG:** use `scripts/package_macos_dmg.py` with a selected
+  source revision and verified runtime/dependency inputs. See
+  [macOS packaging](docs/MACOS_DMG_PREVIEW.md) for commands, input licenses,
+  checksums, isolated validation and output boundaries.
+- **Windows Setup:** use the existing Windows branch's build instructions and
+  the Windows release's build/validation manifests. The macOS builder does not
+  produce or validate the Windows installer.
+- **Native source development:** `scripts/build_macos_app.sh` builds the native
+  shell. Without a root source App it extracts `assets/macos-app-template.zip`
+  temporarily and defaults to `dist/Gewu Insight.app`. This is not a standalone
+  runtime package or an automatic update of `/Applications/Gewu Insight.app`.
+- **Legacy collaborator ZIP:** `scripts/make_release.sh` expects an already
+  built, signed `Gewu Insight.app` at the repository root. It copies source and
+  supporting files into a folder ZIP and creates empty data/reports directories.
+  It does not build either current installer. Do not run it on a clean checkout
+  expecting a standalone package or use its empty folders as formal data.
 
 ## macOS signing and updates
 
-This local workflow uses explicit ad-hoc signing. Building and packaging do not
-require an Apple certificate, developer account, Team ID or keychain password.
-Strict signature verification and the fixed Gewu bundle identifier remain
-required; removing the certificate dependency does not skip these checks. See
-the [development guide](docs/DEVELOPMENT.md#builds-and-verification).
+Local builds explicitly use ad-hoc signing without an Apple certificate,
+Team ID or keychain password. Builders stage changes, verify signatures and the
+Gewu bundle identifier, and protect against concurrent replacement. Build while
+the target App is stopped; retain the same bundle identifier and Browser store
+identity across updates. A changed bundle can have a new code hash, so ad-hoc
+signing does not guarantee prompt-free first launch or updates.
 
-Keep the same bundle identifier and Browser data-store identity across updates.
-The current Browser and hidden publisher views explicitly decline persistent
-WebCrypto-key wrapping and unwrapping before WebKit accesses Keychain. Ordinary
-cryptography, cookies and website storage remain available. Sites that depend on
-persisted CryptoKeys can be incompatible, and earlier persisted keys cannot be
-read through the current Browser. This policy is separate from Apple Passwords
-and AutoFill; it does not delete the existing master-key item or Browser profile.
-If the old `Gewu Insight WebCrypto Master Key` prompt persists, first verify that
-the updated original App is running rather than an older copy. Never reset the
-login keychain, delete or export the key, or allow all applications as an update
-repair. Build/package scripts do not change keychain permissions.
+The Browser and hidden publisher views refuse persistent WebCrypto-key wrapping
+and unwrapping. Ordinary cryptography, cookies and website storage remain
+available; earlier persisted CryptoKeys cannot be read through these views.
+This is separate from Apple Passwords and AutoFill. Do not reset Keychain,
+export/delete its key or grant all applications access as an update repair.
 
-A changed ad-hoc bundle can have a new code hash and is bound to a code-hash
-partition in securityd. A fixed bundle identifier alone does not override that
-protection layer. See Apple's
-[securityd partition selection](https://github.com/apple-oss-distributions/Security/blob/main/securityd/src/clientid.cpp)
-and [application update authorization](https://support.apple.com/guide/keychain-access/kyca1331/mac).
+For source-linked development, Python-only changes can load after a service
+restart. An installed standalone App uses its packaged code; pulling source
+and restarting that installed App does not update its runtime. Rebuild and
+replace a standalone package through its packaging workflow when required.
 
-Build while the installed App is stopped. The builder stages all compilation,
-resource updates and signing before replacement, rejects concurrent bundle
-changes, and restores the original bundle if installation verification fails.
-An identical staged bundle leaves the existing App and signature in place.
-Python/backend-only source updates do not require a native rebuild; restart to
-load them. Ad-hoc signing does not guarantee that all macOS authorization prompts
-disappear; the webpage-key policy above addresses that specific WebCrypto path.
-The build and package scripts do not change the database, research files,
-Browser profile, saved website sessions or keychain ACLs.
+## Release checks
 
-Distribute the verified ZIP from `make_release.sh`. It preserves nested code
-signature attributes and verifies the App before copying, after copying and
-after extracting the actual ZIP. A failed check does not publish the staged ZIP.
-Git does not preserve the signature xattrs of the shell launcher; a Git checkout
-is a source update; changed native/bundled files must pass this local build and
-verification workflow before being used as an installed App. Do not replace a
-running App with a Git-pulled bundle. This local workflow does not claim Apple
-notarization or Gatekeeper approval on a recipient's Mac.
+Before sharing a new build:
 
-## What to Share
+1. Record the source commit, version/build, packaging changes and exact runtime
+   inputs. `paper_monitor/__init__.py` supplies the macOS source version/build;
+   consult the Windows branch for its packaging revision. Keep Guide labels
+   consistent with the build being distributed.
+2. Retain third-party notices, source obligations and provenance for the exact
+   shipped components, including transitive runtime libraries. Resolve or
+   explicitly review outstanding asset permissions for the intended delivery.
+3. Verify the actual archive/image checksum, signatures where applicable, and
+   installed files. Test first launch, restart and representative workflows with
+   isolated data. Record what was exercised and what remains unverified.
+4. Exclude real databases, papers, credentials, logs, local development archives
+   and benchmark artifacts. Preserve research data during program replacement.
+5. Obtain explicit authorization before committing, pushing or publishing.
+   Keep this repository private and preserve existing Git history.
 
-Use the release script:
-
-```bash
-scripts/make_release.sh 1.0.0
-```
-
-It creates a zip under `dist/` containing:
-
-- `Gewu Insight.app`
-- source code under `paper_monitor/`
-- `config/`
-- `requirements.txt`
-- `README.md`
-- `LICENSE`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md` and `docs/`
-  (including licensing and audit notes)
-- helper scripts
-- empty `data/` and `reports/` directories
-
-It does not include local SQLite databases, downloaded PDFs, generated notes,
-logs, virtual environments, or presentation/output artifacts.
-
-## Recipient Requirements
-
-The supplied universal launcher requires macOS 14 or later and a working
-`python3` command. The minimum version matches the binary deployment target. On first launch,
-`Gewu Insight.app` creates `.venv`, installs `requirements.txt`, starts the
-local UI, and opens `http://127.0.0.1:8765`.
-
-If the first launch fails, check:
-
-```text
-logs/paper_monitor_launcher.log
-```
-
-If the app only flashes and no page opens, run:
-
-```bash
-scripts/diagnose_macos.sh
-```
-
-The launcher now includes the last few log lines in its failure dialog. Common
-causes are missing `python3`, blocked network access during dependency install,
-quarantine/permission changes introduced by file sharing, or keeping the folder
-inside protected macOS locations such as `Desktop`, `Documents`, or `Downloads`.
-For Finder launch, tell recipients to move the whole folder to a regular location
-such as `~/Applications/PaperMonitor` or `~/PaperMonitor`.
-
-## GitHub
-
-For GitHub, commit source files, `Gewu Insight.app`, `config/`, scripts,
-`README.md`, `DISTRIBUTION.md`, `LICENSE`, `CONTRIBUTING.md`,
-`THIRD_PARTY_NOTICES.md` and `docs/`.
-Keep local data out of git using `.gitignore`.
-
-Describe Gewu as **source-available research software**; use **publicly available
-source code** only once the repository is public. Do not advertise it as
-open-source software or apply a standard-license badge to this custom license.
-Repository visibility and the arXiv/public-release timing are separate decisions.
+Retain product source, tests, required build assets and useful documentation in
+Git. Store unused design drafts and machine-specific work logs in the ignored
+local development archive. A cleanup commit does not erase earlier Git history.

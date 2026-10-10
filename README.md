@@ -53,6 +53,10 @@ Download the installer for your platform from the release page's **Assets**.
 Both packages include Python and application dependencies. GitHub's **Source
 code ZIP** is for source-based setup, not an App installer.
 
+This repository is currently private. Its GitHub release links require an
+account with repository access; contact [info@gewu-insight.com](mailto:info@gewu-insight.com)
+if you need access or an installation package.
+
 | Platform | Requirements | Download |
 | --- | --- | --- |
 | macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) |
@@ -211,11 +215,9 @@ A later authorized session can retrieve the same record and continue from
 the retained sources and notes. Saving is an explicit client action; there is
 no automatic synchronization of AI conversations.
 
-Analyses may link to a source file. When a link is supplied, both its file ID
-and SHA-256 hash are required; page references are optional. A new file-linked
-save checks the source bytes and rejects a changed file until the client reads
-it again. Notes without a source-file link do not receive this check. These
-records support source inspection; researchers assess the interpretation.
+Analyses can retain source-file references and check whether the source has
+changed before saving. See [analysis provenance](docs/AI_ACCESS.md) for file-link
+requirements and limits. Researchers assess the interpretation.
 
 In **Setting** (macOS) or **Settings** (Windows) **→ AI Access**, create a named
 connection, choose its collection and expiry, and grant the operations it needs:
@@ -259,7 +261,8 @@ The workspace uses a local-first architecture, with online services supporting
 discovery, metadata, citation counts, and publisher access. Availability can depend on a
 service's limits, the network or VPN exit address, and institutional access.
 Gewu uses pacing and cooldowns; it does not bypass paywalls or access controls.
-Configure optional service keys in **Setting → Literature Data Source**.
+Configure optional service keys in **Setting** (macOS) or **Settings** (Windows)
+**→ Literature Data Source**.
 
 ## Platform support
 
@@ -288,6 +291,7 @@ notes and User Guide for installation and native behavior.
 | [macOS release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) · [Windows release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2) | Current installers, requirements, checksums, and first-launch notes. |
 | [Older source-installation migration](docs/SOURCE_DATA_MIGRATION.md) | Back up and separate research data from a legacy source checkout before updating. |
 | [Development guide](docs/DEVELOPMENT.md) | Manual setup, architecture, CLI commands, builds, updates, and verification. |
+| [Distribution guide](DISTRIBUTION.md) | Package formats, separate database storage, signing, and release checks. |
 | [Licensing explained](docs/LICENSING.md) · [Contributing](CONTRIBUTING.md) | Research use and sharing, reserved commercial rights, and contribution terms. |
 
 The [HTML manual](paper_monitor/user_guide.html) is the source for the bundled

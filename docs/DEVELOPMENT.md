@@ -18,7 +18,8 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 python3 -m paper_monitor.workspace create "$PWD/tmp/development-database"
-GEWU_WORKSPACE_ROOT="$PWD/tmp/development-database" python3 -m paper_monitor ui --port 8876
+export GEWU_WORKSPACE_ROOT="$PWD/tmp/development-database"
+python3 -m paper_monitor ui --port 8876
 ```
 
 This starts the browser-hosted UI. Open `http://127.0.0.1:8876`; the service
@@ -91,7 +92,7 @@ Reuse existing modules and contracts when working on these areas:
 
 ## Data layout
 
-The default project layout is:
+The selected workspace (for development, `$GEWU_WORKSPACE_ROOT`) contains:
 
 ```text
 data/paper_monitor.sqlite       authoritative SQLite database
@@ -101,11 +102,12 @@ data/My Publications/           managed files for personal publications
 data/Associated Files/          versions, supplements, and attachments
 data/cache/journal_logos/       rebuildable local logo cache
 reports/                        generated notes and reports
-logs/                           launcher and runtime diagnostics
-config/journals.json            initial/default journal source definitions
+config/                         workspace configuration
 ```
 
-Configured data roots can differ. Journal subscriptions are personal database
+The source checkout separately retains `config/journals.json` as product defaults.
+Installed macOS logs are in `~/Library/Logs/Gewu Insight`; they are not research
+data. Configured data roots can differ. Journal subscriptions are personal database
 state: `config/journals.json` supplies initial/default definitions, so replacing
 source code does not reset active subscriptions or re-enable disabled journals.
 Move and classify managed files through the App; manual filesystem changes can
@@ -123,24 +125,28 @@ Before a major update or migration:
 
 1. Quit Gewu Insight and make sure its local service has stopped.
 2. Inspect `git status --short`; preserve uncommitted product changes.
-3. Back up the complete project, plus any configured managed roots outside it.
-   Include SQLite and all managed files, not just `data/Library`.
-4. Pull or install the new version and rebuild the native App as needed.
+3. Back up the complete selected Gewu Database folder, all additional managed
+   roots and externally linked originals. Preserve source changes separately;
+   copying the source checkout or App alone does not back up research data.
+4. For source development, pull and rebuild as needed. For installed standalone
+   use, replace the App using a validated package; a source pull does not update it.
 5. Start the App once so required additive database migrations can run.
 6. Verify a current PDF, an older version, an attachment, a Space,
    My Publications, and a monitor before discarding the backup.
 
 Copying only SQLite or only visible files is not a complete workspace migration.
 Do not delete the database as a startup repair. Start with
-`logs/paper_monitor_launcher.log` and the diagnostic instructions in
+the installed macOS logs in `~/Library/Logs/Gewu Insight` and the instructions in
 [DISTRIBUTION.md](../DISTRIBUTION.md#recipient-requirements).
 
 ## CLI commands
 
-Use the project environment and run from the repository root:
+Use the project environment and run from the repository root. Create the
+isolated workspace once using Manual setup, then select it in each new shell:
 
 ```bash
 . .venv/bin/activate
+export GEWU_WORKSPACE_ROOT="$PWD/tmp/development-database"
 
 # Journal Monitor default publication window
 python3 -m paper_monitor journal
@@ -155,7 +161,8 @@ python3 -m paper_monitor download PAPER_ID
 python3 -m paper_monitor export-json reports/export.json
 ```
 
-These commands operate on the configured workspace; they are not test fixtures.
+These commands operate on the explicitly selected development workspace.
+Do not point them at the installed App's formal research database for testing.
 
 ## Network services and credentials
 
@@ -180,16 +187,21 @@ Read [AGENTS.md](../AGENTS.md) before making product changes. Keep benchmark-onl
 instrumentation, data, and artifacts in a separate local benchmark worktree;
 never push them to this repository.
 
-Rebuild the native App after changing its native UI, bundled resources, or
-identity:
+For source development, rebuild the native shell after changing native UI,
+bundled resources or identity:
 
 ```bash
 ./scripts/build_macos_app.sh
 ```
 
+Without a root source App, the builder uses the archived template and writes
+`dist/Gewu Insight.app`. It does not automatically replace the daily App in
+`/Applications` or bundle a standalone Python runtime. Use
+[standalone packaging](MACOS_DMG_PREVIEW.md) for an installed release.
+
 Local builds explicitly use ad-hoc signing (`codesign --sign -`) without an
 Apple certificate, Team ID, signing configuration or keychain password.
-Quit the installed App before rebuilding it. The builder stages compilation,
+Quit the target App before rebuilding it. The builder stages compilation,
 resource updates and signing, verifies the signatures and Gewu bundle identifier,
 then installs with rollback if final verification fails. A concurrent bundle
 change or a newly running App cancels installation. If the complete staged App
@@ -197,8 +209,10 @@ is identical to the installed App, the builder retains the existing bundle and
 signature. No database, research file, WebKit profile or existing keychain item
 is changed by the builder.
 
-Python/backend-only changes do not require rebuilding the native bundle; restart
-the App to load that source update. A changed native bundle can have a new
+In a source-linked development installation, Python/backend-only changes do not
+require rebuilding the native shell; restart its service to load that source
+update. A standalone App uses packaged code and needs a rebuilt package.
+A changed native bundle can have a new
 `cdhash`; ad-hoc signing alone does not eliminate macOS authorization prompts.
 Current Browser and hidden publisher views separately refuse persistent
 WebCrypto-key operations before Keychain access. Ordinary cryptography and site
@@ -249,14 +263,14 @@ that a real mouse gesture or publisher sign-in works.
 
 ## Packaging and contributions
 
-Create a clean folder-based collaborator package with:
+Current end-user packages are the macOS DMG and Windows Setup installer.
+Use [macOS packaging](MACOS_DMG_PREVIEW.md) or the existing Windows branch's
+build instructions. `scripts/make_release.sh` is a legacy folder-ZIP helper
+requiring a built root App; it does not create either standalone installer.
 
-```bash
-scripts/make_release.sh
-```
-
-The release workflow excludes local databases, managed research files, generated
-notes, credentials, logs, and virtual environments. Follow
+Exclude local databases, research files, notes, credentials, logs, development
+archives and benchmark artifacts from release packages. Retain each standalone
+runtime's own licenses and component metadata. Follow
 [DISTRIBUTION.md](../DISTRIBUTION.md) for versioning and packaging requirements,
 and retain the license and third-party notices. Review the
 [dependency and asset audit](DEPENDENCY_LICENSE_AUDIT.md) before distribution.

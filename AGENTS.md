@@ -26,6 +26,8 @@
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
 - Develop and commit product changes directly on `main`. Do not create extra product branches or PRs unless the user explicitly requests them; GitHub should retain only `main` and the existing Windows branch. Preserve existing isolated local benchmark worktrees without publishing them.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
+- Keep GitHub private. Documentation, cleanup and release work do not authorize changing visibility.
+- Keep unused design drafts and machine-specific historical logs in ignored `local-development-archive/`; retain a concise current handoff in Git.
 
 ## Commit Messages
 
@@ -45,7 +47,6 @@
 - Run explicit journal window: `python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD`
 - Download paper: `python3 -m paper_monitor download PAPER_ID`
 - Compile check: `python3 -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
-- Clickable launcher: `/Applications/Gewu Insight.app`
 
 ## Key Paths
 
@@ -59,7 +60,7 @@
 
 ## Done Criteria
 
-- User Guide screenshots must come from the real original App, without Codex/Computer Use overlays. Main-window captures must retain all six top tabs; use real fullscreen capture if needed, never crop away navigation to hide an overlay. Recapture Add Monitored Author in its normal empty state without stale red Scholar-pause text. Use Hong Ding for Author Monitor, Nature with visible figures for Journal Monitor, and already-classified multiple Paper Files for Library.
+- Follow `docs/USER_GUIDE_SCREENSHOTS.md`: real original App only, no overlays or hidden navigation; retain all six tabs. Show Add Monitored Author empty without cooldown text, Hong Ding for Author Monitor, Nature with figures for Journal Monitor, and classified multiple Paper Files for Library.
 - In the PDF, Product Identity chapters 4-1 through 4-4 flow continuously; do not force each onto a new page. Preserve numbering/links and encode this rule in the builder, not only generated TeX.
 - Relevant CLI or UI workflow still works for the changed area.
 - Run `py_compile` for Python code changes when practical.

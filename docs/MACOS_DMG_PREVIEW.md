@@ -1,6 +1,6 @@
-# Standalone macOS DMG preview
+# Standalone macOS DMG packaging
 
-This packaging path creates `Gewu-Insight.dmg` for private installation testing.
+This packaging path creates a standalone DMG for private distribution and testing.
 It leaves the working checkout, installed development App and research data alone.
 It does not publish a GitHub Release or use an Apple account, Developer ID, or
 notarization. Local ad-hoc code signatures protect bundle integrity only.
@@ -34,8 +34,9 @@ Logs are in `~/Library/Logs/Gewu Insight`. Rebuildable caches are in
 `~/Library/Caches/com.zhengranwu.gewuinsight`; macOS/WebKit continues to manage
 browser website storage separately. Bookmarks, history and AI connection grants
 remain in the research SQLite database. Optional LibreOffice and TeX tools are
-not bundled. The embedded Guide still describes the source-folder installation;
-use this document and the DMG Read Me for standalone setup.
+not bundled. Use the installed package's Guide, release notes and DMG Read Me
+for its setup instructions; older preview manuals may describe source-folder
+installation. Current release links are in [DISTRIBUTION.md](../DISTRIBUTION.md).
 
 Existing database moves must use a verified migration, not a Finder move of
 SQLite alone. With all source App/server processes stopped, run

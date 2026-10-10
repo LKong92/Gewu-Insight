@@ -267,15 +267,27 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## Python packages installed separately
+## Python packages and standalone runtimes
 
-The default macOS launcher installs `requirements.txt` into the recipient's
-virtual environment. The repository/release does not bundle that environment,
-a Python interpreter or dependency wheels. The versions below record this audit,
-not an installation lock. Future resolutions require a fresh review. Each
-installed package carries its own authoritative license; preserve that package's
-complete notices and comply with its terms if distributing it separately or
-changing the packaging model.
+Current macOS and Windows installers bundle Python and application dependencies.
+Source development installs `requirements.txt` into a separate virtual environment.
+The versions below are the September 24 source-environment audit snapshot, not
+an installation lock or an inventory of every component in either installer.
+Use each release's build manifest and shipped component notices for its exact
+versions. Preserve the original licenses and any source-provision obligations.
+
+The macOS standalone builder includes CPython from python-build-standalone and
+its transitive runtime components. Inside the App's `Contents/Resources`,
+`Runtime Licenses/<architecture>/` contains the matching runtime metadata and
+license texts; `dependencies/` contains Python package source, metadata and
+licenses. `Standalone Build.json` and `BUNDLED_RUNTIME_NOTICES.txt` describe that
+build. A CPython license alone does not cover every library bundled with it.
+
+The Windows release also bundles .NET and reuses or installs Microsoft WebView2.
+Their terms, Python runtime notices, package licenses and any bundled native
+components must be reviewed against that Windows build. Follow its included
+notices and build manifest; the macOS inventory is not a Windows license audit.
+See [distribution guidance](DISTRIBUTION.md) for the platform release links.
 
 | Component | Audited version | License | Upstream information |
 |---|---|---|---|
@@ -302,7 +314,7 @@ of their own embedded component notices, not just the top-level license label.
 
 ## System components and external tools
 
-The native App uses macOS system frameworks including Cocoa/AppKit, WebKit,
+The macOS native App uses system frameworks including Cocoa/AppKit, WebKit,
 Quartz/PDFKit, ImageIO and Quick Look; these remain under their respective Apple
 and third-party terms. Their implementations are not copied into the App.
 System commands are invoked as separate programs. Optional LibreOffice and TeX

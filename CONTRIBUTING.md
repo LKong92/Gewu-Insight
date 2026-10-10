@@ -1,5 +1,36 @@
 # Contributing to Gewu Insight
 
+## Report an issue or suggest a change
+
+This repository is private. Collaborators with access can open an issue;
+others can contact [info@gewu-insight.com](mailto:info@gewu-insight.com).
+Include your operating system, Gewu version/build, steps to reproduce, expected
+and actual behavior, and a small synthetic example when useful. Remove API keys,
+tokens, personal paths and research content from logs and screenshots. Do not
+attach a real database or papers without permission to share them.
+
+## Prepare and submit a contribution
+
+1. Discuss the intended change and acceptance requirements with a maintainer,
+   especially for new features or changes to paper identity, storage or access.
+2. Follow the [development guide](docs/DEVELOPMENT.md#manual-setup). Use an
+   isolated development database and synthetic fixtures; never test changes on
+   a user's research collection. Read [AGENTS.md](AGENTS.md) for product rules.
+3. Keep the change focused, update affected documentation, and run the relevant
+   existing checks. Describe actual validation and any unverified behavior.
+   Follow the [commit guidelines](docs/COMMIT_GUIDELINES.md).
+4. Where your repository access permits, submit a PR describing the problem,
+   resulting behavior, data or compatibility effects, and validation. Otherwise,
+   arrange a patch with a maintainer. GitHub access and the license's permission
+   to share research modifications are separate matters.
+5. Maintainers review correctness, file/data safety, documentation and third-party
+   provenance. External copyrightable contributions also require the written
+   authorization described below before merging into the official product.
+
+Maintainers work directly on `main` under this repository's existing rules;
+external PRs do not change that local development policy. Keep benchmark-only
+work and artifacts in isolated local worktrees and out of product submissions.
+
 ## Research sharing and upstream contributions are different
 
 The [LICENSE](LICENSE) permits non-commercial research sharing of original and
