@@ -150,8 +150,8 @@ screenshots show the real macOS App; select an image to inspect it at full size.
     <td width="50%" valign="top">
       <a href="assets/user-guide/screenshots/browser.png"><img src="assets/user-guide/screenshots/browser.png" alt="The built-in Browser displaying a publisher PDF with Save to Gewu"></a>
       <br><strong>Browser</strong><br>
-      Read publisher pages and PDFs in the built-in WebKit browser, with tabs,
-      bookmarks, and local history. Save to Gewu lets you review the paper's
+      Read publisher pages and PDFs in the built-in browser (WebKit on macOS),
+      with tabs, bookmarks, and local history. Save to Gewu lets you review the paper's
       identity, destination, and file type before importing it.
     </td>
   </tr>
@@ -170,31 +170,24 @@ workspaces open in Browser; on macOS, local PDFs open in Preview.
 
 A paper's **Gewu Key** connects its identifiers, metadata, files, and placements
 across the workspace. Adding that paper to another folder or Space reuses the
-shared record. A paper can begin as a metadata-only record and acquire files
-later under the same Key. An ordinary standalone non-PDF file can also be stored
-in the Library, without being assigned a public Gewu Key.
+shared record. Start with metadata and add files later under the same Key.
 
 **Paper Files** keeps the Published version, accepted manuscript, preprints,
 supplements, annotated copies, and other attachments associated with that paper.
-You can inspect classifications and choose which file is **Default**. An explicit
-Default is retained when other versions arrive; supplements do not automatically
-replace the main article simply because they are PDFs.
+Choose which file is **Default**; your choice is retained when other versions
+arrive. Use **Quick Look** to preview PDFs and Markdown, or open local PDFs in
+**Preview** on macOS.
 
-Supported corrections, retractions, and other publication notices stay linked
-to the original article, with their own notice metadata and any saved files.
-They do not create a separate research-paper identity or become the automatic
-Default. A corrected full article is a separate publication version. **Refresh
-Info** checks explicit Crossref update relations for papers with a DOI; it does
-not automatically download notice PDFs. Coverage depends on the supplied
-relations, and saved papers are not periodically checked merely because they
-are in the Library. See [publication updates](paper_monitor/user_guide.html#paper-publication-updates).
+Supported corrections and retractions stay linked to the original paper.
+**Refresh Info** checks explicit Crossref update relations; coverage depends on
+the source, and saved papers are not continuously monitored for notices.
+See [publication updates](paper_monitor/user_guide.html#paper-publication-updates).
 
-Use in-app **Quick Look** to preview PDFs and Markdown notes, or open a local PDF
-in **Preview** on macOS. Managed documents remain real files: the Default occupies the
-main managed location, and other Paper Files belong in **Associated Files**.
-On macOS, additional placements can use Finder aliases to the same originals. Move,
-rename, and reassign managed files through the App so records and disk paths
-stay coordinated. See [managed file layout](docs/MANAGED_FILE_LAYOUT.md).
+Managed documents remain real files. Move and rename them through the App so
+records and disk paths stay coordinated. See
+[Paper Files](paper_monitor/user_guide.html#paper-files) and
+[managed file layout](docs/MANAGED_FILE_LAYOUT.md) for classifications, storage
+and file operations.
 
 ## Work with an AI client
 
@@ -203,11 +196,11 @@ MCP adapter so an AI client can work with explicitly authorized collections.
 Enabling access does not itself call a model, upload a library, or start an
 analysis job.
 
-Use the generated connection configuration with a client that supports local
-stdio MCP. **Codex** and **DeepSeek Harness** are working examples documented in
-the setup guide; other compatible clients, including **Claude Code**, can use
-the same connection method and permission model. Model inference runs through
-the external client.
+In **Setting** (macOS) or **Settings** (Windows) **→ AI Access**, create a named
+connection and choose its collection, expiry and permissions. Use the generated
+configuration with a client supporting local stdio MCP. The setup guide covers
+**Codex** and **DeepSeek Harness**; compatible clients such as **Claude Code**
+can use the same interface.
 
 A typical workflow is: select a paper → read its authorized source files and
 earlier analyses → save a new Markdown analysis → review it in Paper Files.
@@ -215,33 +208,16 @@ A later authorized session can retrieve the same record and continue from
 the retained sources and notes. Saving is an explicit client action; there is
 no automatic synchronization of AI conversations.
 
-Analyses can retain source-file references and check whether the source has
-changed before saving. See [analysis provenance](docs/AI_ACCESS.md) for file-link
-requirements and limits. Researchers assess the interpretation.
-
-In **Setting** (macOS) or **Settings** (Windows) **→ AI Access**, create a named
-connection, choose its collection and expiry, and grant the operations it needs:
-
-- **Read:** metadata, directory browsing, and file contents have defined access
-  boundaries; file reading and directory browsing are separately enabled.
-- **Save analyses:** append Markdown notes with source references without
-  overwriting existing Paper Files or earlier analyses.
-- **Organize and import:** separately allow Space/folder creation, prepared
-  paper or standalone-file imports, Paper Files attachment, moves, or renames
-  within selected Library and Space roots. My Publications write access is
-  not exposed.
-
-Paper imports require metadata supplied by the AI client and reuse matching
-DOI/arXiv identities. **A PDF is optional:** import the prepared metadata first,
-then attach a file under the same Gewu Key when it becomes available. Imports
-do **not** automatically download a PDF or run Resolve; resolving an existing
-paper is a separate permission and call. Connections can expire or be revoked,
-and existing connections do not gain new write permissions on upgrade.
+Reading, saving analyses, and organizing/importing have separate permissions.
+Analysis saves append notes with source references without overwriting existing
+Paper Files. You can revoke connections, and upgrades do not expand existing
+grants. The [AI Access guide](docs/AI_ACCESS.md) explains setup, metadata-only
+imports, file attachment, Resolve, provenance and the limits of each operation.
 
 Your AI client may send authorized content to its chosen model provider. These
 grants govern API/MCP access; they do not restrict a program's independent
 operating-system access to local files. Review generated analyses against their
-sources. See [AI Access setup, tools, and permissions](docs/AI_ACCESS.md).
+sources.
 
 ## Local data and online services
 

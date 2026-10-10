@@ -6,13 +6,11 @@ Updated: October 10, 2026. Keep this file under 100 lines and focused on current
 
 - Work directly on `main`; commit/push only when explicitly requested. Follow `docs/COMMIT_GUIDELINES.md`; never rewrite history or publish benchmark work.
 - GitHub must remain private. Current releases: `macos-1.0.0` and `windows-1.0.0-r2`; repository access is required for their GitHub downloads.
-- This cleanup started from clean local `539d00d` and fast-forwarded to remote `13b6e2c` before editing. That remote update changed only README.
 - The manuscript evaluation refers to fixed source snapshot `539d00d`; documentation cleanup does not change that reference or claim new evaluation results.
-- October 10 cleanup: archive eight unused logo concepts and the prior handoff/agent rules locally; simplify README and contributor entry points; synchronize distribution/development/third-party documentation. LICENSE 1.1 and runtime code stay unchanged.
-- Archive: ignored `local-development-archive/repository-cleanup-20261010/`, with verified SHA-256 manifest. Full earlier handoff is also recoverable from Git at `13b6e2c`; archived completion/commit claims are historical, not current instructions.
-- This documentation cleanup does not rebuild installed Apps or replace existing release assets. Updated bundled notices take effect only in a subsequently built and validated package.
-- User authorized publishing this cleanup to GitHub `main`, keeping the repository private. Five existing source-policy tests and 89 relative file/anchor checks passed; archive hashes, unchanged LICENSE and whitespace checks passed. App/bundled-resource tests were not run for this documentation-only change.
-- GitHub topic correction `macros` to `macos` remains outstanding: API write returned 404; the current account has push permission but no admin/maintain permission. Repository visibility was verified private.
+- First October 10 cleanup was published as `d993bb4`: updated installer/contributor guidance and archived unused logo concepts and old handoff history. Archive: ignored `local-development-archive/repository-cleanup-20261010/`.
+- Second October 10 cleanup: shorten the README, move the maintainer contribution checklist into `docs/LICENSING.md`, retain concise guide/dependency evidence, clarify historical release notes, and remove the generated TeX from Git. Earlier audit documents and TeX are hash-verified in ignored `local-development-archive/repository-review-20261010/` and recoverable from `d993bb4`.
+- User explicitly authorized publishing this second cleanup to GitHub `main`. LICENSE 1.1, runtime code, PDF/HTML manual, installed Apps and existing release assets remain unchanged. Validation: 42 source/guide/PDF checks, 143 relative links, archive hashes, Python compilation and whitespace checks passed. Two App-bundle comparison tests were excluded; no PDF or App rebuild was performed.
+- User will have a collaborator correct the GitHub topic `macros` to `macos`; do not change it in this cleanup. Material-permission investigation is outside this task. Keep existing notices without implying new clearance.
 
 ## Source and data separation
 
@@ -38,7 +36,7 @@ Updated: October 10, 2026. Keep this file under 100 lines and focused on current
 ## Documentation and validation
 
 - README introduces both platforms; macOS screenshots do not establish Windows feature parity. The Windows branch owns its native implementation and packaging instructions.
-- `paper_monitor/user_guide.html` is the source for generated TeX/PDF. Keep Product Identity 4-1 through 4-4 continuous in the builder. Follow `docs/USER_GUIDE_SCREENSHOTS.md` for real-App captures.
+- `paper_monitor/user_guide.html` is the source for generated TeX/PDF. The builder recreates the ignored `paper_monitor/user_guide.tex` before compilation; the previous TeX is not required. Tests inspect the shipped PDF and builder rules. Keep Product Identity 4-1 through 4-4 continuous in the builder. Follow `docs/USER_GUIDE_SCREENSHOTS.md` for real-App captures.
 - Current license: custom Academic and Non-Commercial Research License 1.1. Research sharing includes modified versions/patches; commercial use needs separate written authorization.
 - Unresolved: font/branding artwork permission evidence and a finalized external-contributor commercial grant/signature process. Do not infer clearance from notices or a submitted PR.
 - The September dependency audit is historical. Standalone distributions bundle runtimes; check each actual release manifest and shipped licenses before making package-wide claims.

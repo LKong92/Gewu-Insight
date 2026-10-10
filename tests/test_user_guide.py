@@ -795,39 +795,50 @@ class UserGuideTests(unittest.TestCase):
         self.assertIn('copy_item "paper_monitor"', release_script)
         self.assertIn('copy_item "assets"', release_script)
 
-    def test_latex_manual_contains_the_complete_fixed_layout_guide(self) -> None:
-        tex_path = ROOT / "paper_monitor" / "user_guide.tex"
+    def test_pdf_manual_contains_the_complete_fixed_layout_guide(self) -> None:
+        # TeX is regenerated from HTML and is no longer a repository input.
+        # Inspect the shipped PDF; builder layout rules have separate tests.
         pdf_path = ui_server.USER_GUIDE_PDF_PATH
-        self.assertTrue(tex_path.is_file())
         self.assertTrue(pdf_path.is_file())
-        source = tex_path.read_text(encoding="utf-8")
-        self.assertIn("\\documentclass", source)
-        self.assertIn("\\part{Orientation}", source)
-        self.assertIn("\\chapter{Welcome}", source)
-        self.assertIn("\\chapter{Guided Tour}", source)
-        self.assertIn("\\chapter{Your First Session}", source)
-        self.assertIn("\\part{Product Concepts and Architecture}", source)
-        self.assertIn("\\chapter{System Architecture at a Glance}", source)
-        self.assertIn("\\chapter{The Persistent Paper Object}", source)
-        self.assertIn("\\part{User Manual}", source)
-        self.assertIn("\\chapter{Workspace Navigation}", source)
-        self.assertIn("\\chapter{Papers and Files}", source)
-        self.assertIn("\\chapter{My Publications}", source)
-        self.assertIn("\\chapter{Journal Monitor}", source)
-        self.assertIn("\\chapter{Subject Monitor}", source)
-        self.assertIn("\\chapter{Author Monitor}", source)
-        self.assertIn("\\part{Product Identity}", source)
-        for title in ("Visual Identity and Cultural Elements", "The calligraphic name",
-                      "The app icon and the seal-script watermark",
-                      "Why the three marks are used differently"):
-            self.assertIn("\\GewuIdentityChapter{" + title + "}", source)
-            self.assertNotIn("\\chapter{" + title + "}", source)
-        self.assertIn("\\part{Technical and Operational Reference}", source)
-        self.assertIn("\\chapter{Keyboard Shortcuts}", source)
-        self.assertIn("\\chapter{Storage Reference}", source)
         reader = PdfReader(str(pdf_path))
+
+        def destinations(items):
+            for item in items:
+                if isinstance(item, list):
+                    yield from destinations(item)
+                else:
+                    yield item
+
+        outline = list(destinations(reader.outline))
+        titles = [item.title for item in outline]
+        expected = [
+            "Orientation", "Welcome", "Guided Tour", "Your First Session",
+            "Product Concepts and Architecture", "System Architecture at a Glance",
+            "The Persistent Paper Object", "User Manual", "Workspace Navigation",
+            "Papers and Files", "My Publications", "Journal Monitor",
+            "Subject Monitor", "Author Monitor", "Product Identity",
+            "Visual Identity and Cultural Elements", "The calligraphic name",
+            "The app icon and the seal-script watermark",
+            "Why the three marks are used differently",
+            "Technical and Operational Reference", "Keyboard Shortcuts",
+            "Storage Reference",
+        ]
+        positions = []
+        for title in expected:
+            self.assertIn(title, titles)
+            index = titles.index(title)
+            positions.append(index)
+            page = reader.get_destination_page_number(outline[index])
+            self.assertIsNotNone(page)
+            self.assertGreaterEqual(page, 0)
+            self.assertLess(page, len(reader.pages))
+        self.assertEqual(positions, sorted(positions))
+        identity_pages = [reader.get_destination_page_number(outline[titles.index(title)])
+                          for title in expected[15:19]]
+        self.assertEqual(identity_pages[2], identity_pages[3])
         self.assertGreater(len(reader.pages), 30)
-        sample = " ".join((reader.pages[index].extract_text() or "") for index in [0, 1, len(reader.pages) - 1])
+        sample = " ".join((reader.pages[index].extract_text() or "")
+                          for index in [0, 1, len(reader.pages) - 1])
         self.assertIn("Gewu Insight", sample)
         self.assertIn("Copyright and product notice", sample)
 

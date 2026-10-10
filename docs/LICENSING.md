@@ -85,3 +85,29 @@ established by these documents. The intended agreement should preserve contribut
 copyright while expressly addressing commercial use, sublicensing, relicensing
 and any intended transfer to a future project entity. It needs legal review and
 actual agreement; submitting a PR is not treated as signing it.
+
+### Contribution authorization checklist
+
+This is a maintainer checklist for preparing a separate agreement, not a CLA or
+evidence that a contributor has signed one.
+
+Maintainers should document:
+
+- The contribution and the person or organization authorized to license it,
+  including any relevant employer or third-party rights.
+- The exact signed agreement and contributions it covers, with records retained
+  privately rather than committed to the public repository.
+- The permission to use, reproduce, modify and distribute the contribution and
+  derivative works, including commercial use and sublicensing/relicensing under
+  the project's intended research and commercial terms.
+- Whether the grant is perpetual and irrevocable, its conditions, and whether it
+  permits an intended transfer to a future project entity or successor. A future
+  company must not be assumed to acquire rights automatically.
+- Patent permissions where relevant, third-party notices and provenance.
+
+A sign-off, Git author name or PR submission alone is not evidence of the
+additional commercial grant. Keep actual agreements and signatures private.
+[GitHub Terms of Service, D.6](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#6-contributions-under-repository-license)
+describes contributions under a repository's license and the role of a separate
+agreement; the inbound research license does not supply broader commercial
+relicensing rights.

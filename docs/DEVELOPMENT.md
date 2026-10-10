@@ -238,6 +238,14 @@ When the HTML User Guide changes, regenerate the PDF before building the App:
 ./scripts/build_macos_app.sh
 ```
 
+The builder requires Pandoc, XeLaTeX and the fonts named in its preamble.
+`paper_monitor/user_guide.html` and `scripts/build_user_guide_pdf.py` are the
+sources. Each run creates fresh `paper_monitor/user_guide.tex`, then compiles it;
+an existing TeX file is not an input. This machine-specific intermediate is
+ignored by Git and may be deleted after building. Keep the generated PDF in the
+repository for the App and README. Use `--tex-output` and `--pdf-output` to build
+into a temporary directory when checking changes without replacing the manual.
+
 Inspect the affected PDF pages and verify the resulting App signature. Screenshot
 rules and source provenance are recorded in
 [USER_GUIDE_SCREENSHOTS.md](USER_GUIDE_SCREENSHOTS.md).

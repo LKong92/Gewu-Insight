@@ -1,5 +1,10 @@
 # Gewu Insight 1.0.0 · Build 1
 
+This document records the original macOS 1.0.0 baseline. For current installers,
+requirements and platform status, use the
+[macOS release](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0)
+and [Windows release](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2).
+
 This is the macOS baseline for everyday research and writing. The release name
 marks a settled workflow, with a fully reviewed User Guide, rather than a new
 round of feature changes or a guarantee about every external provider.
@@ -25,8 +30,9 @@ Build. No additional version or Git tag is created automatically by this policy.
 
 ## Boundaries
 
-- This edition documents the macOS 14+ universal native launcher. The separate
-  experimental Windows branch retains its own integration and release process.
+- This edition documents the macOS 14+ universal native launcher. Windows has
+  a separate native implementation, installer and User Guide; consult its
+  current release above for platform requirements.
 - Provider access, institutional sign-in and rate limits still apply. A refreshed
   record may be partially complete; the detailed source results remain visible.
 - Search supports text/identifier matching, typo tolerance and word variants.

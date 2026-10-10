@@ -1,164 +1,24 @@
-# User Guide audit — October 6, 2026
+# User Guide coverage and provenance
 
-## October 6: independent database and current Browser workflow
+The current manual is the October 6, 2026 edition for macOS 1.0.0 / Build 1.
+The coverage table records that edition's 49 topics. This page summarizes its
+sources and maintenance requirements; it is not a new App or installer audit.
+Windows has its own bundled User Guide.
 
-Audit the existing 49-topic manual against main `31abeec` and this Mac's installed
-Applications App after the verified database migration. The current edition is
-October 6; the product remains Version 1.0.0 / Build 1. Changes are confined to
-manual content, its screenshot/PDF generation, companion documentation and the
-existing guide checks. The package builder's Read Me text is updated to stop
-calling this the old source-folder manual; its packaging behavior is unchanged.
+## Sources and screenshots
 
-Corrections:
-
-- Replace the old claim that research data belongs inside the source project.
-  Explain the separate App, chosen Gewu Database and optional source checkout.
-- Cover Open Existing Database/Create New Database, choosing the enclosing
-  workspace, unavailable locations, identity/version/process checks, Database
-  Location and Show in Finder. State that this dialog does not move/switch data.
-- Explain Applications and Options > Keep in Dock / Remove from Dock. Removing a
-  Dock shortcut does not remove the database.
-- Rewrite full backup, upgrades, one-time source migration, cross-Mac/path moves
-  and recovery. Retain external-link originals and Mac file attributes; distinguish
-  a pre-schema SQLite snapshot from a full backup. Preserve new writes before
-  rollback, and do not suggest that selecting a moved folder rewrites its paths.
-- Correct machine log/cache/locator paths and the role of reports versus AI
-  analysis files. Keep source-backed and standalone installation requirements
-  explicit without forcing either installation's runtime layout on the other.
-- Keep Codex and DeepSeek Harness as examples of one MCP interface, including
-  Claude Code and other compatible clients. Clarify generated runtime paths,
-  connection retention through migration and read-only reconnection checks.
-- Add the existing Browser-only notice workflow: review the resolved original,
-  attach the notice under that paper, or select and confirm its existing Gewu Key.
-  Normal matching article PDFs can save to their existing paper and placement.
-  Shared MCP/Monitor notice rules are not changed by this documentation.
-- Retain the accurate APS Harvest/background fallback, publisher access limits,
-  PDF-only supplement policy, Refresh Info notices, field-filtered updates and
-  visible-only per-paper unread rules from the previous edition.
-
-Evidence includes `workspace.py`, `database_migration.py`, `config.py`,
-`GewuDatabaseLocation.h`, native Database Location/startup handlers,
-`macos_standalone_entry.py`, `ai_http.py`, and Browser review/save code. The new
-Database Location illustration is captured from the installed original App's
-actual dialog. The opening Guide is recaptured from its actual separate window.
-The other 36 screenshots, including the clean empty Add Monitored Author form,
-are retained. No screenshot is painted, synthesized or cropped to hide controls.
-
-Validation completed for the source, installed App and PDF:
-
-- Reviewed all 49 existing topics; changed 11 text topics while preserving their
-  anchors and navigation. HTML and generated PDF include the same 38 real-App
-  screenshot assets. No new synthetic screenshot replaces a real workflow.
-- Generated 132 pages, 1,009 named destinations, 400 internal links and 13
-  external links. Every internal target resolves. Visually reviewed all pages
-  and 17 affected pages at reading resolution. Found two truncated machine paths
-  in the PDF table; replaced that small table with a full-width list and rechecked
-  page 130. Only page 130's extracted text changed in the final rebuild.
-  Product Identity 4-3 and 4-4 still share page 115.
-- All 31 existing Guide/audit/navigation tests and seven PDF structure checks
-  pass. The old repository-bundle test uses a temporary fixture pointing to the
-  staged Applications App; no App or test data was created inside the checkout.
-  Python compilation and `git diff --check` pass.
-- Native Help search, first-session instructions, the migration link and Dock
-  subsection navigation were checked in the original installed App. The actual
-  Database Location dialog shows the selected desktop research folder.
-- A staged copy preserves the installed App's private source startup adapter.
-  Strict signature verification passes. Only the PDF and signing-related file
-  contents change; unsigned native executable bytes match the installed App.
-  After normal menu Quit, installed that checked bundle at the existing
-  `/Applications/Gewu Insight.app` path and retained the previous App in QA.
-- Relaunch reached Library with one healthy backend/listener (48822), unchanged
-  database UUID and unchanged location preference. The first startup exceeded
-  the native readiness timeout and displayed its existing failure sheet; the
-  same backend subsequently became ready and the sheet dismissed automatically.
-  This transient startup delay is recorded, not attributed to a confirmed cause
-  or claimed repaired. No startup/runtime code was changed for this update.
-- The installed App's Help opens the October 6 edition. Native Print Guide opens
-  its bundled PDF in Preview, showing Page 1 of 132; native page navigation and
-  visual inspection confirm the new Database Location illustration on page 122.
-  Installed/built PDF bytes match, all three private startup adapter files are
-  unchanged and the running App passes strict signature verification.
-- Final PDF SHA-256:
-  `85159deb25515da1aa96b7413cd75e69b40bf0ee61ec6a7534011f9edf812812`.
-  Working evidence is in `/private/tmp/gewu-guide-oct06/`.
-No paper import, classification change, new grant/token, database relocation or
-product business-logic change is part of this guide update.
-
-## Previous October 5 evidence
-
-Rechecked all 49 topics against product commit `befa09909e701dcb00acf8fd93b1587f406e934d`, the preserved October 2 guide revision and current runtime source/feature contracts. Checked the original macOS App and the October 4 Science ePDF, WebCrypto and safe-build changes. The manual edition changes; product version remains 1.0.0 / Build 1. This October 5 pass changes documentation and its illustrations/generated resources only. It retains the previous guide navigation and PDF mapping fixes; it does not alter publisher downloads, metadata schedules, MCP permissions or research data.
-
-## AI Access client examples follow-up
-
-After Browser fix commit `50ed1a3`, update only the AI Access topic and its
-technical companion, `AI_ACCESS.md`. Present one MCP interface for compatible
-local stdio clients, with Codex and DeepSeek Harness as worked examples and
-positive configuration guidance for Claude Code and other compatible clients.
-Add client-assisted setup, the Desktop Cordis patch, separate connections,
-shared read/analysis checks, and an explicitly requested Space/import example.
-Keep existing permissions, file-content boundaries and optional-PDF import rules.
-
-Evidence: the user supplied `gewu-mcp-playbook.md`, recording an October 5
-DeepSeek Harness connection and read/write workflow. Cross-check the setup
-against DeepSeek's official MCP client, Desktop profile and patch-example
-references linked in the guide, and Claude Code's official local stdio reference.
-Do not publish the playbook's private keys, record IDs, local installation paths
-or test data. The guide describes usable workflows rather than test-status labels.
-No client configuration, token, permission grant or literature data was changed
-for this documentation update.
-
-Validation completed for this follow-up:
-
-- All 48 other HTML topics and all screenshot assets remain unchanged. The
-  original App's Help search finds DeepSeek and opens the updated AI Access topic.
-- The HTML and Markdown YAML examples are identical; Ruby's YAML parser verifies
-  the insertion wrapper, stdio configuration, argument list and token placeholder.
-  No new dependency was installed for these checks.
-- HTML-derived TeX/PDF builds successfully: 128 pages, 982 destinations, 391
-  internal links and 13 external links. Every internal destination resolves.
-  Reviewed contents pages 2-6 and affected/repaginated pages 95-128 visually;
-  inspected pages 96 and 104-107 at reading resolution. No clipping, overlap or
-  malformed configuration indentation found. Identity chapters 4-3 and 4-4
-  remain together on page 113.
-- All 31 existing Guide/audit/navigation tests and seven PDF structure checks
-  pass. The original App's bundled PDF equals the generated source PDF.
-- Built and verified a staged universal App; after the user approved restarting,
-  installed through the stopped-App build workflow with a recoverable backup.
-  An initial quit shortcut did not exit; the installer correctly refused to
-  replace the running App. Normal menu Quit then allowed installation. Original
-  App relaunched with one backend/listener (4018), health HTTP 200 and a valid
-  strict signature. Unsigned executable bytes match the previous App; only the
-  PDF and signing-related file contents changed in the bundle.
-- Native Print Guide opens the original App's resource PDF in Preview, showing
-  Page 1 of 128; native page navigation confirms the DeepSeek example on page 105.
-- PDF SHA-256: `72c5c10c4351a9ee1dab7d2758ac9d5c1b0c8cc494bced57c70ead71f71394ca`.
-  Backups, build/test logs and rendered checks: `/private/tmp/gewu-guide-mcp-oct05/`.
-  The user requested committing and pushing this documentation after validation,
-  together with the preceding Browser fix. Unrelated `metadata/` is untouched.
-
-## Earlier October 5 corrections
-
-- Explain Science ePDF original-file capture, Use Loaded PDF, exact-content reuse, the 128 MB limit, stale/incomplete source recovery and fresh-download versus already-loaded access. Distinguish Save Download, Save to Gewu and the research-card Download action.
-- Replace obsolete advice to renew permission for the WebCrypto Master Key. Current Browser/background views decline persistent webpage keys; ordinary cryptography, cookies and local storage remain, while older persisted keys are unreadable. Separate this from Passwords/AutoFill and avoid key deletion or profile reset. Align development/distribution documentation with this behavior.
-- Expand first-launch requirements, complete-folder installation, coherent backup, source-update versus built-App delivery, stopped-App safe ad-hoc build, verification and rollback. No Apple developer certificate or keychain password is needed for this build.
-- Correct the obsolete periodic-refresh claim in `PUBLICATION_UPDATES.md`: saved papers have no active periodic metadata schedule. Manual paper/folder/Library refresh and Journal discovery can find explicit updates; absence of an event does not prove no notice exists.
-
-The following October 2 corrections remain valid after the source audit:
-
-- Document the native background download fallback for APS, ACS, Science and Nature, including the APS Harvest first route, shared Gewu Browser session and unchanged system/VPN routing.
-- Separate main-PDF availability from optional supplements. Skip non-PDF material; report access/verification errors without suggesting that videos must become PDFs.
-- Explain how Refresh Info finds explicit Crossref notices, how Journal Monitor associates a discovered notice with its original, and why notice metadata need not have a local file. Do not claim continuous retraction monitoring or complete provider coverage.
-- Explain per-paper read acknowledgement, visible-only journal/subject dots, hidden unread state, Sunday-first calendars, and filtered Publication updates in the left sidebar.
-- Add locally rendered Markdown math, preserved filename extensions and updated troubleshooting. Retain verified metadata-only MCP imports, notice ownership, Default selection and app refresh after external writes.
-- Correct the distinction between left Journal Filter totals and filtered top-tab counts, verified in the original App (Nature: 25 total / 6 shown).
-
-- Repair in-guide subsection links: activate their owning topic, keep the correct navigation highlight, clear a hiding search filter and scroll to the requested heading below the sticky toolbar. Cold links and Back/Forward use the same behavior.
-
-## Evidence and boundaries
-
-Read `paper_monitor/user_guide.html`, current `ui_server.py`, `notice_discovery.py`, `metadata_refresh.py`, `markdown_preview_worker.js`, publisher download modules and native App code as needed. Cross-check `MONITOR_DOWNLOADS.md`, `MONITOR_READ_STATE.md`, `METADATA_REFRESH.md`, `AI_ACCESS.md`, identity/storage and browser contracts. The October 2 audit visually reviewed all 36 earlier images. This pass retains 36 accurate illustrations and replaces only the Guide opening with the real October 5 edition. The user explicitly requested retaining the original clean Add Monitored Author form, without the currently active red Scholar cooldown message; no replacement or image retouching is used. Screenshots are real original-App captures with all six main tabs, no generated UI or painted-out controls. See [the screenshot inventory](USER_GUIDE_SCREENSHOTS.md).
-
-The Codex STDIO command/args/env example was checked against [OpenAI's official MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=app) on October 5. No client configuration, access grant or token was changed. No explicit provider refresh, import, download, file classification or literature repair was triggered for this documentation work; existing results and ordinary navigation supply illustrations. Browser website content is illustrative, not evidence that every subscription article is accessible off campus.
+- Editable source: `paper_monitor/user_guide.html`; PDF builder:
+  `scripts/build_user_guide_pdf.py`.
+- The manual uses 38 original-App screenshots. The Guide window and Database
+  Location images were updated for the October 6 edition. See
+  [the screenshot inventory and capture rules](USER_GUIDE_SCREENSHOTS.md).
+- Preserve all six tabs, the clean empty Add Monitored Author form without
+  cooldown text, Hong Ding in Author Monitor, Nature with figures in Journal
+  Monitor, and classified multiple Paper Files in Library. Do not synthesize,
+  overlay or retouch controls to create those states.
+- Check descriptions against the relevant identity/storage, Browser, Monitor,
+  metadata and AI Access modules and their companion documentation. Publisher
+  content in a screenshot does not establish access for every user.
 
 ## Topic-by-topic coverage
 
@@ -216,18 +76,22 @@ Each existing topic and anchor appears exactly once below. Accurate material is 
 | [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Add wrong/empty collection diagnosis and explicit database startup failures; correct App entry, log and HTML/PDF edition mismatch advice. |
 | [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Define relative paths under Gewu Database; add config/backups, locator/App/log/default cache paths and distinguish saved AI analyses from legacy reports. |
 
-## Reproducibility and validation
+## Rebuilding and checking the manual
 
-The HTML is the editable source. Build the TeX and fixed-layout PDF with `scripts/build_user_guide_pdf.py`; package that same PDF into the original App. Do not hand-edit generated TeX or create a separate manual text source. Preserve existing topic order, numbering, approved Product Identity wording and its continuous chapter flow. Keep the AI Access opening heading, lead, overview image and caption together.
+The builder reads the HTML, generates fresh TeX and compiles the PDF with
+Pandoc and XeLaTeX. The generated `paper_monitor/user_guide.tex` is an ignored
+intermediate, not a required repository input. Do not edit it as a second source.
+See [the development guide](DEVELOPMENT.md#builds-and-verification)
+for build and verification instructions.
 
-Earlier October 5 validation, before the AI Access follow-up above. The previous
-October 2 work remains included; the checks below describe that 127-page edition.
+Preserve topic order, numbering, links and approved Product Identity wording.
+Chapters 4-1 through 4-4 must flow continuously; that rule belongs in the builder.
+Keep the AI Access opening heading, lead, overview image and caption together.
+After manual changes, inspect affected PDF pages and check links, destinations,
+screenshot fit and the PDF included in the resulting App.
 
-- Built HTML-derived TeX/PDF successfully: 127 pages, 975 valid destinations, 391 internal links and nine external link annotations. Every internal target resolves; HTML has 49 topics, no duplicate IDs and no broken nonempty fragment links.
-- Visually reviewed all 127 pages in contact sheets and 15 pages at reading resolution: 14, 61, 62, 74, 81, 82, 85, 86, 95, 104, 108, 112, 118, 124 and 125. No clipping, overlap or missing text found in this review. Product Identity 4-3 and 4-4 still share page 112; the AI Access heading, lead, overview and caption remain together on page 95.
-- All 31 existing Guide/audit/navigation unittest checks passed (30 before installation and the bundle/source equality check afterward); seven PDF builder structure checks passed. Navigation checks execute the shipped JavaScript against all real topics and links. Python compilation and whitespace checks passed. No runtime benchmark was changed or run.
-- Original clean Add Monitored Author PNG is byte-identical to the pre-edit backup, as explicitly requested. PDF page 74 confirms the ordinary empty form without a red Scholar message. Only the Guide opening was recaptured in this pass, from the original App in native fullscreen without an overlay.
-- Built and strictly verified a staged universal App, then installed through the stopped-App build workflow after the user explicitly approved restarting. Initial installed-build preflight could not read process state in the sandbox; the authorized rerun completed. The regenerated iconset was rejected in the isolated stage, so the builder retained the existing icon; the installed build completed with its normal deprecated WebKit enum warning. No source workaround or certificate change was made.
-- Original App reopened as PID 31583 with one local listener (31585). Help > User Guide displays October 5; native search for Science ePDF finds Browser and Troubleshooting, and the new repeated-keychain subsection link opens the expected section. Print Guide opens the exact bundled PDF in macOS Preview, visibly showing Page 1 of 127 and its original-App resource path. The PDF source and bundle match. Strict signature verification passes after launch; unsigned executable payloads match the pre-edit App.
-- PDF SHA-256: `9a8fc570261d380d7f9f0771187307fee055c3031968d68c17389fa1eb179f75`. Reversible pre-edit App/guide backups, build/test logs, rendered pages and package checks: `/private/tmp/gewu-guide-oct05-zb6szif9/`.
-- No direct literature edits, imports, provider refreshes, classification changes or data migration were performed for the manual; normal App startup/background operation is separate from this documentation check. No commit, push, branch or PR; unrelated `metadata/` remains untouched.
+Existing guide, audit, navigation and PDF-structure tests cover these contracts.
+Run the checks relevant to the change and report actual results; source tests
+do not establish that a rebuilt or installed App was validated. Detailed past
+installation logs and superseded validation runs are retained in Git history
+and a local development archive, rather than treated as current product state.

@@ -20,3 +20,6 @@ scripts/bench_local.py
 # Local marker after moving formal data out of a development checkout.
 .gewu-development-only
 local-development-archive/
+
+# Recreated from user_guide.html before every PDF build.
+/paper_monitor/user_guide.tex
