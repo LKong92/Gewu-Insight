@@ -1,11 +1,45 @@
 # Released installer components and notices
 
-Checked October 10, 2026 against the actual assets in this private repository.
-This is a static package inventory and notice comparison, not a declaration that
-all redistribution rights are cleared. No installer was executed, rebuilt or
-replaced during this review. LICENSE 1.1 remains unchanged.
+## Current release metadata — October 10, 2026
 
-## Packages examined
+GitHub release metadata and the attached build JSONs were read again for this
+repository cleanup. Their recorded sizes and hashes agree. The current installers
+were not downloaded, extracted, rebuilt or executed in this follow-up, so the
+earlier package inspection below must not be treated as inspection of these bytes.
+
+| Platform and release | Installer bytes | Source in current build JSON | Current tag source |
+| --- | ---: | --- | --- |
+| [macOS 1.0.0](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) | 116,729,930 | `eb8714d` | `539d00d` |
+| [Windows 1.0.0](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) | 86,255,214 | `725ae8f` | `725ae8f` |
+
+```text
+macOS:   5085329390e5ce7e507b4ff554163b5c5e0c8a420b42ad4287b03d2939a08d4d
+Windows: b9056eab0ec6a0af40ae7608a24437d82cfd3508ecb300c8d43047286cf3445e
+```
+
+The Windows build record describes the corrected 94-page guide, with SHA-256
+`458cd0560a03dcd41ba5e4144f94c79090c1a9840db98b34d7a6389fa7a1eb18`,
+and 2,165 payload files. Both build records point to source revisions containing
+the updated seal. The Windows tag and release metadata were subsequently aligned
+to `725ae8f` by a separate authorized operation, with installer bytes unchanged;
+the current remote ref and updated build JSON were rechecked here. The macOS
+tag retains `539d00d` while its current build records source `eb8714d`; use the
+build record for that package's source rather than the automatic tag archive.
+The old Windows r2 release is not a current download entry in the queried list.
+This cleanup itself changes no release or tag.
+
+Windows source packaging now includes CONTRIBUTING.md and the linked licensing
+and audit pages in future builds. That change has not been installed or published.
+The notice contents of the current installers still require a fresh package
+inspection; repository edits alone do not establish their contents.
+
+## Historical package inspection — earlier October 10 assets
+
+The rest of this page preserves the earlier static inspection of the exact
+hashes below. It is not a declaration that all redistribution rights are cleared.
+LICENSE 1.1 remains unchanged.
+
+### Packages examined in the historical inspection
 
 | Release | Asset | Bytes | Source revision |
 | --- | --- | ---: | --- |
@@ -85,7 +119,7 @@ OpenJPEG and other dependency notices must be retained together. Pillow's
 pywin32's licenses include Pythonwin, Scintilla, IDLE, COM/MAPI and adodbapi.
 Their top-level Python license labels alone do not describe the whole wheel.
 
-## Differences from current repository documentation
+## Discrepancies found in the historical packages
 
 | Finding | Actual package state | Required follow-up |
 | --- | --- | --- |
@@ -104,7 +138,7 @@ agreement and signature process also remains unfinished. See the
 [asset audit](DEPENDENCY_LICENSE_AUDIT.md) and [contribution policy](../CONTRIBUTING.md).
 No evidence was removed and no authorization was inferred during this review.
 
-## Verification performed
+## Historical verification performed
 
 - Downloaded the actual GitHub assets and checked both complete installer hashes
   against their published `.sha256` files and build JSONs.
@@ -124,13 +158,13 @@ No evidence was removed and no authorization was inferred during this review.
   upstream archive afresh, or assert complete legal clearance. Existing release
   validation JSONs describe earlier testing, not new testing performed here.
 
-## Proposed package correction — not executed
+## Remaining package verification and release work
 
 1. Prepare separately versioned packaging revisions from reviewed platform source
    and the corrected documentation. Preserve LICENSE 1.1 and existing runtime
    behavior; include current CONTRIBUTING.md, THIRD_PARTY_NOTICES.md and an
-   accessible component inventory. The Windows maintainer must make its packaging
-   change in the Windows development workflow; this audit changes no Windows code.
+   accessible component inventory. The Windows source now carries that notice-copy
+   change; it still needs a new package and Windows validation before publication.
 2. Record exact component versions, input URLs/hashes and the new package hashes.
    Check nested licenses against the actual payload, including Python runtime,
    .NET/WebView2, PDFium/Pillow and pywin32 notices. Obtain or explicitly resolve

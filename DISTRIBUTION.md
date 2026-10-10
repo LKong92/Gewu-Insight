@@ -14,7 +14,7 @@ or package delivery. Do not change visibility as part of a build or update.
 | Platform | Requirements | Package and instructions |
 | --- | --- | --- |
 | macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) |
-| Windows | Windows 10 version 1607+ or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Revision 2 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2) |
+| Windows | Windows 10 version 1607+ or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) |
 
 On macOS, open the DMG, drag Gewu Insight.app to Applications, eject the image,
 and open the installed App. On Windows, run Setup and choose the program and

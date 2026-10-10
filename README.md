@@ -60,7 +60,7 @@ if you need access or an installation package.
 | Platform | Requirements | Download |
 | --- | --- | --- |
 | macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) |
-| Windows | Windows 10 version 1607+ (build 14393+) or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Revision 2 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2) |
+| Windows | Windows 10 version 1607+ (build 14393+) or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) |
 
 ### macOS
 
@@ -247,7 +247,7 @@ Configure optional service keys in **Setting** (macOS) or **Settings** (Windows)
   evaluation was performed on macOS.
 - **Windows** — a separately packaged desktop release for Windows 10/11 x64,
   with its own installer and User Guide. See the
-  [Windows release notes](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2)
+  [Windows release notes](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0)
   for requirements and platform details.
 
 The Python, SQLite, and web-interface core is separated from native desktop
@@ -264,7 +264,7 @@ notes and User Guide for installation and native behavior.
 | [Browser: keyboard & bookmarks](docs/BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md) | Navigation, bookmark import/export, and explicit one-way sync. |
 | [Browser: PDFs](docs/BROWSER_PDF_PREVIEW.md) · [Passwords](docs/BROWSER_PASSWORD_AUTOFILL.md) | PDF viewing and the boundaries of system password integration. |
 | [Managed file layout](docs/MANAGED_FILE_LAYOUT.md) | Default files, Associated Files, aliases, and recovery boundaries. |
-| [macOS release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) · [Windows release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0-r2) | Current installers, requirements, checksums, and first-launch notes. |
+| [macOS release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) · [Windows release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) | Current installers, requirements, checksums, and first-launch notes. |
 | [Older source-installation migration](docs/SOURCE_DATA_MIGRATION.md) | Back up and separate research data from a legacy source checkout before updating. |
 | [Development guide](docs/DEVELOPMENT.md) | Manual setup, architecture, CLI commands, builds, updates, and verification. |
 | [Distribution guide](DISTRIBUTION.md) | Package formats, separate database storage, signing, and release checks. |

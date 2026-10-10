@@ -292,8 +292,9 @@ notice, including Windows binary conditions, is in `service/LICENSE.txt`.
 component notices for Pillow, pypdfium2/PDFium and pywin32, not only their wrapper
 license labels. These native components are absent from the macOS dependency set.
 
-See the [released-package inventory](docs/RELEASE_COMPONENT_AUDIT.md) for exact
-versions, locations and known gaps in the current installers, and
+See the [released-package inventory](docs/RELEASE_COMPONENT_AUDIT.md) for current
+release metadata, historical component versions/locations and the scope of
+those separate checks. See
 [distribution guidance](DISTRIBUTION.md) for download links. Updating this file
 in Git does not update notices inside previously published installers.
 
@@ -341,8 +342,8 @@ permissions do not imply permission to distribute or relicense the fonts.
 The current seal-style motif was generated with AI assistance for Gewu Insight.
 Its provenance is recorded in `assets/branding/README.md`. This describes the
 creation process; it is not a legal clearance or a claim of exclusive rights.
-Previously published installers retain the earlier artwork until separately
-revised; see the released-package audit below.
+Current release build records reference the updated motif; historical installers
+may retain earlier artwork. See the dated package audit below.
 
 The About wordmark remains composed from four externally sourced historical-
 calligraphy images, identified in the User Guide. The repository does not include
@@ -357,6 +358,8 @@ having a software license does not grant independent reuse of that content.
 For the released-package inventory, source evidence and unresolved issues, see
 [the package audit](https://github.com/LKong92/Gewu-Insight/blob/main/docs/RELEASE_COMPONENT_AUDIT.md)
 and [the dependency and asset audit](https://github.com/LKong92/Gewu-Insight/blob/main/docs/DEPENDENCY_LICENSE_AUDIT.md).
-GitHub access is required while the repository is private. These documents are
-not included in the current installers. This notice does not claim that every
+GitHub access is required while the repository is private. Windows source
+packaging now includes these documents in future builds; the currently published
+installers have not been re-inspected in this follow-up. This notice does not
+claim that every
 dependency, asset or future distribution has completed rights clearance.
