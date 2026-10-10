@@ -12,7 +12,14 @@
 
 本页的 Python 版本来自 2026-09-24 源码环境审计，JavaScript 记录包含
 9 月 27 日的 KaTeX 补充。它们不是依赖锁定文件，也不是当前双平台安装包
-的完整组件清单。本轮仅整理文档，没有重新解包审计或替换发布资产。
+的完整组件清单。10 月 10 日后续已下载并静态检查实际 macOS DMG 和
+Windows Setup：官方整包哈希、macOS 运行库许可引用及 Windows 包内
+2,162 项文件清单均通过核对。准确版本、随包路径和验证范围见
+[发行包组件审计](RELEASE_COMPONENT_AUDIT.md)。
+
+两个包的 LICENSE 与 1.1 一致，组件许可证存在，但总通知仍有旧的“不捆绑
+Python”说明；Windows 还未包含 CONTRIBUTING.md。审计页列有后续打包方案，
+现有发布资产未被修改。静态清单核对不等于完成全部授权确认。
 
 - macOS：核对 App `Contents/Resources` 中的 `Standalone Build.json`、
   `BUNDLED_RUNTIME_NOTICES.txt`、`Runtime Licenses/<architecture>/` 和

@@ -10,7 +10,7 @@ Updated: October 10, 2026. Keep this file under 100 lines and focused on current
 - First October 10 cleanup was published as `d993bb4`: updated installer/contributor guidance and archived unused logo concepts and old handoff history. Archive: ignored `local-development-archive/repository-cleanup-20261010/`.
 - Second October 10 cleanup: shorten the README, move the maintainer contribution checklist into `docs/LICENSING.md`, retain concise guide/dependency evidence, clarify historical release notes, and remove the generated TeX from Git. Earlier audit documents and TeX are hash-verified in ignored `local-development-archive/repository-review-20261010/` and recoverable from `d993bb4`.
 - User explicitly authorized publishing this second cleanup to GitHub `main`. LICENSE 1.1, runtime code, PDF/HTML manual, installed Apps and existing release assets remain unchanged. Validation: 42 source/guide/PDF checks, 143 relative links, archive hashes, Python compilation and whitespace checks passed. Two App-bundle comparison tests were excluded; no PDF or App rebuild was performed.
-- User will have a collaborator correct the GitHub topic `macros` to `macos`; do not change it in this cleanup. Material-permission investigation is outside this task. Keep existing notices without implying new clearance.
+- October 10 follow-up: an account with admin permission corrected topic `macros` to `macos`, preserving all other topics and private visibility. Reviewed `d993bb4` and fast-forwarded through `a6a586c`, preserving its documentation cleanup. Runtime code, installed Apps and release assets remain unchanged.
 
 ## Source and data separation
 
@@ -39,5 +39,5 @@ Updated: October 10, 2026. Keep this file under 100 lines and focused on current
 - `paper_monitor/user_guide.html` is the source for generated TeX/PDF. The builder recreates the ignored `paper_monitor/user_guide.tex` before compilation; the previous TeX is not required. Tests inspect the shipped PDF and builder rules. Keep Product Identity 4-1 through 4-4 continuous in the builder. Follow `docs/USER_GUIDE_SCREENSHOTS.md` for real-App captures.
 - Current license: custom Academic and Non-Commercial Research License 1.1. Research sharing includes modified versions/patches; commercial use needs separate written authorization.
 - Unresolved: font/branding artwork permission evidence and a finalized external-contributor commercial grant/signature process. Do not infer clearance from notices or a submitted PR.
-- The September dependency audit is historical. Standalone distributions bundle runtimes; check each actual release manifest and shipped licenses before making package-wide claims.
+- Actual release inventory and proposed packaging corrections: `docs/RELEASE_COMPONENT_AUDIT.md`. Both installers retain stale summary notices; Windows lacks CONTRIBUTING.md. Static package checks do not close font/artwork or contributor authorization gaps. The September dependency audit remains historical.
 - Use relevant existing checks and isolated data. Record actual validation; do not treat old test totals, PIDs, temporary paths or installed-state claims as current evidence.

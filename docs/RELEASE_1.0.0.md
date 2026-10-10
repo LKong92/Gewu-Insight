@@ -20,8 +20,9 @@ Browser's reuse of existing locations, manual DOI/arXiv correction, Default file
 placement, fuzzy text search, Markdown Quick Look, and deletion across shared
 locations. Metadata refresh now has one workflow chapter, including cooldowns,
 partial results and Pause/Continue. The first-session chapter includes a practical
-research-to-writing route. The App contains the same printable manual as the
-repository. Save to Gewu also adopts the existing flat settings style, with a
+research-to-writing route. Each installer contains the manual from its build;
+later changes on `main` do not update an already downloaded App or PDF.
+Save to Gewu also adopts the existing flat settings style, with a
 smaller title and compact controls; its review and saving behavior is unchanged.
 
 Version and Build are independent of the icon cache checksum. Future small fixes
@@ -39,8 +40,12 @@ Build. No additional version or Git tag is created automatically by this policy.
   It does not promise translation, synonym expansion or model-based semantic search.
 - This documentation and version change does not rewrite the user's papers,
   identifiers, classification, Default selection, preferences or AI grants.
-- Back up SQLite together with managed files before upgrading. Browser sessions
-  and OS-managed credentials have separate lifecycles documented in the Guide.
+- Before upgrading, stop the App and its service and back up the complete selected
+  Gewu Database, additional managed roots and externally linked originals.
+  Copying the program or SQLite alone is insufficient. Browser sessions and
+  OS-managed credentials have separate lifecycles documented in the Guide.
 
 See the [User Guide PDF](../paper_monitor/Gewu_Insight_User_Guide.pdf) and
-[distribution instructions](../DISTRIBUTION.md).
+[distribution instructions](../DISTRIBUTION.md). Exact bundled components and
+pending notice corrections are recorded in the
+[installer inventory](RELEASE_COMPONENT_AUDIT.md).

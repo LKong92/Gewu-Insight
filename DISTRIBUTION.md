@@ -65,6 +65,13 @@ Outstanding artwork/font permissions are recorded in the
 [dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md). The Gewu license
 does not supply those permissions.
 
+The [current installer inventory](docs/RELEASE_COMPONENT_AUDIT.md) records the
+components and notices actually found in both published packages. Their top-level
+third-party notices predate the standalone documentation update; Windows also
+lacks CONTRIBUTING.md. Repository edits do not repair those downloaded packages.
+The inventory lists the corrections and validation required for a new package;
+existing release assets remain unchanged.
+
 ## Build paths
 
 - **Standalone macOS DMG:** use `scripts/package_macos_dmg.py` with a selected

@@ -11,10 +11,16 @@ rights are separate questions.
 
 ## Manual setup
 
+The commands below describe macOS source development on `main`. Use Python 3.12
+to match the standalone macOS runtime. Native builds also need Apple's command-line
+development tools. For Windows, use the separate
+[Windows source-desktop guide](https://github.com/LKong92/Gewu-Insight/blob/Windows/docs/WINDOWS_SOURCE_DESKTOP.md)
+and that branch's build instructions.
+
 Run these commands from the complete repository folder:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 python3 -m paper_monitor.workspace create "$PWD/tmp/development-database"
@@ -158,7 +164,7 @@ python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD
 python3 -m paper_monitor download PAPER_ID
 
 # Export diagnostic JSON without replacing SQLite
-python3 -m paper_monitor export-json reports/export.json
+python3 -m paper_monitor export-json "$GEWU_WORKSPACE_ROOT/reports/export.json"
 ```
 
 These commands operate on the explicitly selected development workspace.

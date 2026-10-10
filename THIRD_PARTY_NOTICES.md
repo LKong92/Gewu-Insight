@@ -1,6 +1,7 @@
 # Third-party notices for Gewu Insight
 
-Reviewed September 24, 2026. Gewu's custom research license applies only to its
+Source notices reviewed September 24, 2026; released-package inventory checked
+October 10, 2026. Gewu's custom research license applies only to its
 own covered materials. It does not restrict the independent licenses below.
 Keep this file and the component-specific notices when redistributing Gewu.
 
@@ -283,11 +284,20 @@ license texts; `dependencies/` contains Python package source, metadata and
 licenses. `Standalone Build.json` and `BUNDLED_RUNTIME_NOTICES.txt` describe that
 build. A CPython license alone does not cover every library bundled with it.
 
-The Windows release also bundles .NET and reuses or installs Microsoft WebView2.
-Their terms, Python runtime notices, package licenses and any bundled native
-components must be reviewed against that Windows build. Follow its included
-notices and build manifest; the macOS inventory is not a Windows license audit.
-See [distribution guidance](DISTRIBUTION.md) for the platform release links.
+The Windows release bundles CPython 3.13.15, .NET 10.0.11 and the WebView2 SDK
+1.0.4191.47; Setup reuses or installs the separate WebView2 Runtime. Its Python
+notice, including Windows binary conditions, is in `service/LICENSE.txt`.
+.NET and WebView2 SDK notices are in `licenses/`; Python package notices are in
+`service/Lib/site-packages/*dist-info/licenses/`. Preserve the full embedded
+component notices for Pillow, pypdfium2/PDFium and pywin32, not only their wrapper
+license labels. These native components are absent from the macOS dependency set.
+
+See the [released-package inventory](docs/RELEASE_COMPONENT_AUDIT.md) for exact
+versions, locations and known gaps in the current installers, and
+[distribution guidance](DISTRIBUTION.md) for download links. Updating this file
+in Git does not update notices inside previously published installers.
+
+### Historical source-environment versions (September 24)
 
 | Component | Audited version | License | Upstream information |
 |---|---|---|---|
@@ -339,6 +349,9 @@ Paper figures, journal marks, author portraits and other third-party content
 visible in screenshots remain with their respective owners. Viewing content or
 having a software license does not grant independent reuse of that content.
 
-For the full inventory, source evidence and unresolved issues, see
-`docs/DEPENDENCY_LICENSE_AUDIT.md` in the complete distribution. This notice is
-not a claim that every future dependency version or distribution is cleared.
+For the released-package inventory, source evidence and unresolved issues, see
+[the package audit](https://github.com/LKong92/Gewu-Insight/blob/main/docs/RELEASE_COMPONENT_AUDIT.md)
+and [the dependency and asset audit](https://github.com/LKong92/Gewu-Insight/blob/main/docs/DEPENDENCY_LICENSE_AUDIT.md).
+GitHub access is required while the repository is private. These documents are
+not included in the current installers. This notice does not claim that every
+dependency, asset or future distribution has completed rights clearance.
