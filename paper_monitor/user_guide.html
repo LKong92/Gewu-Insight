@@ -430,12 +430,14 @@
       background: #fff;
     }
     .identity-symbol .app-icon-art { width: 158px; height: 158px; object-fit: contain; }
+    .identity-symbol.seal-symbol { border: 0; background: transparent; }
+    .seal-symbol .symbol-stage { background: transparent; }
     .identity-symbol .seal-art {
       width: 172px;
       height: 172px;
       object-fit: contain;
       filter: brightness(0) saturate(100%);
-      opacity: .17;
+      opacity: 1;
     }
     .identity-symbol h3 { margin-top: 18px; }
     .identity-rules {
@@ -2950,7 +2952,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Literature Data Source</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="visual-identity" data-group="About Gewu Insight" data-title="Visual Identity and Cultural Elements" data-keywords="visual identity cultural elements name meaning physics experimental phenomena physical pictures intuition imagination research mission brand symbols logo icon calligraphy 书法 祝枝山 集字 seal script 篆书 watermark 格物洞见 見 汉仪">
+        <article class="help-topic guide-topic" id="visual-identity" data-group="About Gewu Insight" data-title="Visual Identity and Cultural Elements" data-keywords="visual identity cultural elements name meaning physics experimental phenomena physical pictures intuition imagination research mission brand symbols logo icon calligraphy 书法 祝枝山 集字 seal script 篆书 watermark 格物洞见 見 AI generated">
           <p class="topic-kicker">About Gewu Insight</p>
           <h1>Visual Identity and Cultural Elements</h1>
           <p class="lead">The name <em>Gewu Insight</em> (格物洞见) expresses a way of doing research shaped by the practice of physics: begin with the real world, and seek to see what lies behind its phenomena.</p>
@@ -2980,20 +2982,22 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
             <figcaption>The transparent production artwork used in the About panel. From left to right the picture contains 見、洞、物、格; read in the traditional direction from right to left, it says 格物洞見.</figcaption>
           </figure>
 
-          <p>This is a <strong>祝枝山行草集字</strong> composition: four separately documented historical character forms were assembled into one wordmark. It is therefore accurate to call it “a collection of characters in the calligraphic style of Zhu Zhishan,” but not “a title written by Zhu Zhishan.” No surviving single inscription titled <span lang="zh-Hant">格物洞見</span> is being claimed.</p>
+          <p>This is a <strong>祝枝山行草集字</strong> composition, assembled from separately acquired character images attributed to the Ming-dynasty calligrapher <strong>Zhu Yunming (祝允明, 号枝山)</strong>. It is a modern collection and arrangement of character forms, not “a title written by Zhu Zhishan.” No surviving single inscription titled <span lang="zh-Hant">格物洞見</span> is being claimed.</p>
 
-          <h3>How the four characters were assembled</h3>
+          <h3>Historical sources of the four characters</h3>
           <table class="plain-table glyph-provenance">
-            <tr><th>Reading order</th><th>Reference character</th><th>Recorded hand and script</th><th>Role in the product artwork</th></tr>
-            <tr><td>1</td><td><a href="https://www.shufa5.com/images/shufa/zi/5/35045.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 格">格</a></td><td>祝枝山 · 行书</td><td>Begins the product name when read from the right.</td></tr>
-            <tr><td>2</td><td><a href="https://www.shufa5.com/images/shufa/zi/6/165906.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 物">物</a></td><td>祝枝山 · 草书</td><td>Completes the classical term 格物.</td></tr>
-            <tr><td>3</td><td><a href="https://www.shufa5.com/images/shufa/zi/2/162202.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 洞">洞</a></td><td>祝枝山 · 草书</td><td>Introduces 洞見, insight gained by seeing through a subject.</td></tr>
-            <tr><td>4</td><td><a href="https://www.shufa5.com/images/shufa/zi/2/179662.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 見">見</a></td><td>祝枝山 · 草书</td><td>Closes the traditional form of the name.</td></tr>
+            <tr><th>Reading order</th><th>Character</th><th>Attributed hand and script</th><th>Original work</th></tr>
+            <tr><td>1</td><td>格</td><td>祝允明 · 行书</td><td>Original work not yet identified.</td></tr>
+            <tr><td>2</td><td>物</td><td>祝允明 · 草书</td><td>Original work not yet identified.</td></tr>
+            <tr><td>3</td><td>洞</td><td>祝允明 · 草书</td><td><a href="https://www.shanghaimuseum.net/mu/frontend/pg/article/id/CI00000383" target="_blank" rel="noopener noreferrer">草书前后赤壁赋卷</a>, Shanghai Museum.</td></tr>
+            <tr><td>4</td><td>見</td><td>祝允明 · 草书</td><td>Original work not yet identified.</td></tr>
           </table>
+
+          <p>The selected <strong>洞</strong> character matches the form in <span lang="zh-Hant">客有吹洞簫者</span> in the first <em>Red Cliff Rhapsody</em> of Zhu Yunming's <span lang="zh-Hant">草书前后赤壁赋卷</span>, held by the Shanghai Museum. This identification follows comparison with the complete scroll, rather than the mere occurrence of the same character in a text. The original works for <strong>格、物、見</strong> remain to be established.</p>
 
           <p>The selected glyphs were optically balanced into a common line: scale, spacing, ink tone, edge cleanup, and transparent alpha were normalized while the characteristic strokes were retained. The production preparation used a Codex-assisted image workflow. The interface and accessibility text use the contemporary simplified product name <strong>格物洞见</strong>; the artwork deliberately preserves the traditional character <strong>見</strong> and traditional right-to-left composition.</p>
 
-          <div class="note"><span class="callout-title">Provenance and reuse</span>The character links above are retained as provenance for the design process. The source thumbnails do not state a clear open-reuse licence. They should not be treated as public-domain assets merely because they are viewable online. Gewu retains rights only in its own original contributions to the assembled artwork; its software License does not grant rights in the underlying third-party glyph images. Their redistribution and commercial-use permissions remain to be confirmed.</div>
+          <div class="note"><span class="callout-title">Provenance and reuse</span>Historical authorship and the modern arrangement are distinct. The museum reference identifies an underlying work; it does not claim that the production image was extracted directly from the museum's photograph. The remaining original-work identifications are still open. Gewu's software License grants only rights held by the project, not independent rights in external reproductions.</div>
 
           <h2>The app icon and the seal-script watermark</h2>
           <div class="identity-symbols">
@@ -3003,11 +3007,11 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
               <p>The icon's two blue-violet fields read simultaneously as an open book and two sides of a field of view. The white eye and central point suggest observation and focus; the tapered center also recalls a pen nib or the spine of a book.</p>
               <figcaption>This description is the product's visual reading of the finished mark, not a claim that every interpretation was specified in an original design brief.</figcaption>
             </figure>
-            <figure class="identity-symbol">
-              <div class="symbol-stage"><img class="seal-art" src="/api/startup-brand-art" alt="Seal-script arrangement of 格物洞见"></div>
+            <figure class="identity-symbol seal-symbol">
+              <div class="symbol-stage"><img class="seal-art" src="/api/startup-brand-art?v=ac0025861a5d" alt="Seal-style arrangement of 格物洞見"></div>
               <h3>The seal-script watermark</h3>
-              <p>The 2×2 motif is a digital rendering in <a href="https://www.hanyi.com.cn/productdetail?id=450&amp;type=0" target="_blank" rel="noopener noreferrer">汉仪篆书繁</a>. Read down the right column and then down the left, its four characters are 格、物、洞、见. It uses simplified 见 because that is the supported glyph in the selected digital typeface.</p>
-              <figcaption>The mark is a light-line screen motif inspired by seal composition, not a photograph or facsimile of a historical carved seal. Typeface licensing remains separate from the product artwork.</figcaption>
+              <p>The seal-style motif was generated with AI assistance for Gewu Insight. Read down the right column and then down the left, its four characters are 格、物、洞、見. The selected letterforms form a modern interpretation of seal-script composition, with the traditional character 見.</p>
+              <figcaption>The motif appears as a faint gray watermark in startup transitions and quiet empty space. It is a contemporary screen graphic rather than a reproduction of a historical carved seal.</figcaption>
             </figure>
           </div>
 

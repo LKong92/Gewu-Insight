@@ -36,7 +36,7 @@ if ($InnoCompiler -and (Test-Path -LiteralPath (Join-Path $installerOutput "Gewu
     throw 'Installer already exists. Choose a fresh InstallerDirectory to preserve the previous package.'
 }
 if ($RebuildGuide) {
-    & $Python scripts/build_windows_preview_guide.py --version $Version
+    & $Python scripts/build_windows_preview_guide.py --version $Version --html-only
     if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide generation failed' }
 }
 & $Python scripts/build_windows_preview_guide.py --version $GuideVersion --check

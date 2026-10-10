@@ -28,7 +28,7 @@ VERSION_SOURCE = ROOT / "paper_monitor" / "__init__.py"
 IMAGE_ROUTES = {
     "/api/about-calligraphy": ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png",
     "/api/app-icon": ROOT / "assets" / "gewu-insight-app-icon.png",
-    "/api/startup-brand-art": ROOT / "assets" / "branding" / "GewuSealGlyphs.png",
+    "/api/startup-brand-art?v=ac0025861a5d": ROOT / "assets" / "branding" / "GewuSealGlyphsGuide.png",
     "/user-guide-assets/library-paper-files.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-paper-files.png",
     "/user-guide-assets/space-workspace.png": ROOT / "assets" / "user-guide" / "screenshots" / "space-workspace.png",
     "/user-guide-assets/library-table.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-table.png",
@@ -464,7 +464,6 @@ def latex_preamble(version: str, build: str) -> str:
 \definecolor{{GewuRule}}{{HTML}}{{D7E1EC}}
 \definecolor{{GewuTableHeader}}{{HTML}}{{E3EEF9}}
 \definecolor{{GewuTableStripe}}{{HTML}}{{F5F8FC}}
-\definecolor{{GewuSealPanel}}{{HTML}}{{526985}}
 
 \hypersetup{{colorlinks=true,linkcolor=GewuBlue,urlcolor=GewuBlue,citecolor=GewuBlue,pdfauthor={{Lingyuan Kong and Zhengran Wu}},pdftitle={{Gewu Insight User Guide}}}}
 \urlstyle{{same}}
@@ -733,6 +732,7 @@ def prepare_latex_body(source: str) -> str:
     image_widths = {
         "GewuAboutCalligraphy.png": "0.84\\linewidth",
         "gewu-insight-app-icon.png": "0.18\\linewidth",
+        "GewuSealGlyphsGuide.png": "0.25\\linewidth",
         **{path.name: "0.96\\linewidth" for route, path in IMAGE_ROUTES.items()
            if route.startswith("/user-guide-assets/")},
         "about-window.png": "0.48\\linewidth",
@@ -752,22 +752,6 @@ def prepare_latex_body(source: str) -> str:
             ),
             source,
         )
-
-    seal_pattern = re.compile(
-        r"\\pandocbounded\{\\includegraphics\[([^\]]*)\]\{([^}]*GewuSealGlyphs\.png)\}\}"
-    )
-    source = seal_pattern.sub(
-        lambda match: (
-            "\\begin{center}"
-            "\\begin{tcolorbox}[enhanced,width=0.30\\linewidth,colback=GewuSealPanel,"
-            "colframe=GewuSealPanel,boxrule=0pt,arc=3mm,boxsep=0pt,"
-            "left=4mm,right=4mm,top=4mm,bottom=4mm]"
-            "\\includegraphics[width=\\linewidth,keepaspectratio]{"
-            + match.group(2)
-            + "}\\end{tcolorbox}\\end{center}"
-        ),
-        source,
-    )
 
     for symbol in ["↓", "↑", "→", "←", "↕", "↺", "⇧", "⌘", "≠"]:
         source = source.replace(symbol, rf"{{\symbolfont {symbol}}}")

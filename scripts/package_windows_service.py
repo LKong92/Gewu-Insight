@@ -37,6 +37,11 @@ for name in ("paper_monitor", "assets"):
 # The Windows menu and the local /user-guide.pdf route must serve the same PDF.
 # Keep the shared macOS source document untouched.
 shutil.copy2(root / "windows/Windows_Preview_Guide.pdf", source / "paper_monitor/Gewu_Insight_User_Guide.pdf")
+# The local service and the native Help menu use the same Windows-adapted guide.
+# Only the PDF target differs between the standalone file and the HTTP route.
+guide_html = (root / "windows/Windows_Preview_Guide.html").read_text(encoding="utf-8")
+guide_html = guide_html.replace("window.open('Windows_Preview_Guide.pdf'", "window.open('/user-guide.pdf'")
+(source / "paper_monitor/user_guide.html").write_text(guide_html, encoding="utf-8")
 (source / "config").mkdir()
 (source / "scripts").mkdir()
 shutil.copy2(root / "scripts" / "gewu_mcp.py", source / "scripts" / "gewu_mcp.py")

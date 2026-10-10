@@ -1,4 +1,4 @@
-"""Build the complete Windows guide from the shared manual and explicit adapters.
+"""Adapt Windows guide HTML while preserving the approved PDF typesetting.
 
 Run with the project .venv. Only documentation outputs are written. The shared
 macOS HTML/TeX/PDF, application binaries, settings and research data are untouched.
@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "windows"
 HTML = OUT / "Windows_Preview_Guide.html"
 PDF = OUT / "Windows_Preview_Guide.pdf"
-EDITION = "October 8, 2026"
+EDITION = "October 10, 2026"
 # Keep the guide's default edition aligned with both desktop shells.
 VERSION = re.search(r'^__version__ = "([^"]+)"',
                     (ROOT / "paper_monitor/__init__.py").read_text(encoding="utf-8"), re.MULTILINE)[1]
@@ -527,6 +527,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=VERSION)
     parser.add_argument("--check", action="store_true", help="Verify the existing HTML/PDF match the build version without rewriting them.")
+    parser.add_argument("--html-only", action="store_true", help="Update HTML only; preserve the approved PDF's fonts, layout and pagination.")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):
         parser.error("--version must have the form major.minor.patch")
@@ -539,14 +540,15 @@ def main():
         if (soup.title.get_text() != title or
                 not soup.select_one(".guide-revision").get_text().startswith(f"Windows {VERSION} ·") or
                 reader.metadata.title != title or f"Windows {VERSION}" not in reader.pages[0].extract_text()):
-            parser.error("User Guide version mismatch; rebuild both editions with --version " + VERSION)
+            parser.error("User Guide version mismatch; update HTML and the approved PDF edition without changing its typesetting.")
         print(f"HTML and PDF User Guide match Windows {VERSION}.")
         return
-    soup, common = windows_html()
+    if not args.html_only:
+        parser.error("The approved PDF must not be replaced by the legacy ReportLab layout. Use --html-only to update HTML; edit the existing PDF separately while preserving its typesetting.")
+    soup, _ = windows_html()
     HTML.write_text(str(soup), encoding="utf-8")
-    build_pdf(soup, common)
     print(HTML)
-    print(PDF)
+    print(f"Preserved approved PDF: {PDF}")
 
 
 if __name__ == "__main__":

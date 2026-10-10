@@ -33365,8 +33365,8 @@ INDEX_HTML = """<!doctype html>
       line-height: 1.4;
     }
     .library-detail {
-      --runtime-empty-brand-right: -23px;
-      --runtime-empty-brand-bottom: -15px;
+      --runtime-empty-brand-right: 0;
+      --runtime-empty-brand-bottom: -2px;
       position: relative;
     }
     .analysis-backdrop {
@@ -35518,7 +35518,7 @@ INDEX_HTML = """<!doctype html>
 <body>
   <div class="app-startup-cover" id="appStartupCover" role="status" aria-live="polite">
     <div class="app-startup-card">
-      <img class="app-startup-brand-art" src="/api/startup-brand-art" alt="" aria-hidden="true">
+      <img class="app-startup-brand-art" src="/api/startup-brand-art?v=ac0025861a5d" alt="" aria-hidden="true">
       <div class="app-startup-icon-shell"><img class="app-startup-icon" src="/api/app-icon" alt="Gewu Insight"></div>
       <div class="app-startup-copy">
         <strong class="app-startup-title" id="appStartupTitle">Starting Gewu Insight</strong>
@@ -37368,7 +37368,7 @@ INDEX_HTML = """<!doctype html>
 
     function runtimeEmptyBrandArtMarkup(extraClass = "") {
       const cropClassName = `runtime-empty-brand-crop${extraClass ? ` ${extraClass}` : ""}`;
-      return `<span class="${cropClassName}" aria-hidden="true"><img class="runtime-empty-brand-art" src="/api/startup-brand-art" alt=""></span>`;
+      return `<span class="${cropClassName}" aria-hidden="true"><img class="runtime-empty-brand-art" src="/api/startup-brand-art?v=ac0025861a5d" alt=""></span>`;
     }
 
     function runtimeBrandedEmptyMarkup(message = "") {
