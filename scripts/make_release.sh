@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+# Historical folder-based macOS packaging; official macOS releases use main.
+APP_SOURCE="$PROJECT_DIR/dist/Gewu Insight.app"
+[[ -d "$APP_SOURCE" ]] || { echo "Build the legacy macOS fixture first, or use main for current macOS packaging." >&2; exit 1; }
 VERSION="${1:-$(date +%Y%m%d)}"
 DIST_DIR="$PROJECT_DIR/dist"
 BUILD_DIR="$DIST_DIR/GewuInsight-$VERSION"
@@ -18,7 +21,7 @@ copy_item() {
   fi
 }
 
-copy_item "Gewu Insight.app"
+/bin/cp -R "$APP_SOURCE" "$BUILD_DIR/Gewu Insight.app"
 copy_item "AGENTS.md"
 copy_item "README.md"
 copy_item "DISTRIBUTION.md"

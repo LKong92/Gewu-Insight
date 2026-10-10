@@ -1,6 +1,7 @@
 # Third-party notices for Gewu Insight
 
-Reviewed September 24, 2026. Gewu's custom research license applies only to its
+Source notices reviewed September 24, 2026; released-package inventory checked
+October 10, 2026. Gewu's custom research license applies only to its
 own covered materials. It does not restrict the independent licenses below.
 Keep this file and the component-specific notices when redistributing Gewu.
 
@@ -267,15 +268,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## Python packages installed separately
+## Python packages and standalone runtimes
 
-The default macOS launcher installs `requirements.txt` into the recipient's
-virtual environment. The repository/release does not bundle that environment,
-a Python interpreter or dependency wheels. The versions below record this audit,
-not an installation lock. Future resolutions require a fresh review. Each
-installed package carries its own authoritative license; preserve that package's
-complete notices and comply with its terms if distributing it separately or
-changing the packaging model.
+Current macOS and Windows installers bundle Python and application dependencies.
+Source development installs `requirements.txt` into a separate virtual environment.
+The versions below are the September 24 source-environment audit snapshot, not
+an installation lock or an inventory of every component in either installer.
+Use each release's build manifest and shipped component notices for its exact
+versions. Preserve the original licenses and any source-provision obligations.
+
+The macOS standalone builder includes CPython from python-build-standalone and
+its transitive runtime components. Inside the App's `Contents/Resources`,
+`Runtime Licenses/<architecture>/` contains the matching runtime metadata and
+license texts; `dependencies/` contains Python package source, metadata and
+licenses. `Standalone Build.json` and `BUNDLED_RUNTIME_NOTICES.txt` describe that
+build. A CPython license alone does not cover every library bundled with it.
+
+The Windows release bundles CPython 3.13.15, .NET 10.0.11 and the WebView2 SDK
+1.0.4191.47; Setup reuses or installs the separate WebView2 Runtime. Its Python
+notice, including Windows binary conditions, is in `service/LICENSE.txt`.
+.NET and WebView2 SDK notices are in `licenses/`; Python package notices are in
+`service/Lib/site-packages/*dist-info/licenses/`. Preserve the full embedded
+component notices for Pillow, pypdfium2/PDFium and pywin32, not only their wrapper
+license labels. These native components are absent from the macOS dependency set.
+
+See the [released-package inventory](docs/RELEASE_COMPONENT_AUDIT.md) for current
+release metadata, historical component versions/locations and the scope of
+those separate checks. See
+[distribution guidance](https://github.com/LKong92/Gewu-Insight/blob/Windows/DISTRIBUTION.md) for download links. Updating this file
+in Git does not update notices inside previously published installers.
+
+### Historical source-environment versions (September 24)
 
 | Component | Audited version | License | Upstream information |
 |---|---|---|---|
@@ -302,7 +325,7 @@ of their own embedded component notices, not just the top-level license label.
 
 ## System components and external tools
 
-The native App uses macOS system frameworks including Cocoa/AppKit, WebKit,
+The macOS native App uses system frameworks including Cocoa/AppKit, WebKit,
 Quartz/PDFKit, ImageIO and Quick Look; these remain under their respective Apple
 and third-party terms. Their implementations are not copied into the App.
 System commands are invoked as separate programs. Optional LibreOffice and TeX
@@ -316,17 +339,27 @@ System fonts used in the generated manual retain their own display/embedding
 terms; no standalone font files are shipped. In particular, document embedding
 permissions do not imply permission to distribute or relicense the fonts.
 
-The seal artwork uses Hanyi seal-script glyphs. The About wordmark was composed
-from four externally sourced historical-calligraphy images, identified in the
-User Guide. The repository does not include proof of the relevant artwork/font
-redistribution permissions. Gewu's LICENSE does not clear those rights. Confirm
-those permissions before public or commercial redistribution; original project
-contributions do not erase rights in the underlying materials.
+The current seal-style motif was generated with AI assistance for Gewu Insight.
+Its provenance is recorded in `assets/branding/README.md`. This describes the
+creation process; it is not a legal clearance or a claim of exclusive rights.
+Current release build records reference the updated motif; historical installers
+may retain earlier artwork. See the dated package audit below.
+
+The About wordmark remains composed from four externally sourced historical-
+calligraphy images, identified in the User Guide. The repository does not include
+proof of the relevant image redistribution permissions. Gewu's LICENSE does not
+clear those rights. The source images' reuse status remains to be confirmed;
+original project contributions do not erase rights in the underlying materials.
 
 Paper figures, journal marks, author portraits and other third-party content
 visible in screenshots remain with their respective owners. Viewing content or
 having a software license does not grant independent reuse of that content.
 
-For the full inventory, source evidence and unresolved issues, see
-`docs/DEPENDENCY_LICENSE_AUDIT.md` in the complete distribution. This notice is
-not a claim that every future dependency version or distribution is cleared.
+For the released-package inventory, source evidence and unresolved issues, see
+[the package audit](https://github.com/LKong92/Gewu-Insight/blob/Windows/docs/RELEASE_COMPONENT_AUDIT.md)
+and [the dependency and asset audit](https://github.com/LKong92/Gewu-Insight/blob/Windows/docs/DEPENDENCY_LICENSE_AUDIT.md).
+GitHub access is required while the repository is private. Windows source
+packaging now includes these documents in future builds; the currently published
+installers have not been re-inspected in this follow-up. This notice does not
+claim that every
+dependency, asset or future distribution has completed rights clearance.

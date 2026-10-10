@@ -70,9 +70,8 @@ if ($ReuseServicePayload) {
 }
 & $Python @serviceArguments
 if ($LASTEXITCODE -ne 0) { throw 'Python service packaging failed' }
-foreach ($notice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
-    Copy-Item -LiteralPath (Join-Path $repoRoot $notice) -Destination $payload
-}
+& $Python scripts/package_windows_notices.py --output $payload
+if ($LASTEXITCODE -ne 0) { throw 'Windows license document packaging failed' }
 foreach ($guide in @('Windows_Preview_Guide.html', 'Windows_Preview_Guide.pdf')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot ('windows/' + $guide)) -Destination $payload
 }

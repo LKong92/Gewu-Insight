@@ -11,6 +11,7 @@
 - This repo is a local paper-monitoring and research reading assistant. Use paths relative to the repo root unless the user gives an absolute path.
 - SQLite is the source of truth; JSON is export-only.
 - Obtain paper files through configured Gewu MCP: `get_paper_file` provides an authorized read-only client copy for local reading/rendering/OCR, not direct Library/SQLite access. Write derived files separately; `save_analysis` only appends classified Markdown notes and never edits existing Paper Files or earlier analyses.
+- Keep machine-specific historical logs in ignored `local-development-archive/`; retain a concise current handoff in Git. The eight unused logo drafts were explicitly deleted; do not restore them from old archives.
 - Keep Markdown reports and analysis notes useful as user-facing reading artifacts.
 - Do not create or update help documents, user guides, or their PDFs unless the user explicitly requests them; prioritize software changes and necessary validation.
 - Prefer scoped edits that reuse existing `paper_monitor` modules.
@@ -26,7 +27,7 @@
 - Subject Monitor must reject Zenodo records during candidate ingestion and cached-result display; do not expose a Zenodo show/hide control.
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
-- Windows development and releases stay on a separate Windows branch (`codex/windows-preview-0.1.10-20260910` or an explicitly chosen successor). Never merge or push Windows changes into remote `main` or any macOS branch without a new explicit user request.
+- Windows development and releases stay on a separate Windows branch (`Windows`). Never merge or push Windows changes into remote `main` or any macOS branch without a new explicit user request.
 - Windows startup is installed-App-only. Source is for development, isolated tests and building installers. `Start Gewu Insight.cmd` opens the installed Start-menu shortcut; never launch the historical source shell for daily use or acceptance. Other computers/VMs have independent installation status.
 - Windows parity excludes Apple Passwords/AutoFill, Safari source sync, and macOS system Quick Look; the user does not need those Apple-specific capabilities.
 - User-approved Windows development workflow (2026-10-06): **edit source → build a versioned Setup.exe → install/update locally → test the installed App → report results and deliver the local installer**. The workflow ends locally; passing validation never triggers publication. Keep this source checkout for development; source edits reach the installed App only after rebuilding and installing. For daily use/final acceptance, launch Gewu Insight from the Start menu; the source launcher remains a development tool. This supersedes the earlier source-only/package-only workflow.
@@ -34,7 +35,7 @@
 - Keep local upgrades efficient: reuse existing installation/backup scripts and validated artifacts when unchanged. Keep a verified recovery backup and check the installed version, startup and data integrity; repeat or broaden checks only for changed behavior, failures or unresolved concerns. Batch independent checks instead of adding many separate tool rounds.
 - Windows packaging is intentionally unsigned. Release filenames use `Gewu-Insight-Windows-VERSION-x64-Setup.exe`; installer titles, program directory, shortcuts and notice use Gewu Insight without Trial/Unsigned branding. Do not reintroduce publisher-signing requirements or change Windows security settings. Reuse installed WebView2, otherwise install online with the verified official Evergreen Bootstrapper. Keep manifest/version/dependency checks and isolated startup validation.
 - **Release gate: create/edit a GitHub Release (including drafts), upload/replace release assets or publish a release only when the user explicitly requests that release action.** Fix/build/test/install requests and successful validation do not authorize release operations; prior publication requests are not standing authorization for future versions. When explicitly requested, publish the exact verified bytes, increment the version and preserve previous releases. Include source, requested guide changes and packaging scripts in the tagged commit after authorized commit/push; disclose exceptions. For requested guide alignment, reuse the shared manual with Windows adapters and verify bundled HTML/PDF against installed-app behavior.
-- Keep program, source and **Gewu Database** separate. Fresh program default `%LOCALAPPDATA%\Programs\Gewu Insight`; database default `%USERPROFILE%\Gewu Database`, chosen independently. Current real database is `C:\Users\Zhengran\Desktop\Gewu Database`; SQLite owns identity/state, `%USERPROFILE%\.gewu-insight\database-location.ini` only locates it. Browser profiles/logs/cache live under `%LOCALAPPDATA%\Gewu Insight\Databases\<identity>`. Uninstall retains data, locator and browser sign-ins. Do not migrate real data for cosmetic changes.
+- Keep program, source and **Gewu Database** separate. Fresh program default `%LOCALAPPDATA%\Programs\Gewu Insight`; database default `%USERPROFILE%\Gewu Database`, chosen independently. Discover the selected database instead of copying a machine-specific path; SQLite owns identity/state, `%USERPROFILE%\.gewu-insight\database-location.ini` only locates it. Browser profiles/logs/cache live under `%LOCALAPPDATA%\Gewu Insight\Databases\<identity>`. Uninstall retains data, locator and browser sign-ins. Do not migrate real data for cosmetic changes.
 - Notify the user promptly once installation and essential verification succeed, before lengthy documentation cleanup. Keep the handoff concise; when explaining elapsed time, distinguish actual installer time from preparation, backup, verification and documentation time.
 
 ## Commit Messages
@@ -45,23 +46,24 @@
 
 ## Commands
 
-- Setup: `python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt`
-- Run UI: `python3 -m paper_monitor ui --port 8765`
-- Run journal monitor: `python3 -m paper_monitor journal`
-- Run explicit journal window: `python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD`
-- Download paper: `python3 -m paper_monitor download PAPER_ID`
-- Compile check: `python3 -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
+- Windows setup in PowerShell: `py -3.13 -m venv .venv`, then `.venv\Scripts\python.exe -m pip install -r windows/requirements.lock`.
+- Development commands require explicit isolated `GEWU_WORKSPACE_ROOT` and `GEWU_DATA_ROOT`; initialize with `paper_monitor.windows_database prepare` without `--select` (see `docs/DEVELOPMENT.md`).
+- Run UI diagnostics: `.venv\Scripts\python.exe -m paper_monitor ui --port 8765`
+- Run journal monitor: `.venv\Scripts\python.exe -m paper_monitor journal`
+- Run explicit journal window: `.venv\Scripts\python.exe -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD`
+- Download paper: `.venv\Scripts\python.exe -m paper_monitor download PAPER_ID`
+- Compile check: pass changed Python file paths explicitly to `.venv\Scripts\python.exe -m py_compile` (PowerShell does not expand Python globs).
 - Windows launcher: installed **Gewu Insight** from the Start menu; `Start Gewu Insight.cmd` opens that installed shortcut. Source-only diagnostics must use isolated data.
-- macOS clickable launcher: `Gewu Insight.app`.
+- Historical macOS bundle: `assets/macos-app-template.zip`, a build/test fixture, not a daily launcher. Current macOS work belongs on `main`.
 
 ## Key Paths
 
 - `paper_monitor/`: main Python package.
 - `paper_monitor/ui_server.py`: local web UI and UI API.
 - `config/journals.json`: monitored journals and section policies.
-- `data/paper_monitor.sqlite`: SQLite database.
-- `reports/daily/`: generated Markdown reports.
-- `reports/analyses/`: generated analysis notes.
+- Selected Gewu Database `data/paper_monitor.sqlite`: authoritative SQLite database; never source-local formal data.
+- Selected database `reports/daily/`: generated Markdown reports.
+- Paper Files analyses: selected database `data/Associated Files/`; legacy reports may remain under `reports/analyses/`.
 - `README.md`: user-facing usage documentation.
 
 ## Done Criteria

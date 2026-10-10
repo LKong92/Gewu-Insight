@@ -23,3 +23,9 @@ tests/windows_native/bin/
 tests/windows_browser_parity/obj/
 tests/windows_browser_parity/bin/
 dist/
+
+# Local development history and generated manual intermediates.
+local-development-archive/
+.gewu-development-only
+/paper_monitor/user_guide.tex
+/Gewu Insight.app/

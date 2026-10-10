@@ -1,11 +1,9 @@
-Gewu Insight - Windows Preview 0.1.21 (desktop from source)
+Gewu Insight - Windows 1.0.0 (Build 1)
 
-Start: Start Gewu Insight.cmd at the repository root.
-Shell: dist/windows-preview-0.1.21; Python: .venv; source: this checkout.
-Library: retain the existing preview-workspace.txt selection.
-
-Includes shared macOS changes through 8a27895 and Windows native equivalents.
-See Help > User Guide for current features and permissions.
-This route does not install a package or reinstate Preview 0.1.19.
-Keep the verified database, file and source backups before future updates.
+Daily use: install Setup and open Gewu Insight from the Start menu.
+Start Gewu Insight.cmd opens that installed shortcut; it does not load source.
+The program, selected Gewu Database and source checkout are independent.
+Source development and acceptance instructions: docs/DEVELOPMENT.md.
+Help > User Guide uses Windows_Preview_Guide.html and its matching PDF.
+The compatibility filenames retain Preview; they do not describe release status.
 Apple Passwords/AutoFill, Safari sync and macOS system Quick Look are excluded.

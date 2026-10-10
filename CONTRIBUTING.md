@@ -1,5 +1,36 @@
 # Contributing to Gewu Insight
 
+## Report an issue or suggest a change
+
+This repository is private. Collaborators with access can open an issue;
+others can contact [info@gewu-insight.com](mailto:info@gewu-insight.com).
+Include your operating system, Gewu version/build, steps to reproduce, expected
+and actual behavior, and a small synthetic example when useful. Remove API keys,
+tokens, personal paths and research content from logs and screenshots. Do not
+attach a real database or papers without permission to share them.
+
+## Prepare and submit a contribution
+
+1. Discuss the intended change and acceptance requirements with a maintainer,
+   especially for new features or changes to paper identity, storage or access.
+2. Follow the [development guide](https://github.com/LKong92/Gewu-Insight/blob/Windows/docs/DEVELOPMENT.md#manual-setup). Use an
+   isolated development database and synthetic fixtures; never test changes on
+   a user's research collection. Read [AGENTS.md](https://github.com/LKong92/Gewu-Insight/blob/Windows/AGENTS.md) for product rules.
+3. Keep the change focused, update affected documentation, and run the relevant
+   existing checks. Describe actual validation and any unverified behavior.
+   Follow the [commit guidelines](https://github.com/LKong92/Gewu-Insight/blob/Windows/docs/COMMIT_GUIDELINES.md).
+4. Where your repository access permits, submit a PR describing the problem,
+   resulting behavior, data or compatibility effects, and validation. Otherwise,
+   arrange a patch with a maintainer. GitHub access and the license's permission
+   to share research modifications are separate matters.
+5. Maintainers review correctness, file/data safety, documentation and third-party
+   provenance. External copyrightable contributions also require the written
+   authorization described below before merging into the official product.
+
+Windows maintainers work directly on `Windows` under this repository's existing rules;
+external PRs do not change that local development policy. Keep benchmark-only
+work and artifacts in isolated local worktrees and out of product submissions.
+
 ## Research sharing and upstream contributions are different
 
 The [LICENSE](LICENSE) permits non-commercial research sharing of original and
@@ -21,31 +52,17 @@ inclusion in those releases without a separately agreed written authorization
 covering the intended commercial rights. Receiving or discussing a PR does not
 mean it has been accepted for that purpose.
 
-Maintainers should document:
-
-- The contribution and the person or organization authorized to license it,
-  including any relevant employer or third-party rights.
-- The exact signed agreement and contributions it covers, with records retained
-  privately rather than committed to the public repository.
-- The permission to use, reproduce, modify and distribute the contribution and
-  derivative works, including commercial use and sublicensing/relicensing under
-  the project's intended research and commercial terms.
-- Whether the grant is perpetual and irrevocable, its conditions, and whether it
-  permits an intended transfer to a future project entity or successor. A future
-  company must not be assumed to acquire rights automatically.
-- Patent permissions where relevant, third-party notices and provenance.
-
 The intended model lets contributors retain copyright while granting the project
-the additional rights actually agreed. It is not an automatic assignment of
-ownership. A sign-off, Git author name or PR submission alone must not be treated
-as evidence of this additional commercial grant.
+only the additional rights actually agreed. A sign-off, Git author name or PR
+submission must not be treated as evidence of commercial use and
+sublicensing/relicensing permission.
 
-**No finalized CLA or signature-collection process is currently provided.** This
-document is a contribution policy and checklist, not a CLA, legal opinion or
-representation that any external contributor has already agreed. A reviewed
-individual or corporate agreement must identify the actual parties and terms
-before it is used. Contributors remain free to publish independently under the
-research-sharing permission even if their work is not merged upstream.
+**No finalized CLA or signature-collection process is currently provided.**
+Maintainers should use the [contribution authorization checklist](docs/LICENSING.md#contribution-authorization-checklist)
+to prepare a reviewed written agreement identifying the actual parties, rights
+and contributions. This policy is not that agreement. Contributors can still
+publish modifications under the research-sharing permission without upstream
+acceptance.
 
 Contact: [info@gewu-insight.com](mailto:info@gewu-insight.com).
 
@@ -56,10 +73,3 @@ license for the proposed contribution. Identify third-party material and retain
 its notices. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the
 [dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md). This policy does
 not override their licenses or supply missing permission.
-
-## Reference
-
-[GitHub Terms of Service, D.6](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#6-contributions-under-repository-license)
-describes contributions under a repository's license and the role of a separate
-contributor agreement. The inbound research license should not be mistaken for
-broader commercial relicensing rights.

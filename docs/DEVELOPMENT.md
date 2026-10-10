@@ -1,219 +1,141 @@
-# Developing and maintaining Gewu Insight
+# Developing Gewu Insight for Windows
 
-This guide collects the setup, architecture, maintenance, and command-line
-material linked from the [README](../README.md). For normal App use, start with
-the [User Guide](../paper_monitor/Gewu_Insight_User_Guide.pdf).
+Work on `Windows`; macOS implementation and packaging are maintained on `main`.
+Read [AGENTS.md](../AGENTS.md), [CONTRIBUTING.md](../CONTRIBUTING.md) and the
+[commit guidelines](COMMIT_GUIDELINES.md). Commit and push only when requested.
 
-These instructions do not expand the custom [research license](../LICENSE).
-Before contributing code, read [CONTRIBUTING.md](../CONTRIBUTING.md); research
-sharing permission and acceptance into a release with commercial licensing
-rights are separate questions.
+Daily use starts the installed App from the Start menu. Source edits reach it
+only after building and installing a new package. The repository CMD opens the
+installed shortcut; it is not a development launcher.
 
 ## Manual setup
 
-Run these commands from the complete repository folder:
+Use a Windows development host with Python 3.13, .NET 10 SDK and, for Setup,
+Inno Setup. Build dependencies are recorded in `windows/requirements.lock` and
+`windows/GewuInsight.Windows.csproj`. From the repository root in PowerShell:
 
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-python3 -m paper_monitor ui --port 8765
+```powershell
+py -3.13 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r windows/requirements.lock
+$env:GEWU_WORKSPACE_ROOT = Join-Path $PWD 'tmp\development-database'
+$env:GEWU_DATA_ROOT = Join-Path $env:GEWU_WORKSPACE_ROOT 'data'
+.venv\Scripts\python.exe -m paper_monitor.windows_database prepare --workspace $env:GEWU_WORKSPACE_ROOT --create
 ```
 
-This starts the browser-hosted UI. Open `http://127.0.0.1:8765`; the service
-health endpoint is `http://127.0.0.1:8765/api/health`. The native macOS App adds
-platform integration beyond the browser-hosted interface. Avoid starting a
-second service while the App's service is already running on the same port.
+Initialize a fresh isolated database once. On later sessions, set the same two
+environment variables and omit `--create`. Do not add `--select`: development
+must not change the installed App's database locator. Use synthetic files.
+`paper_monitor.workspace create` belongs to the macOS branch, not this branch.
 
-For the supplied native launcher, macOS 14 or later and a working `python3`
-command are required. Keep the App and project files together in a regular
-local folder; the App is not a standalone installer. Initial setup needs network
-access to install dependencies. See [distribution and startup troubleshooting](../DISTRIBUTION.md).
+For optional browser-hosted diagnostics, see [Source Web](WINDOWS_SOURCE_WEB.md).
+Native acceptance requires the installed Windows App. Never run development and
+installed processes against the same research collection.
 
 ## Architecture and state
 
-```text
-External research sources
-  journals · arXiv · metadata services · scholarly profiles
-                         │
-                         ▼
-              Local application service
-        identity resolution · scheduling · validation
-                    │                 │
-                    ▼                 ▼
-            SQLite state core   Visible research files
-        identity · relations     PDFs · versions · notes
-        resources · provenance   supplements · data · code
-                    │                 │
-                    └────────┬────────┘
-                             ▼
-                  Research workspace
-      Library & Spaces · My Publications · Monitors · Browser
-                             │
-                             ▼
-                  Optional authorized API/MCP
-```
+The Python service manages discovery, metadata, paper identities, files and
+SQLite. The Windows Forms shell adds WebView2, native menus, file operations,
+browser capture and PDF integration. C# changes require a rebuilt shell.
 
-SQLite is authoritative for identities, identifiers, relationships, folder
-placements, resource roles, provenance, preferences, and operational state.
-JSON, Markdown, HTML, Word, LaTeX, and PDF reports are exports or reading
-artifacts, not a second database. Browser bookmarks and history use SQLite;
-cookies and cache use the native Browser's separate persistent WebKit profile.
+SQLite is authoritative; JSON and reports are exports. The database folder
+contains `data/paper_monitor.sqlite`, Library, Spaces, My Publications,
+Associated Files, configuration and reports. AI analyses saved as Paper Files
+belong in Associated Files; legacy analysis reports may remain under `reports/`.
+Additional managed roots and externally linked originals can live elsewhere.
 
-One paper identity can have multiple placements and multiple files. File roles,
-manual Default selection, and source evidence must survive refreshes and moves.
-Exact SHA-256 detects byte-identical resources; content fingerprints can relate
-clean and annotated copies without discarding their differences. PDF validation
-rejects HTML responses, empty files, and truncated pseudo-PDFs. Coordinated
-filesystem/database changes use rollback or recovery paths.
+The locator is `%USERPROFILE%\.gewu-insight\database-location.ini`.
+Runtime profiles/logs/cache are separate under
+`%LOCALAPPDATA%\Gewu Insight\Databases\<identity>`. Discover the user's
+selection; never copy a machine-specific path from an old handoff.
 
-Reuse existing modules and contracts when working on these areas:
-
-- [Managed file layout](MANAGED_FILE_LAYOUT.md): canonical files, Associated
-  Files, Finder aliases, operation journals, and recovery.
-- [AI Access](AI_ACCESS.md): shared API/MCP authorization, metadata-first imports,
-  append-only analyses, and explicit organization permissions.
-- [Browser capture](BROWSER_CAPTURE.md): reviewable identity, file classification,
-  and import boundaries.
-- [Website link routing](WORKSPACE_BROWSER_LINKS.md): native Browser and
-  browser-hosted UI behavior.
-
-## Data layout
-
-The default project layout is:
-
-```text
-data/paper_monitor.sqlite       authoritative SQLite database
-data/Library/                   visible main Library and current files
-data/Spaces/                    independent Space roots
-data/My Publications/           managed files for personal publications
-data/Associated Files/          versions, supplements, and attachments
-data/cache/journal_logos/       rebuildable local logo cache
-reports/                        generated notes and reports
-logs/                           launcher and runtime diagnostics
-config/journals.json            initial/default journal source definitions
-```
-
-Configured data roots can differ. Journal subscriptions are personal database
-state: `config/journals.json` supplies initial/default definitions, so replacing
-source code does not reset active subscriptions or re-enable disabled journals.
-Move and classify managed files through the App; manual filesystem changes can
-leave saved paths inconsistent with physical locations.
+Preserve paper/resource IDs, classifications, manual Default choices and
+provenance. File/database operations need rollback or recovery. MCP access uses
+explicit grants; analyses append and never overwrite existing Paper Files.
+See [file layout](MANAGED_FILE_LAYOUT.md), [AI Access](AI_ACCESS.md) and
+[Browser capture](BROWSER_CAPTURE.md) for the shared contracts.
 
 ## Safe updates and backups
 
-Before a major update or migration:
+1. Stop the App, its service and development processes using the database.
+2. Preserve source changes separately. Back up the entire selected Gewu Database,
+   all additional managed roots and externally linked originals. The source
+   checkout is not the research backup.
+3. For same-machine recovery of browser sessions, preserve the matching runtime
+   profile and locator separately while stopped; do not publish them in source.
+4. Validate the new package with an isolated database/copy before local upgrade.
+5. Install/update the program using the existing database selection. Verify
+   version, startup, database identity, representative files and integrity.
+6. Keep recovery material until those checks pass. Do not reopen an older build
+   against a newer schema or overwrite later research with an older backup.
 
-1. Quit Gewu Insight and make sure its local service has stopped.
-2. Inspect `git status --short`; preserve uncommitted product changes.
-3. Back up the complete project, plus any configured managed roots outside it.
-   Include SQLite and all managed files, not just `data/Library`.
-4. Pull or install the new version and rebuild the native App as needed.
-5. Start the App once so required additive database migrations can run.
-6. Verify a current PDF, an older version, an attachment, a Space,
-   My Publications, and a monitor before discarding the backup.
-
-Copying only SQLite or only visible files is not a complete workspace migration.
-Do not delete the database as a startup repair. Start with
-`logs/paper_monitor_launcher.log` and the diagnostic instructions in
-[DISTRIBUTION.md](../DISTRIBUTION.md#recipient-requirements).
+Moving a database can require path-aware migration. Follow
+[database location guidance](WINDOWS_WORKSPACE_RELOCATION.md). The relocation
+CLI updates the current locator only when explicitly run with `--select` after
+its copy and verification; routine development setup must omit that option.
 
 ## CLI commands
 
-Use the project environment and run from the repository root:
+After setting the isolated environment from Manual setup:
 
-```bash
-. .venv/bin/activate
-
-# Journal Monitor default publication window
-python3 -m paper_monitor journal
-
-# An explicit publication window; replace the date placeholders
-python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD
-
-# Download one existing paper; replace PAPER_ID with its internal record ID
-python3 -m paper_monitor download PAPER_ID
-
-# Export diagnostic JSON without replacing SQLite
-python3 -m paper_monitor export-json reports/export.json
+```powershell
+.venv\Scripts\python.exe -m paper_monitor journal
+.venv\Scripts\python.exe -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD
+.venv\Scripts\python.exe -m paper_monitor download PAPER_ID
 ```
 
-These commands operate on the configured workspace; they are not test fixtures.
-
-## Network services and credentials
-
-Source availability depends on network access, provider limits, and access
-policies. Keep pacing and cooldowns intact. Never put real keys in source code,
-tests, commits, screenshots, logs, or issue reports.
-
-OpenAlex, Semantic Scholar, and NASA ADS keys can be configured in
-**Setting → Literature Data Source**. arXiv discovery coverage is configured separately in
-**Setting → arXiv Scope Settings**.
-
-Optional polite API identity values can be supplied through the environment:
-
-```bash
-export OPENALEX_MAILTO=your.name@example.edu
-export CROSSREF_MAILTO=your.name@example.edu
-```
+These commands operate on the selected development database and may contact
+online sources. Keep credentials out of source, logs submitted for review and
+test fixtures. Provider limits and institutional access still apply.
 
 ## Builds and verification
 
-Read [AGENTS.md](../AGENTS.md) before making product changes. Keep benchmark-only
-instrumentation, data, and artifacts in a separate local benchmark worktree;
-never push them to this repository.
+Use the shared version/build from `paper_monitor/__init__.py`. Supply a verified
+official x64 CPython embedded runtime and Microsoft's WebView2 bootstrapper.
+For example, after replacing the example input paths:
 
-Rebuild the native App after changing its native UI, bundled resources, or
-identity:
-
-```bash
-./scripts/build_macos_app.sh
+```powershell
+& .\scripts\build_windows.ps1 -Version 1.0.0 `
+  -PythonRuntime 'C:\BuildInputs\python-embedded' `
+  -WebView2Bootstrapper 'C:\BuildInputs\MicrosoftEdgeWebview2Setup.exe' `
+  -InnoCompiler 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' `
+  -PayloadDirectory (Join-Path $PWD 'dist\review-1.0.0') `
+  -InstallerDirectory (Join-Path $PWD 'dist\installers\review-1.0.0')
 ```
 
-When the HTML User Guide changes, regenerate the PDF before building the App:
+Use fresh output directories; the builder refuses to replace an existing payload
+or installer. It retains original dependency notices and verifies manifests.
+It builds locally and does not install or publish automatically.
 
-```bash
-.venv/bin/python scripts/build_user_guide_pdf.py
-./scripts/build_macos_app.sh
-```
+Run existing checks relevant to the changes, including Python compilation,
+`tests/test_windows_database.py`, `tests/test_windows_source.py`, notice packaging
+tests and `tests/test_windows_release.ps1` when packaging changes. The
+[native acceptance probe](../tests/windows_native/README.md) and
+[browser parity probe](../tests/windows_browser_parity/README.md) use isolated
+fixtures. Windows-only checks require a Windows host; report platform skips.
 
-Inspect the affected PDF pages and verify the resulting App signature. Screenshot
-rules and source provenance are recorded in
-[USER_GUIDE_SCREENSHOTS.md](USER_GUIDE_SCREENSHOTS.md).
+For runtime fixes, finish with local Setup installation/update, Start-menu
+startup and installed-version/data verification. Repository-only documentation
+cleanup does not itself rebuild the installer or replace a running App.
 
-Choose verification appropriate to the change. Typical checks from the project
-root are:
+## Manual and historical macOS fixtures
 
-```bash
-.venv/bin/python -X pycache_prefix=/private/tmp/gewu-pycache \
-  -m py_compile paper_monitor/*.py paper_monitor/sources/*.py
+`windows/Windows_Preview_Guide.html` and `.pdf` are current compatibility
+filenames used by Help and packaging. Preserve the approved 94-page PDF.
+`scripts/build_windows_preview_guide.py --version 1.0.0 --check` validates the
+edition. `--html-only` is reserved for requested HTML adaptations; the legacy
+ReportLab PDF reflow is blocked. Do not rebuild the manual for repository cleanup.
 
-.venv/bin/python -X pycache_prefix=/private/tmp/gewu-pycache \
-  -m unittest discover -s tests -v
+Shared `paper_monitor/user_guide.html` remains an input to the Windows adapter.
+The separate shared PDF builder regenerates `paper_monitor/user_guide.tex`;
+that TeX is an ignored intermediate. Existing PDF/structure tests inspect the
+shipped PDF and builder rules rather than requiring a checked-in TeX file.
 
-git diff --check
-```
+`assets/macos-app-template.zip` preserves the historical macOS fixture formerly
+stored as a launchable root App. It is not a current macOS distribution and is
+excluded from the Windows payload. Legacy macOS build scripts extract it only
+when needed. Bundle-reading tests may temporarily extract it at the root and
+must remove that extracted copy afterward. Use `main` for current macOS work.
 
-Use temporary, isolated databases and files for tests. Do not modify or rebuild
-a user's production database for verification. Native UI, AppKit, and local
-server checks may require the corresponding macOS session and permissions.
-Record what was actually exercised; a source-level assertion does not establish
-that a real mouse gesture or publisher sign-in works.
-
-## Packaging and contributions
-
-Create a clean folder-based collaborator package with:
-
-```bash
-scripts/make_release.sh
-```
-
-The release workflow excludes local databases, managed research files, generated
-notes, credentials, logs, and virtual environments. Follow
-[DISTRIBUTION.md](../DISTRIBUTION.md) for versioning and packaging requirements,
-and retain the license and third-party notices. Review the
-[dependency and asset audit](DEPENDENCY_LICENSE_AUDIT.md) before distribution.
-
-For external contributions, follow [CONTRIBUTING.md](../CONTRIBUTING.md).
-For commits, follow [COMMIT_GUIDELINES.md](COMMIT_GUIDELINES.md); do not claim
-unrun tests or rewrite existing history to change commit descriptions.
+Superseded machine-specific logs and design drafts are archived under ignored
+`local-development-archive/`, with hash manifests; tracked originals remain
+recoverable from the pre-cleanup Windows revision recorded in PROJECT_STATE.md.

@@ -3,7 +3,14 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd -P)"
 SOURCE="$PROJECT_DIR/scripts/PaperMonitorApp.m"
-APP="$PROJECT_DIR/Gewu Insight.app"
+# Retain the historical fixture only for explicit legacy builds. Current macOS
+# development lives on main; a Windows checkout has no launchable root App.
+APP="$PROJECT_DIR/dist/Gewu Insight.app"
+if [[ ! -d "$APP" ]]; then
+  [[ -f "$PROJECT_DIR/assets/macos-app-template.zip" ]] || { echo "Missing macOS build fixture." >&2; exit 1; }
+  mkdir -p "$PROJECT_DIR/dist"
+  ditto -x -k "$PROJECT_DIR/assets/macos-app-template.zip" "$PROJECT_DIR/dist"
+fi
 OUTPUT="$APP/Contents/MacOS/Gewu Insight"
 INFO_PLIST="$APP/Contents/Info.plist"
 BRAND_ART_SOURCE="$PROJECT_DIR/assets/branding/GewuSealGlyphs.png"

@@ -1,103 +1,78 @@
-# Distributing Gewu Insight
+# Distributing Gewu Insight for Windows
 
-The current research and writing baseline is **Gewu Insight 1.0.0, Build 1**.
-This project uses macOS folder-based distribution. Keep the App, Python package,
-configuration and assets together; the App alone is not a standalone installer.
+The Windows product is **1.0.0, Build 1**, delivered as a self-contained
+`Gewu-Insight-Windows-VERSION-x64-Setup.exe`. The source checkout is for
+development. Normal use starts the installed **Gewu Insight** from the Start menu.
 
-## Research license and commercial rights
+## Downloads and requirements
 
-Gewu Insight is source-available research software under the custom
-[Academic and Non-Commercial Research License](LICENSE). Academic/non-commercial
-research users may download, install, run and modify it. They may share original
-and modified versions, derivative works and patches free of charge for those
-purposes under the same research-use terms, retaining LICENSE, copyright and
-third-party notices and identifying modifications. Public research forks and
-pull requests within those terms do not require separate permission.
-Commercial use, commercial redistribution, sublicensing and incorporation into
-commercial products or services require separate prior written authorization
-from the copyright holders. See [licensing explained](docs/LICENSING.md).
+- [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0):
+  Windows 10 version 1607 (build 14393)+ or Windows 11, Intel/AMD x64.
+  Python, .NET and application dependencies are included. Setup reuses WebView2
+  or installs it using Microsoft's Evergreen bootstrapper; that step needs network access.
+- [macOS 1.0.0](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0):
+  a separate DMG maintained on `main`, for macOS 14+ on Apple silicon and Intel.
 
-Third-party rights are separate. Before public or commercial distribution,
-review [the dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md), especially
-the outstanding artwork/font permissions. The Gewu license does not clear those
-rights. Do not add a virtual environment, third-party binaries or fonts to a
-release without auditing that exact distribution and retaining required notices.
+GitHub access is required while the repository is private. The Windows installer
+is intentionally unsigned. It does not change Windows security settings. The
+x64 package does not support 32-bit Windows or Windows 10 ARM.
 
-## Version and build
+## Program, database and source
 
-`paper_monitor/__init__.py` owns `__version__` and `__build__`. The App builder
-reads them for About and the bundle; the PDF builder reads the same source.
-The icon checksum only selects a cache-safe icon filename. It is not the build
-number. For a future patch, update the version and reset Build to 1; increase
-Build when packaging a revised build of that same version.
+Setup selects program and database folders independently. Defaults are
+`%LOCALAPPDATA%\Programs\Gewu Insight` and `%USERPROFILE%\Gewu Database`.
+Use **Use existing Gewu Database** to keep an existing collection.
+`%USERPROFILE%\.gewu-insight\database-location.ini` locates the selected
+database; SQLite in that database owns its identity and state.
 
-Regenerate the manual before packaging:
+Browser profiles, logs and cache are under
+`%LOCALAPPDATA%\Gewu Insight\Databases\<identity>`. Uninstall retains the
+database, locator and browser sign-ins. Never repair startup by deleting data.
+Back up the complete stopped database and linked originals before an upgrade;
+see [development and backups](docs/DEVELOPMENT.md#safe-updates-and-backups).
 
-```bash
-.venv/bin/python scripts/build_user_guide_pdf.py
-scripts/build_macos_app.sh
-```
+## Release source and verification
 
-The HTML edition label and About screenshot must also match the intended
-release. Verify the generated PDF and App signature before sharing.
+The October 10 Windows asset and the current `windows-1.0.0` tag both reference
+source commit `725ae8f`. A separately authorized release correction aligned the
+tag and build metadata; the installer bytes stayed unchanged. Read the release's
+build JSON when reproducing a package. The native informational version may
+retain its earlier build revision, as that record explains. Exact metadata and
+the scope of past package inspection are in [the component audit](docs/RELEASE_COMPONENT_AUDIT.md).
 
-## What to Share
+Source changes do not replace installed binaries or published assets.
+Build a fresh payload and versioned installer, test with an isolated collection,
+then install locally and verify the installed version, startup, database identity
+and retained data. See [builds and verification](docs/DEVELOPMENT.md#builds-and-verification).
+The Windows 10 minimum is a declared target; the latest recorded native run was
+on Windows 11. This repository cleanup does not add Windows 10 acceptance evidence.
 
-Use the release script:
+## Package contents and notices
 
-```bash
-scripts/make_release.sh 1.0.0
-```
+`scripts/build_windows.ps1` packages the native shell, CPython service, locked
+Python dependencies, .NET runtime, WebView2 SDK notices, assets and the existing
+Windows HTML/PDF manual. The service's PDF route and native Help use the same
+Windows PDF. Preserve its approved layout and compatibility filenames.
 
-It creates a zip under `dist/` containing:
+New builds also include LICENSE, CONTRIBUTING.md, THIRD_PARTY_NOTICES.md and
+the linked licensing/component audit pages. Nested runtime and wheel licenses
+remain required. Historical macOS build templates and generated TeX are excluded
+from the Windows service payload. Packaging does not copy local research data,
+development archives, credentials or browser profiles.
 
-- `Gewu Insight.app`
-- source code under `paper_monitor/`
-- `config/`
-- `requirements.txt`
-- `README.md`
-- `LICENSE`, `CONTRIBUTING.md`, `THIRD_PARTY_NOTICES.md` and `docs/`
-  (including licensing and audit notes)
-- helper scripts
-- empty `data/` and `reports/` directories
+This source change does not retrofit those documents into an existing installer.
+Inspect every notice copy, payload manifest and actual installer before a future
+release. Static checks do not replace installed-app acceptance.
 
-It does not include local SQLite databases, downloaded PDFs, generated notes,
-logs, virtual environments, or presentation/output artifacts.
+## Research license and publication
 
-## Recipient Requirements
+The [LICENSE](LICENSE) permits academic/non-commercial research use and sharing
+of original and modified versions under its conditions. Commercial use requires
+separate written authorization. Third-party terms and unresolved provenance
+questions remain separate; see [licensing](docs/LICENSING.md) and
+[dependency evidence](docs/DEPENDENCY_LICENSE_AUDIT.md).
 
-The supplied universal launcher requires macOS 14 or later and a working
-`python3` command. The minimum version matches the binary deployment target. On first launch,
-`Gewu Insight.app` creates `.venv`, installs `requirements.txt`, starts the
-local UI, and opens `http://127.0.0.1:8765`.
-
-If the first launch fails, check:
-
-```text
-logs/paper_monitor_launcher.log
-```
-
-If the app only flashes and no page opens, run:
-
-```bash
-scripts/diagnose_macos.sh
-```
-
-The launcher now includes the last few log lines in its failure dialog. Common
-causes are missing `python3`, blocked network access during dependency install,
-quarantine/permission changes introduced by file sharing, or keeping the folder
-inside protected macOS locations such as `Desktop`, `Documents`, or `Downloads`.
-For Finder launch, tell recipients to move the whole folder to a regular location
-such as `~/Applications/PaperMonitor` or `~/PaperMonitor`.
-
-## GitHub
-
-For GitHub, commit source files, `Gewu Insight.app`, `config/`, scripts,
-`README.md`, `DISTRIBUTION.md`, `LICENSE`, `CONTRIBUTING.md`,
-`THIRD_PARTY_NOTICES.md` and `docs/`.
-Keep local data out of git using `.gitignore`.
-
-Describe Gewu as **source-available research software**; use **publicly available
-source code** only once the repository is public. Do not advertise it as
-open-source software or apply a standard-license badge to this custom license.
-Repository visibility and the arXiv/public-release timing are separate decisions.
+Keep this repository private. Commit, push, tag or release publication requires
+an explicit user request. Publish only verified bytes, disclose source/version
+exceptions, and preserve existing history and releases. Windows work remains on
+`Windows`; macOS work remains on `main`.
