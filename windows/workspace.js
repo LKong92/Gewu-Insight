@@ -123,7 +123,7 @@
       .view-switch{flex-shrink:0;padding-left:10px!important;padding-right:10px!important}
       .window-drag-region{pointer-events:none}
       .library-detail{--runtime-empty-brand-right:16px;--runtime-empty-brand-bottom:16px}
-      .runtime-empty-brand-art{opacity:.24;width:clamp(140px,14vw,190px)}
+      .runtime-empty-brand-art{width:clamp(140px,14vw,190px)}
       .runtime-empty-brand-crop{z-index:0}
       .library-detail>:not(.runtime-empty-brand-crop){position:relative;z-index:1}
       .settings-modal-close,.preferences-modal .settings-modal-close{left:auto;right:12px;top:12px;width:28px;min-width:28px;height:28px;min-height:28px;border-radius:4px;background:transparent;border:1px solid #cbd0d8;cursor:pointer}
