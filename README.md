@@ -14,7 +14,8 @@ the researcher.
 
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
-[Website](https://gewu-insight.com) · [Quick start](#quick-start) ·
+[Website](https://gewu-insight.com) · [Paper](https://arxiv.org/abs/2610.14538) ·
+[Quick start](#quick-start) ·
 [Explore the workspace](#explore-the-workspace) ·
 [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) ·
 [AI & MCP](#work-with-an-ai-client) · [Citation](#citation) ·
@@ -277,11 +278,21 @@ recorded separately from the product overview.
 ## Citation
 
 If you use Gewu Insight in your research, please cite the accompanying paper.
-The manuscript is being prepared for arXiv; its identifier and link will be added
-here after it is posted. Until then, the provisional reference is:
 
-> Kong, L. & Wu, Z. A stateful research information infrastructure for scientific
-> discovery. Manuscript in preparation (2026).
+> Kong, L. & Wu, Z. *A Stateful Research Information Infrastructure for Scientific
+> Discovery.* arXiv:2610.14538 (2026). [Read the paper](https://arxiv.org/abs/2610.14538).
+
+```bibtex
+@misc{kong2026stateful,
+  title         = {A Stateful Research Information Infrastructure for Scientific Discovery},
+  author        = {Lingyuan Kong and Zhengran Wu},
+  year          = {2026},
+  eprint        = {2610.14538},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.DL},
+  url           = {https://arxiv.org/abs/2610.14538}
+}
+```
 
 Citation metadata is also available in [CITATION.cff](CITATION.cff) for GitHub's
 **Cite this repository** feature.
@@ -289,9 +300,6 @@ Citation metadata is also available in [CITATION.cff](CITATION.cff) for GitHub's
 The manuscript's evaluation uses the fixed software snapshot
 [commit `539d00d`](https://github.com/LKong92/Gewu-Insight/tree/539d00dd1a3b0f5857912223868ca232d56680c9).
 Use that snapshot when reproducing the reported results.
-
-<!-- After arXiv posting, update this reference and CITATION.cff together with
-     the confirmed author list, title, year, arXiv identifier and canonical URL. -->
 
 ## Name and Chinese origin
 

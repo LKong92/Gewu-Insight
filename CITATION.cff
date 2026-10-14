@@ -1,8 +1,6 @@
 cff-version: 1.2.0
 message: >-
   If you use Gewu Insight in your research, please cite the accompanying paper.
-  This citation is provisional: the manuscript is being prepared for arXiv,
-  and its identifier and link will be added after it is posted.
 type: software
 title: "Gewu Insight"
 authors:
@@ -13,7 +11,7 @@ authors:
 repository-code: "https://github.com/LKong92/Gewu-Insight"
 url: "https://gewu-insight.com"
 preferred-citation:
-  type: unpublished
+  type: article
   title: "A Stateful Research Information Infrastructure for Scientific Discovery"
   authors:
     - family-names: Kong
@@ -21,6 +19,6 @@ preferred-citation:
     - family-names: Wu
       given-names: Zhengran
   year: 2026
-  notes: "Manuscript in preparation for arXiv; not yet posted."
-# After arXiv posting, update preferred-citation and the README Citation section
-# together. Use the confirmed metadata and canonical URL; do not invent an ID.
+  journal: "arXiv"
+  url: "https://arxiv.org/abs/2610.14538"
+  notes: "arXiv:2610.14538 [cs.DL]."
