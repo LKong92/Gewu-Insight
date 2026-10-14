@@ -243,13 +243,23 @@ Configure optional service keys in **Setting** (macOS) or **Settings** (Windows)
 
 ## Platform support
 
+Gewu Insight was originally developed for macOS, which remains the primary
+platform for development and testing. The Windows version was subsequently
+ported from the macOS implementation.
+
 - **macOS** — a standalone desktop release with Finder, Preview, Quick Look,
-  Dock, and native drag-and-drop integration. The manuscript's reported
-  evaluation was performed on macOS.
+  Dock, and native drag-and-drop integration.
 - **Windows** — a separately packaged desktop release for Windows 10/11 x64,
   with its own installer and User Guide. See the
   [Windows release notes](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0)
   for requirements and platform details.
+
+Windows validation is currently more limited. Windows 11 has undergone limited
+testing in a virtual machine. Compatibility fixes for Windows 10 have been guided
+by feedback from external testers, while direct testing and regression
+verification by the development team on Windows 10 remain limited.
+
+The evaluation reported in the accompanying paper was conducted on macOS.
 
 The Python, SQLite, and web-interface core is separated from native desktop
 integration. Screenshots in this README show macOS; use your platform's release
