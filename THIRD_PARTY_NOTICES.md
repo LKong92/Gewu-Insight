@@ -358,8 +358,8 @@ having a software license does not grant independent reuse of that content.
 For the released-package inventory, source evidence and unresolved issues, see
 [the package audit](https://github.com/LKong92/Gewu-Insight/blob/main/docs/RELEASE_COMPONENT_AUDIT.md)
 and [the dependency and asset audit](https://github.com/LKong92/Gewu-Insight/blob/main/docs/DEPENDENCY_LICENSE_AUDIT.md).
-GitHub access is required while the repository is private. Windows source
+These documents are publicly accessible in the repository. Windows source
 packaging now includes these documents in future builds; the currently published
 installers have not been re-inspected in this follow-up. This notice does not
-claim that every
-dependency, asset or future distribution has completed rights clearance.
+claim that every dependency, asset or future distribution has completed rights
+clearance.

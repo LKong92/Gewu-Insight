@@ -5,9 +5,10 @@ Both include Python and application dependencies. Source archives and the
 legacy folder-based packaging script are development paths, not the current
 end-user installers.
 
-The repository remains private. GitHub Releases require repository access;
-contact [info@gewu-insight.com](mailto:info@gewu-insight.com) to arrange access
-or package delivery. Do not change visibility as part of a build or update.
+The repository and GitHub Releases are public; no repository invitation is
+required to download the installers. Contact
+[info@gewu-insight.com](mailto:info@gewu-insight.com) for installation help.
+Do not change repository visibility as part of a build or update.
 
 ## Recipient requirements
 
@@ -128,7 +129,7 @@ Before sharing a new build:
 4. Exclude real databases, papers, credentials, logs, local development archives
    and benchmark artifacts. Preserve research data during program replacement.
 5. Obtain explicit authorization before committing, pushing or publishing.
-   Keep this repository private and preserve existing Git history.
+   Preserve the repository's current visibility and existing Git history.
 
 Retain product source, tests, required build assets and useful documentation in
 Git. Store unused design drafts and machine-specific work logs in the ignored

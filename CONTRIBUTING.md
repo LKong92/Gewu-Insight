@@ -2,8 +2,9 @@
 
 ## Report an issue or suggest a change
 
-This repository is private. Collaborators with access can open an issue;
-others can contact [info@gewu-insight.com](mailto:info@gewu-insight.com).
+This repository is public. Report problems or suggestions through
+[GitHub Issues](https://github.com/LKong92/Gewu-Insight/issues), or contact
+[info@gewu-insight.com](mailto:info@gewu-insight.com).
 Include your operating system, Gewu version/build, steps to reproduce, expected
 and actual behavior, and a small synthetic example when useful. Remove API keys,
 tokens, personal paths and research content from logs and screenshots. Do not
@@ -19,10 +20,9 @@ attach a real database or papers without permission to share them.
 3. Keep the change focused, update affected documentation, and run the relevant
    existing checks. Describe actual validation and any unverified behavior.
    Follow the [commit guidelines](docs/COMMIT_GUIDELINES.md).
-4. Where your repository access permits, submit a PR describing the problem,
-   resulting behavior, data or compatibility effects, and validation. Otherwise,
-   arrange a patch with a maintainer. GitHub access and the license's permission
-   to share research modifications are separate matters.
+4. Submit a PR from a fork describing the problem, resulting behavior, data or
+   compatibility effects, and validation, or arrange a patch with a maintainer.
+   Follow the license's terms for sharing research modifications.
 5. Maintainers review correctness, file/data safety, documentation and third-party
    provenance. External copyrightable contributions also require the written
    authorization described below before merging into the official product.

@@ -175,4 +175,4 @@ No evidence was removed and no authorization was inferred during this review.
    synthetic data. Keep signing limitations and test coverage explicit.
 4. Submit the resulting artifacts and validation for approval before uploading
    new revision assets. Retain the existing releases and checksums; do not silently
-   overwrite a published filename or tag. Keep the repository private.
+   overwrite a published filename or tag. Preserve the repository's current visibility.

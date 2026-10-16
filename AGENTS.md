@@ -26,7 +26,7 @@
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
 - Develop and commit product changes directly on `main`. Do not create extra product branches or PRs unless the user explicitly requests them; GitHub should retain only `main` and the existing Windows branch. Preserve existing isolated local benchmark worktrees without publishing them.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
-- Keep GitHub private. Documentation, cleanup and release work do not authorize changing visibility.
+- The product and evaluation repositories are public by explicit user authorization. Preserve their current visibility; documentation, cleanup and release work do not authorize changing visibility.
 - Keep unused design drafts and machine-specific historical logs in ignored `local-development-archive/`; retain a concise current handoff in Git.
 
 ## Commit Messages

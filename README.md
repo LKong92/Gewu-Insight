@@ -54,9 +54,9 @@ Download the installer for your platform from the release page's **Assets**.
 Both packages include Python and application dependencies. GitHub's **Source
 code ZIP** is for source-based setup, not an App installer.
 
-This repository is currently private. Its GitHub release links require an
-account with repository access; contact [info@gewu-insight.com](mailto:info@gewu-insight.com)
-if you need access or an installation package.
+This repository and its release downloads are public; no repository invitation
+is required. For installation help, contact
+[info@gewu-insight.com](mailto:info@gewu-insight.com).
 
 | Platform | Requirements | Download |
 | --- | --- | --- |
@@ -310,6 +310,10 @@ Citation metadata is also available in [CITATION.cff](CITATION.cff) for GitHub's
 The manuscript's evaluation uses the fixed software snapshot
 [commit `539d00d`](https://github.com/LKong92/Gewu-Insight/tree/539d00dd1a3b0f5857912223868ca232d56680c9).
 Use that snapshot when reproducing the reported results.
+
+Evaluation data and reproducibility materials are available in the public
+[Gewu Insight Evaluation repository](https://github.com/LKong92/Gewu-Insight-Evaluation),
+maintained separately from the product source.
 
 ## Name and Chinese origin
 
