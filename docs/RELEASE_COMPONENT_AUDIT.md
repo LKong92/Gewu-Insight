@@ -1,6 +1,32 @@
 # Released installer components and notices
 
-## Current release metadata — October 10, 2026
+## macOS 1.0.1 package — October 19, 2026
+
+[macOS 1.0.1](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.1)
+Build 1 was built from `f6df8c30c8d1c11bef06287460ccb62cede996ef`; its tag
+and build manifest identify the same source. The DMG is 116,838,335 bytes.
+
+```text
+SHA-256: e788217a885087d7ad09fb041653b6c835b41147d68d23a837bb9447466d614f
+```
+
+Both Python runtime archives match the prior pinned input hashes. Dependencies
+and license inputs were copied from the prior DMG after verifying its checksum.
+The new package contains current contribution/notices documents and the referenced
+audit pages. Its User Guide is unchanged at the user's request; the release notes
+supersede its Default-file deletion guidance and explain the new website editor.
+
+The actual DMG was mounted read-only and its copied App passed strict signature
+verification, isolated service first launch/restart with retained database and
+settings, and the bundled PDF subprocess check. All 241 scoped regressions passed
+against the packaged Python modules. The Intel interpreter ran under Rosetta;
+no native Intel hardware, clean external Mac or Windows acceptance was performed.
+App bytes and signatures remained valid after execution. All five uploaded asset
+hashes matched the local validated files. Existing releases remain available;
+Windows remains at 1.0.0. These checks do not establish additional artwork rights,
+Developer ID signing or Apple notarization.
+
+## Earlier release metadata — October 10, 2026
 
 GitHub release metadata and the attached build JSONs were read again for this
 repository cleanup. Their recorded sizes and hashes agree. The current installers
