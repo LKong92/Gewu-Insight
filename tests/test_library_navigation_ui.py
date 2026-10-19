@@ -263,8 +263,8 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn('"Delete", "Backspace"', resource_keydown)
         self.assertIn("deleteSelectedLibraryPaperResource(selected);", resource_keydown)
         self.assertIn("event.stopImmediatePropagation", resource_keydown)
-        self.assertIn("if (file?.is_primary)", resource_delete)
-        self.assertIn("The current file cannot be deleted", resource_delete)
+        self.assertNotIn("if (file?.is_primary)", resource_delete)
+        self.assertNotIn("The current file cannot be deleted", resource_delete)
         self.assertIn("await deletePaperFile(paperId, resourceId)", resource_delete)
         self.assertNotIn("deleteSelectedLibraryEntries", resource_delete)
         self.assertLess(

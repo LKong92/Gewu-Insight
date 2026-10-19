@@ -2405,6 +2405,12 @@ class Storage:
         Only metadata refresh opts in; import identity and merge guards remain
         unchanged. An unrelated published DOI can never use this exception.
         """
+        from .text import is_arxiv_page_header
+        if (is_arxiv_page_header(existing.get('title'))
+                and normalize_doi(existing.get('doi'))
+                and normalize_doi(existing.get('doi')) == normalize_doi(incoming.get('doi'))
+                and cls._identity_authors(existing).intersection(cls._identity_authors(incoming))):
+            existing = {**existing, 'title': ''}
         if not linked_preprint_id:
             return existing
         old_doi = normalize_doi(existing.get("doi"))
@@ -2438,6 +2444,12 @@ class Storage:
         timestamp = now_iso()
         existing_raw = self._paper_raw_dict(existing)
         incoming_raw = self._paper_raw_dict(paper)
+        # Refreshes must retain the user's website choice, including edits made
+        # while a remote metadata request was in flight.
+        if 'website_url_override' in existing_raw:
+            incoming_raw['website_url_override'] = existing_raw['website_url_override']
+        else:
+            incoming_raw.pop('website_url_override', None)
         existing_sources = (
             existing_raw.get("_paper_monitor_sources")
             if isinstance(existing_raw.get("_paper_monitor_sources"), list)

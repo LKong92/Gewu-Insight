@@ -1,6 +1,6 @@
 # PROJECT_STATE.md — Current handoff
 
-Updated: October 16, 2026. Keep this file under 100 lines and focused on current state.
+Updated: October 19, 2026. Keep this file under 100 lines and focused on current state.
 
 ## Repository and delivery
 
@@ -16,6 +16,9 @@ Updated: October 16, 2026. Keep this file under 100 lines and focused on current
 - October 10 Windows repository cleanup uses a separate `Windows` worktree, based on `dc2f84f`; the user authorized committing and publishing both scoped change sets. Main corrects release links and separates current metadata from the historical package audit. Current package sources: macOS `eb8714d`, Windows `725ae8f`; the Windows tag now matches `725ae8f` after a separate authorized correction, while the macOS tag retains its historical revision. Installer rebuilding and Release asset changes are outside this cleanup.
 
 ## Source and data separation
+
+- October 19 scoped fixes: empty leftover Associated Files directories no longer block placement synchronization; occupied directories with files still fail safely. Paper Files permits deleting the Default/last file while preserving the paper, repairing pointers and retaining shared/linked originals. Website projection rejects metadata API URLs, AI imports retain those URLs as provenance, and Open Website has a right-click editor with a refresh-persistent override/reset. Matching DOI plus author evidence permits replacing a mistakenly imported arXiv page-header title during metadata refresh.
+- Validation: scoped file/metadata/import/link and identity regression suites, two native drag probes, real Chromium paper/folder drag, website editor and last-file deletion checks, Python compilation and whitespace checks passed. Installed only six changed modules in the original standalone App, preserving its subprocess isolation shim; signatures and App health verified. Refreshed `gw_efd86df5d7` successfully in the native App and checked its link editor. Original App ZIP, SQLite backup, test logs and disposable UI probe are ignored under `local-development-archive/bugfix-20261019/`. User authorized committing and pushing these fixes to main and publishing a new macOS Release on October 19; existing public visibility is confirmed.
 
 - Daily macOS App: `/Applications/Gewu Insight.app`. Discover the selected Gewu Database from the installed App; never copy another machine's formal data path.
 - SQLite in the selected workspace is authoritative. Back up the entire database folder, additional managed roots and externally linked originals with the App/service stopped.

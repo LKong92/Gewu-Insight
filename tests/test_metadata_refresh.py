@@ -33,6 +33,24 @@ def published(doi=DOI):
 
 
 class MetadataRefreshTests(unittest.TestCase):
+    def test_matching_doi_and_authors_repair_imported_arxiv_page_header(self):
+        self.storage.conn.execute('UPDATE papers SET title=?,doi=? WHERE paper_id=?',
+            ('arXiv:1111.4815V₂ [cond-mat.str-el] ₂₂NoV 2011', DOI, self.pid))
+        self.storage.conn.commit()
+        before = self.storage.get_paper(self.pid)
+        result = self.refresh()['paper']
+        self.assertEqual(result['title'], published()['title'])
+        self.assertEqual(result['journal'], published()['journal'])
+        self.assertEqual(result['storage_key'], before['storage_key'])
+
+    def test_real_title_conflict_still_rejected_for_same_doi(self):
+        self.storage.conn.execute('UPDATE papers SET title=?,doi=? WHERE paper_id=?',
+            ('Entirely unrelated biology and medicine', DOI, self.pid))
+        self.storage.conn.commit()
+        result = self.refresh()
+        self.assertEqual(result['paper']['title'], 'Entirely unrelated biology and medicine')
+        self.assertTrue(result['metadata_refresh']['conflicts'])
+
     def setUp(self):
         updates = patch.object(work.notice_discovery, 'fetch_updates', return_value=[])
         updates.start(); self.addCleanup(updates.stop)

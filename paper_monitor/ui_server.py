@@ -41,6 +41,7 @@ from pypdf import PdfReader, PdfWriter
 import requests
 
 from . import finder_alias
+from .paper_website import website_url, save_website_url
 from . import folder_rename
 from .file_layout import normalize_files, sync_associated_aliases, finish_aliases, bundle_name
 from . import search_matching, author_profile_retry, publication_notices, notice_discovery
@@ -865,6 +866,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/paper-files/delete":
                 self.handle_delete_paper_file(payload)
+                return
+            if parsed.path == "/api/paper-website":
+                self.handle_update_paper_website(payload)
                 return
             if parsed.path == "/api/paper-files/arxiv":
                 self.handle_download_arxiv_versions(payload)
@@ -4819,6 +4823,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"paper": paper_to_api(result["paper"]), "metadata_refresh": result["metadata_refresh"], "paper_files": files,
                         "publications": publications, **snapshot})
+
+    def handle_update_paper_website(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = save_website_url(storage, str(payload.get("paper_id") or ""), payload.get("url"))
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"paper": paper_to_api(paper)})
 
     def handle_update_preprint_identifier(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
@@ -10251,7 +10269,8 @@ def paper_to_api(
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
-        "url": paper.get("url") or paper.get("landing_url") or "",
+        "url": website_url(paper),
+        "website_url_override": raw.get("website_url_override") or "",
         "section": section,
         "section_color": section_color(section),
         "section_badge_background": section_badge_background(section),
@@ -10336,7 +10355,7 @@ def monitor_paper_to_api(
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
-        "url": paper.get("url") or paper.get("landing_url") or "",
+        "url": website_url(paper),
         "section": section,
         "section_color": section_color(section),
         "section_badge_background": section_badge_background(section),
@@ -10420,7 +10439,7 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
-        "url": paper.get("url") or paper.get("landing_url") or "",
+        "url": website_url(paper),
         "authors": author_summary(paper),
         "full_authors": full_author_names(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
@@ -22096,40 +22115,30 @@ def update_paper_resource_role(
 
 
 def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+    with paper_download_lock(storage.db_path, storage.resolve_paper_id(paper_id)):
+        return _delete_paper_resource(storage, paper_id, resource_id)
+
+
+def _delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+    from .file_reassignment import _repair_source_pointers
     paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
         raise KeyError(int(resource_id))
-    if (int(paper.get("primary_resource_id") or 0) == int(resource_id)
-            or int(parse_raw_json(paper).get("file_layout", {}).get("default_resource_id") or 0) == int(resource_id)):
-        raise ValueError("The current default file cannot be deleted. Select another version first.")
-
-    stored_text = clean_text(resource.get("stored_path") or "")
+    stored_text = clean_text(storage.resource_local_path(resource))
     stored_path = Path(stored_text).expanduser().resolve() if stored_text else None
     managed_roots = local_copy_roots(include_legacy=True)
     managed_file = bool(
         stored_path
         and stored_path.is_file()
         and is_allowed_file(stored_path, managed_roots)
+        and resource.get("storage_mode") != "linked"
     )
-    shared_file = False
-    if managed_file and stored_path:
-        shared_resource = storage.conn.execute(
-            "SELECT 1 FROM resources WHERE id != ? AND stored_path = ? LIMIT 1",
-            (int(resource_id), stored_text),
-        ).fetchone()
-        shared_paper = storage.conn.execute(
-            """
-            SELECT 1 FROM papers
-            WHERE main_pdf_path = ? OR merged_pdf_path = ?
-            LIMIT 1
-            """,
-            (stored_text, stored_text),
-        ).fetchone()
-        shared_file = bool(shared_resource or shared_paper)
+    shared_file = bool(stored_path and paper_resource_path_is_shared(storage, stored_path, paper_id, resource_id))
 
     trash_destination: Path | None = None
+    removed_aliases = []
     if managed_file and stored_path and not shared_file:
         trash_destination = move_path_to_macos_trash(stored_path)
     try:
@@ -22143,22 +22152,48 @@ def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> 
             (str(paper_id), int(resource_id)),
         )
         storage.conn.execute("DELETE FROM resources WHERE id = ?", (int(resource_id),))
+        _repair_source_pointers(storage, paper, resource)
+        remaining = storage.list_paper_resources(paper_id, ensure_primary=False)
+        if not remaining:
+            raw = parse_raw_json(storage.get_paper(paper_id))
+            for value in raw.get("file_layout", {}).get("associated_aliases", []):
+                alias = Path(value)
+                if finder_alias.is_alias(alias):
+                    removed_aliases.append((alias, finder_alias.snapshot(alias)))
+                    alias.unlink()
+            raw.pop("file_layout", None)
+            if isinstance(raw.get("import"), dict):
+                raw["import"]["stored_path"] = ""
+            storage.conn.execute("""UPDATE papers SET primary_resource_id=NULL,
+                preferred_resource_id=NULL, preferred_resource_manual=0, main_pdf_path='',
+                merged_pdf_path='', source_path='', download_status='pending', download_message='',
+                raw_json=? WHERE paper_id=?""", (json.dumps(raw, ensure_ascii=False), paper_id))
+        if stored_path and not shared_file:
+            for root in (LIBRARY_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT):
+                for alias in finder_alias.iter_aliases(root):
+                    if finder_alias.points_to(alias, stored_path):
+                        removed_aliases.append((alias, finder_alias.snapshot(alias)))
+                        alias.unlink()
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
         if stored_path and not stored_path.exists() and trash_destination and trash_destination.exists():
             stored_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(trash_destination), str(stored_path))
+        for alias, saved in reversed(removed_aliases):
+            finder_alias.restore(alias, saved)
         raise
     if managed_file and stored_path and not shared_file:
         cleanup_local_copy_empty_parents([str(stored_path)])
-    sync_associated_aliases(storage, str(paper_id))
+    from .file_layout import reconcile_after_write
+    reconcile_after_write(storage, str(paper_id))
     return {
         "resource_id": int(resource_id),
         "name": clean_text(resource.get("display_name") or "") or (stored_path.name if stored_path else "Attached File"),
         "trashed": bool(managed_file and not shared_file),
         "shared_file_preserved": bool(shared_file),
-        "external_source_preserved": bool(stored_path and not is_allowed_file(stored_path, managed_roots)),
+        "external_source_preserved": bool(stored_path and (resource.get("storage_mode") == "linked"
+                                                         or not is_allowed_file(stored_path, managed_roots))),
     }
 
 
@@ -46976,7 +47011,7 @@ INDEX_HTML = """<!doctype html>
               ${file.exists && file.file_type !== "invalid_file" && !file.is_preferred ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}" title="Use this file for Open in Preview and paper preview">Set as Default</button>` : ""}
               ${file.is_default && file.is_preferred ? `<button class="action" type="button" data-action="auto-paper-file" title="Let Gewu Insight choose the default from file type">Use Automatic Selection</button>` : ""}
               ${file.exists ? `<button class="action" type="button" data-action="reveal-paper-file" data-file-path="${escapeAttr(file.local_path || "")}">Show in Finder</button>` : ""}
-              ${!file.is_primary ? `<button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>` : ""}
+              <button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>
             </span>
           </span>
         </div>
@@ -47483,6 +47518,79 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function wirePaperWebsiteEditor(root, paper) {
+      const button = root?.querySelector('[data-action="open-library-page"], [data-action="author-open-page"], [data-action="open-page"]');
+      if (!button || button.dataset.websiteEditor) return;
+      button.dataset.websiteEditor = "true";
+      button.title = "Right-click to edit website link";
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideThemeContextMenu();
+        const menu = document.createElement("div");
+        menu.className = "library-context-menu open theme-context-menu";
+        menu.innerHTML = '<button type="button">Edit Website Link…</button>';
+        document.body.appendChild(menu);
+        menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8))}px`;
+        menu.querySelector("button").onclick = () => { menu.remove(); openPaperWebsiteEditor(paper); };
+      });
+    }
+
+    function openPaperWebsiteEditor(paper) {
+      document.getElementById("paperWebsiteBackdrop")?.remove();
+      const dialog = document.createElement("div");
+      dialog.id = "paperWebsiteBackdrop";
+      dialog.className = "settings-backdrop open";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-labelledby", "paperWebsiteTitle");
+      dialog.innerHTML = `<div class="settings-modal" style="width:min(600px,92vw);padding:20px">
+        <h2 id="paperWebsiteTitle">Edit Website Link</h2>
+        <p style="overflow-wrap:anywhere">${escapeHtml(paper.title || "Paper")}</p>
+        <label for="paperWebsiteInput">Article website or DOI URL</label>
+        <input id="paperWebsiteInput" type="url" style="width:100%;box-sizing:border-box;margin:8px 0" value="${escapeAttr(paper.url || "")}">
+        <p>Refresh Info keeps your saved link. Metadata is refreshed using DOI/arXiv.</p>
+        <p role="status" style="overflow-wrap:anywhere"></p>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
+          <button type="button" class="smallbtn" data-website="auto">Use Automatic Link</button>
+          <button type="button" class="smallbtn" data-website="cancel">Cancel</button>
+          <button type="button" class="smallbtn" data-website="save">Save</button>
+        </div></div>`;
+      document.body.appendChild(dialog);
+      const input = dialog.querySelector("input");
+      const status = dialog.querySelector('[role="status"]');
+      let busy = false;
+      const close = () => { if (!busy) dialog.remove(); };
+      const save = async (automatic) => {
+        if (busy) return;
+        const url = automatic ? "" : input.value.trim();
+        if (!automatic && !url) { status.textContent = "Enter a website URL, or choose Use Automatic Link."; return; }
+        busy = true;
+        dialog.querySelectorAll("button").forEach(button => { button.disabled = true; });
+        try {
+          const response = await fetch("/api/paper-website", {method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_id: paper.paper_id, url})});
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Could not save website link");
+          Object.assign(paper, data.paper);
+          updatePaperState(paper.paper_id, data.paper);
+          dialog.remove();
+        } catch (error) { status.textContent = error.message; }
+        finally { busy = false; dialog.querySelectorAll("button").forEach(button => { button.disabled = false; }); }
+      };
+      dialog.querySelector('[data-website="cancel"]').onclick = close;
+      dialog.querySelector('[data-website="auto"]').onclick = () => save(true);
+      dialog.querySelector('[data-website="save"]').onclick = () => save(false);
+      dialog.onclick = event => { if (event.target === dialog) close(); };
+      dialog.addEventListener("keydown", event => {
+        if (event.key === "Escape") { event.stopPropagation(); close(); }
+        if (event.key === "Enter" && event.target === input) { event.preventDefault(); save(false); }
+      });
+      input.focus();
+      input.select();
+    }
+
     function wirePreprintIdentifierControls(root, paper) {
       wireDoiIdentifierControls(root, paper);
       if (root) {
@@ -47970,6 +48078,7 @@ INDEX_HTML = """<!doctype html>
         wireLibraryFolderOccurrenceControls(root);
         wireLibraryFileLocationLinks(root);
         wirePreprintIdentifierControls(root, paper);
+        wirePaperWebsiteEditor(root, paper);
         loadLibraryItemPaperDetail(item);
         return;
       }
@@ -47992,7 +48101,7 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${isPdfLike ? `<button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
-          ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          <button class="action" data-action="open-library-page" title="Right-click to edit website link">Open Website</button>
           </div>
           <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
@@ -48027,6 +48136,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
+      wirePaperWebsiteEditor(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
       wireLibraryFolderOccurrenceControls(root);
       wireLibraryFileLocationLinks(root);
@@ -48179,6 +48289,7 @@ INDEX_HTML = """<!doctype html>
         `;
         wireLibraryFileLocationLinks(root);
         wirePreprintIdentifierControls(root, paper);
+        wirePaperWebsiteEditor(root, paper);
         loadMyPublicationPaperDetail(publication);
         return;
       }
@@ -48189,7 +48300,7 @@ INDEX_HTML = """<!doctype html>
           <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
-          ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          <button class="action" data-action="open-library-page" title="Right-click to edit website link">Open Website</button>
           </div>
           <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
@@ -48229,6 +48340,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
+      wirePaperWebsiteEditor(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
       root.querySelector('[data-action="publication-comments"]')?.addEventListener("click", () => openMyPublicationComments(publication.id));
       wireLibraryFileLocationLinks(root);
@@ -50009,13 +50121,6 @@ INDEX_HTML = """<!doctype html>
       if (!paperId || !resourceId) return false;
       const deletionKey = `${paperId}:${resourceId}`;
       if (state.deletingPaperResources.has(deletionKey)) return true;
-      if (file?.is_primary) {
-        updateLibraryActivityStatus(
-          "The current file cannot be deleted. Select another Publication Version first.",
-          {live: false, clear: false}
-        );
-        return true;
-      }
       const name = file?.display_name || String(file?.local_path || "").split("/").pop() || "Attached File";
       if (!window.confirm(`Delete “${name}” from this paper?\n\nIts private managed copy, if present, will be moved to macOS Trash.`)) return true;
       const filesBeforeDelete = orderedLibraryPaperResources(paperId);
@@ -50225,7 +50330,7 @@ INDEX_HTML = """<!doctype html>
         button.onclick = () => { hidePaperResourceContextMenu(); openPaperFileReassignment(paperId, file, createNew); };
       }
       if (deleteButton) {
-        deleteButton.style.display = file && !file.is_primary ? "" : "none";
+        deleteButton.style.display = file ? "" : "none";
         deleteButton.onclick = () => {
           hidePaperResourceContextMenu();
           deleteSelectedLibraryPaperResource(file);
@@ -54796,6 +54901,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshAuthorMonitorMetadataFromIdentifier(paper));
       wirePreprintIdentifierControls(root, paper);
+      wirePaperWebsiteEditor(root, paper);
       wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);

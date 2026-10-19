@@ -287,7 +287,7 @@ class PaperFilesUiTests(unittest.TestCase):
         )[0]
         self.assertIn("event.stopPropagation()", menu)
         self.assertIn("hideLibraryContextMenu()", menu)
-        self.assertIn('deleteButton.style.display = file && !file.is_primary', menu)
+        self.assertIn('deleteButton.style.display = file ?', menu)
         self.assertIn('addButton.style.display = file ? "none" : ""', menu)
         self.assertIn('syncButton.style.display = !file && paper?.preprint_id', menu)
 
@@ -453,7 +453,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('Default · ${paperFileRoleLabel(defaultFile)}', INDEX_HTML)
         self.assertIn('paper-files-current-summary', INDEX_HTML)
         self.assertIn('data-action="delete-paper-file"', INDEX_HTML)
-        self.assertIn('!file.is_primary', INDEX_HTML)
+        self.assertNotIn('!file.is_primary', INDEX_HTML)
         launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")
         self.assertIn("runJavaScriptConfirmPanelWithMessage", launcher)
         self.assertIn('addButtonWithTitle:@"Delete"', launcher)

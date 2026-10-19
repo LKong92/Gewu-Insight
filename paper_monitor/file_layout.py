@@ -190,6 +190,14 @@ def sync_associated_aliases(storage, paper_id):
         if path and path != bundle:
             expected.add(path)
     for path in expected:
+        # Moving the last registered file can leave empty role directories at
+        # a former placement. Remove only empty directories, never file bytes.
+        if path.is_dir() and not finder_alias.is_alias(path):
+            for directory, _, _ in os.walk(path, topdown=False, followlinks=False):
+                try:
+                    Path(directory).rmdir()
+                except OSError:
+                    pass
         if finder_alias.points_to(path, bundle):
             finder_alias.ensure(bundle, path)
         elif path in previous and finder_alias.is_alias(path):
