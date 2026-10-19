@@ -1,6 +1,6 @@
 # Distributing Gewu Insight
 
-Gewu Insight 1.0.0 is available as separate macOS and Windows installers.
+Gewu Insight is available as macOS 1.0.1 and Windows 1.0.0 installers.
 Both include Python and application dependencies. Source archives and the
 legacy folder-based packaging script are development paths, not the current
 end-user installers.
@@ -14,7 +14,7 @@ Do not change repository visibility as part of a build or update.
 
 | Platform | Requirements | Package and instructions |
 | --- | --- | --- |
-| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0) |
+| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.1 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.1) |
 | Windows | Windows 10 version 1607+ or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) |
 
 On macOS, open the DMG, drag Gewu Insight.app to Applications, eject the image,
@@ -66,12 +66,11 @@ Outstanding artwork/font permissions are recorded in the
 [dependency and asset audit](docs/DEPENDENCY_LICENSE_AUDIT.md). The Gewu license
 does not supply those permissions.
 
-The [current installer inventory](docs/RELEASE_COMPONENT_AUDIT.md) records the
-components and notices actually found in both published packages. Their top-level
-third-party notices predate the standalone documentation update; Windows also
-lacks CONTRIBUTING.md. Repository edits do not repair those downloaded packages.
-The inventory lists the corrections and validation required for a new package;
-existing release assets remain unchanged.
+The [installer inventory](docs/RELEASE_COMPONENT_AUDIT.md) distinguishes current
+release metadata from historical package inspections. The macOS 1.0.1 build
+includes current notices, CONTRIBUTING.md and the referenced documents. Earlier
+package findings and Windows limitations remain recorded; previous release assets
+remain unchanged.
 
 ## Build paths
 

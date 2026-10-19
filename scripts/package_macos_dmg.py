@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a private-test, self-contained DMG from an explicit Git revision.
+"""Build a self-contained DMG from an explicit Git revision.
 
 Does not update the checkout, installed App, user data, or any Git branch.
 Only a staging copy receives the standalone path adaptations. Supply verified
@@ -7,6 +7,7 @@ python-build-standalone archives, their matching license directories and pure
 Python dependencies. No Developer ID, keychain access, or notarization is used.
 """
 import argparse
+import ast
 import hashlib
 import importlib.metadata
 import json
@@ -124,8 +125,10 @@ def main():
         copy_tree(source / name, project / name)
     (project / "scripts").mkdir()
     shutil.copy2(source / "scripts/gewu_mcp.py", project / "scripts/gewu_mcp.py")
-    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "requirements.txt"):
+    for name in ("LICENSE", "CONTRIBUTING.md", "THIRD_PARTY_NOTICES.md", "requirements.txt",
+                 "README.md", "DISTRIBUTION.md", "AGENTS.md"):
         shutil.copy2(source / name, project / name)
+    copy_tree(source / "docs", project / "docs")
     copy_tree(inputs / "deps", resources / "dependencies")
     shutil.rmtree(resources / "dependencies/bin", ignore_errors=True)
     shutil.copy2(HERE / "macos_standalone_entry.py", resources / "macos_standalone_entry.py")
@@ -175,7 +178,15 @@ def main():
           "license": dist.metadata.get("License-Expression") or dist.metadata.get("License", "See bundled license")}
          for dist in importlib.metadata.distributions(path=[str(inputs / "deps")])],
         key=lambda entry: entry["name"].lower())
-    manifest = {"source_commit": commit, "architectures": ["arm64", "x86_64"],
+    version = {}
+    for node in ast.parse((source / "paper_monitor/__init__.py").read_text()).body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {"__version__", "__build__"}:
+                    version[target.id] = ast.literal_eval(node.value)
+    manifest = {"product": "Gewu Insight", "version": version["__version__"],
+                "build": version["__build__"],
+                "source_commit": commit, "architectures": ["arm64", "x86_64"],
                 "minimum_macos": "14.0", "developer_id_signed": False, "notarized": False,
                 "local_integrity_signature": "ad-hoc", "runtimes": lock,
                 "dependencies": dependencies, "standalone_adapted_files": adapted,
@@ -185,7 +196,7 @@ def main():
                     ("package_macos_dmg.py", "macos_standalone_entry.py", "macos_standalone_server.sh")}}
     (resources / "Standalone Build.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (resources / "BUNDLED_RUNTIME_NOTICES.txt").write_text(
-        "This private-test build bundles CPython from Astral python-build-standalone.\n"
+        "This build bundles CPython from Astral python-build-standalone.\n"
         "See Runtime Licenses for exact build metadata and component license texts.\n"
         "Python dependencies, their readable source, license files and metadata are in dependencies/.\n"
         "certifi includes Mozilla's CA bundle under MPL-2.0; its source and license are included.\n"
@@ -211,7 +222,7 @@ def main():
         run("/usr/bin/codesign", "--verify", "--strict", path)
     run("/usr/bin/codesign", "--verify", "--deep", "--strict", app)
     (image_root / "Applications").symlink_to("/Applications")
-    instructions = f"""Gewu Insight — Private Mac Preview
+    instructions = f"""Gewu Insight {version['__version__']} · Build {version['__build__']} — macOS
 
 1. Drag Gewu Insight.app to Applications.
 2. Eject this disk image, then open Gewu Insight from Applications.
@@ -234,7 +245,7 @@ first launch, backup, updates and migration. Follow this file for package-specif
 Optional Word conversion and TeX exports may require external tools.
 
 Source: LKong92/Gewu-Insight, main commit {commit}
-This preview adds only standalone packaging/path adapters to that source.
+This package adds only standalone packaging/path adapters to that source.
 No personal research database, browser session, API key or AI access token is included.
 """
     (image_root / "Read Me.txt").write_text(instructions)
@@ -245,7 +256,9 @@ No personal research database, browser session, API key or AI access token is in
         "-format", "UDZO", "-fs", "HFS+", temporary_dmg)
     run("/usr/bin/hdiutil", "verify", temporary_dmg)
     shutil.copy2(temporary_dmg, output)
-    output.with_suffix(".dmg.sha256").write_text(f"{sha256(output)}  {output.name}\n")
+    digest = sha256(output)
+    manifest["installer"] = {"name": output.name, "bytes": output.stat().st_size, "sha256": digest}
+    output.with_suffix(".dmg.sha256").write_text(f"{digest}  {output.name}\n")
     output.with_suffix(".build.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(output)
 
