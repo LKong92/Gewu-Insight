@@ -1,11 +1,15 @@
 # User Guide screenshot inventory
 
-Edition: October 10, 2026 · Version 1.0.0 / Build 1.
-HTML and PDF share 38 packaged PNG captures. The October 10 pass replaces the Space and shortcut illustrations with full-screen captures of the current App artwork, and recaptures the User Guide window without a mouse pointer or control overlay. Other figures remain unchanged, including the clean empty Add Monitored Author form.
+Edition: October 25, 2026 · Version 1.0.1 / Build 1 · Zotero companion 0.3.1 preview.
+HTML and PDF share 42 packaged PNG captures. This pass adds the real standalone
+installation guide and the installed Zotero companion workspace, Save to Zotero
+and Connection Settings dialogs. All six workspace tabs remain visible.
+The other 38 captures are retained, including the October 10
+Space, shortcut and Guide images and the clean empty Add Monitored Author form.
 
 ## Capture rules and retained capture history
 
-- New captures come from the real original Gewu Insight App. No synthetic UI, altered literature, painted-out controls or stitched states.
+- New captures come from the real original Gewu Insight App or, for the Zotero chapter, its installed companion in the real Zotero App. No synthetic UI, altered literature, painted-out controls or stitched states.
 - Replace Journal Monitor and Subject Monitor to show the Sunday-first calendars and current sidebar/report layout. Journal Monitor uses Nature with visible figures.
 - Replace the Guide opening to show the current edition, current research-sharing text and full topic navigation. Native fullscreen removes the control overlay without cropping the interface.
 - Add Publication updates expanded beneath Monitor Summary/late arrivals, with two notices matching the saved Field selection. All main-window images retain all six top tabs and contain no Computer Use overlay.
@@ -57,3 +61,7 @@ HTML and PDF share 38 packaged PNG captures. The October 10 pass replaces the Sp
 | Visual Identity and Cultural Elements | [about-window.png](../assets/user-guide/screenshots/about-window.png) | Sep 13; reviewed Oct 2 | About Gewu Insight. Open the application menu and choose About Gewu Insight to see the product name, version and calligraphic signature. |
 | Startup, Monitor Cache, and Text Size | [font-size.png](../assets/user-guide/screenshots/font-size.png) | Sep 13; reviewed Oct 2 | Font Size. Preview one of five reading sizes. Save keeps the selected size; Cancel restores the previous preference. |
 | Startup, Monitor Cache, and Text Size | [database-location.png](../assets/user-guide/screenshots/database-location.png) | Oct 6 | Database Location. Actual installed App dialog, captured without retouching or an overlay. The desktop path is one Mac’s example; the text explains that a populated database needs verified migration before changing its location. |
+| Zotero: One Workspace, Two Interfaces | [zotero-workspace.png](../assets/user-guide/screenshots/zotero-workspace.png) | Oct 25 | Actual daily Zotero 10.0.6 with companion 0.3.1, all six Gewu tabs and the upper-right menu. Original selected database and existing paper. Fullscreen, no control overlay or visible pointer. No save, download or metadata edit. |
+| Zotero: Install, Update, and Remove the Plugin | [zotero-installation.png](../assets/user-guide/screenshots/zotero-installation.png) | Oct 25 | Actual original Gewu App, installed 0.3.1 state, persistent three-step guide expanded. Caption explicitly distinguishes installed Open in Zotero from first-time Install in Zotero. Fullscreen, no control overlay or visible pointer. No uninstall or reinstallation for the illustration. |
+| Zotero: Save Papers and Preview PDFs | [zotero-save.png](../assets/user-guide/screenshots/zotero-save.png) | Oct 25 | Actual daily Zotero Save to Zotero dialog, destination and optional Default PDF copy. All six tabs retained; no overlay or pointer. Cancelled without creating a Zotero item. |
+| Zotero: Connection Settings and Troubleshooting | [zotero-connection.png](../assets/user-guide/screenshots/zotero-connection.png) | Oct 25 | Actual connected companion with Advanced expanded, existing database path, local address and background startup. All six tabs retained; no overlay or pointer. Closed without changing settings. The path is explicitly identified as one Mac's example. |

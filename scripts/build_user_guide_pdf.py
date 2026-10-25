@@ -26,6 +26,10 @@ PDF_OUTPUT = ROOT / "paper_monitor" / "Gewu_Insight_User_Guide.pdf"
 VERSION_SOURCE = ROOT / "paper_monitor" / "__init__.py"
 
 IMAGE_ROUTES = {
+    "/user-guide-assets/zotero-save.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-save.png",
+    "/user-guide-assets/zotero-connection.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-connection.png",
+    "/user-guide-assets/zotero-installation.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-installation.png",
+    "/user-guide-assets/zotero-workspace.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-workspace.png",
     "/api/about-calligraphy": ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png",
     "/api/app-icon": ROOT / "assets" / "gewu-insight-app-icon.png",
     "/api/startup-brand-art?v=ac0025861a5d": ROOT / "assets" / "branding" / "GewuSealGlyphsGuide.png",
@@ -81,6 +85,7 @@ PART_BY_GROUP = {
     "Author Monitor": "User Manual",
     "Browser": "User Manual",
     "Settings and Safety": "User Manual",
+    "Zotero Integration": "User Manual",
     "About Gewu Insight": "Product Identity",
     "Reference": "Technical and Operational Reference",
 }

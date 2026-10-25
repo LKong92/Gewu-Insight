@@ -1,7 +1,8 @@
 # User Guide coverage and provenance
 
-The current manual is the October 6, 2026 edition for macOS 1.0.0 / Build 1.
-The coverage table records that edition's 49 topics. This page summarizes its
+The current manual is the October 25, 2026 edition for macOS 1.0.1 / Build 1,
+including the local Zotero companion 0.3.1 preview. The coverage table records
+53 topics, retaining the October 6 baseline and adding four Zotero topics. This page summarizes its
 sources and maintenance requirements; it is not a new App or installer audit.
 Windows has its own bundled User Guide.
 
@@ -9,8 +10,7 @@ Windows has its own bundled User Guide.
 
 - Editable source: `paper_monitor/user_guide.html`; PDF builder:
   `scripts/build_user_guide_pdf.py`.
-- The manual uses 38 original-App screenshots. The Guide window and Database
-  Location images were updated for the October 6 edition. See
+- The manual uses 42 screenshots from the original App and its installed Zotero companion. Four Zotero figures were captured on October 25; the other 38 captures are retained. See
   [the screenshot inventory and capture rules](USER_GUIDE_SCREENSHOTS.md).
 - Preserve all six tabs, the clean empty Add Monitored Author form without
   cooldown text, Hong Ding in Author Monitor, Nature with figures in Journal
@@ -22,11 +22,11 @@ Windows has its own bundled User Guide.
 
 ## Topic-by-topic coverage
 
-Each existing topic and anchor appears exactly once below. Accurate material is retained; review does not mean every paragraph needs rewriting.
+Each topic and anchor appears exactly once below. The four Zotero rows and welcome edition were reviewed on October 25; other rows retain the October baseline audit rather than claiming a fresh review of every feature.
 
 | Topic | Review result |
 |---|---|
-| [Welcome](../paper_monitor/user_guide.html#welcome) | Update edition to October 6; retain product version/build and mission; local ownership now names the selected research folder. |
+| [Welcome](../paper_monitor/user_guide.html#welcome) | October 25 companion edition, App 1.0.1 / Build 1 with separately versioned plugin preview; prominently explain one Gewu workspace through two interfaces and link to the new chapter. |
 | [Guided Tour](../paper_monitor/user_guide.html#guided-tour) | Check Help navigation, search, Print Guide and six main tabs; replace the opening screenshot with the actual October 6 window. |
 | [Your First Session](../paper_monitor/user_guide.html#first-session) | Add first-launch database choices, whole-workspace selection, remembered locations and the old-installation migration link; retain paper import instructions. |
 | [System Architecture at a Glance](../paper_monitor/user_guide.html#system-overview) | Verify six workspaces, canonical paper identity, independent resources, SQLite and external provider boundaries. |
@@ -69,6 +69,10 @@ Each existing topic and anchor appears exactly once below. Accurate material is 
 | [Naming and PDF Rename Rules](../paper_monitor/user_guide.html#naming) | Add extension preservation when long basenames are shortened; retain templates and separate logical identity. |
 | [How Gewu Insight Stores Files](../paper_monitor/user_guide.html#storage-model) | Verify canonical main file, Associated Files, Finder aliases, stable identity and collision protection. |
 | [Local Data and Privacy](../paper_monitor/user_guide.html#privacy) | Replace project-local file claims with selected workspace storage; preserve API, local access and browser-profile boundaries. |
+| [One Workspace, Two Interfaces](../paper_monitor/user_guide.html#zotero-workspace) | One installed Gewu host, one selected database, shared Library/Paper Files/settings/API/MCP; separate Zotero library and Browser sessions; handoff, background service, pause and refresh/unlock. |
+| [Install, Update, and Remove the Plugin](../paper_monitor/user_guide.html#zotero-install) | Persistent XPI guide, exact Plugins Manager drop target, separate app/plugin status, bundled updates, removal and current preview validation boundaries. |
+| [Save Papers and Preview PDFs](../paper_monitor/user_guide.html#zotero-save) | Gewu save versus explicit one-way Zotero copy; destination, optional Default PDF, deduplication, notifications, embedded Quick Look and unfinished migration boundary. |
+| [Connection Settings and Troubleshooting](../paper_monitor/user_guide.html#zotero-connection) | Existing database root, normally automatic loopback address, background startup, reconnect, missing tab/menu/PDF and paused-window recovery. |
 | [Visual Identity and Cultural Elements](../paper_monitor/user_guide.html#visual-identity) | Retain approved branding, mission, glyph provenance and wording. Preserve continuous Product Identity chapters 4-1 through 4-4. |
 | [Keyboard Shortcuts](../paper_monitor/user_guide.html#keyboard) | Add per-paper acknowledgement and visible-only tab indicators; retain contextual Browser, Quick Look and edit shortcuts. |
 | [Publisher and Network Access](../paper_monitor/user_guide.html#network-access) | Add off-campus direct-route limits, abstract versus actual PDF entitlement, PDF/CDN routing and native fallback limits. |

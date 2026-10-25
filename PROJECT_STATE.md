@@ -1,6 +1,6 @@
 # PROJECT_STATE.md — Current handoff
 
-Updated: October 25, 2026. Keep this file under 100 lines and focused on current state.
+Updated: October 26, 2026. Keep this file under 100 lines and focused on current state.
 
 ## Repository and delivery
 
@@ -53,6 +53,7 @@ Updated: October 25, 2026. Keep this file under 100 lines and focused on current
 
 ## Documentation and validation
 
+- October 25 User Guide update: four Zotero topics explain one installed Gewu host/database through two interfaces, persistent install/update/removal guidance, explicit Save to Zotero copies, PDF preview, connection settings and App handoff/pause. Four unretouched real App/plugin captures bring the inventory to 42 images and 53 topics. The rebuilt 139-page PDF adds chapter 3-10 on pages 112–118 and preserves continuous Product Identity layout. App Help search/navigation and Print Guide were verified; the installed PDF matches source and the App signature passes. 36 scoped existing checks plus current image/link/PDF checks passed; the old fixed 38-image inventory and absent project-bundle identity check were excluded and replaced with direct checks. The native daily App's pre-existing 1.0.0/Build 1 metadata remains unchanged; the manual follows source 1.0.1/Build 1 and labels companion 0.3.1 as a local preview. No runtime/data change or installer publication. On October 26 the user authorized committing this documentation and pushing main, including the three preceding Zotero commits. Evidence is ignored under local-development-archive/zotero-guide-20261025/.
 - README introduces both platforms; macOS screenshots do not establish Windows feature parity. The Windows branch owns its native implementation and packaging instructions.
 - `paper_monitor/user_guide.html` is the source for generated TeX/PDF. The builder recreates the ignored `paper_monitor/user_guide.tex` before compilation; the previous TeX is not required. Tests inspect the shipped PDF and builder rules. Keep Product Identity 4-1 through 4-4 continuous in the builder. Follow `docs/USER_GUIDE_SCREENSHOTS.md` for real-App captures.
 - Current license: custom Academic and Non-Commercial Research License 1.1. Research sharing includes modified versions/patches; commercial use needs separate written authorization.

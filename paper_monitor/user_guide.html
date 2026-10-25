@@ -628,6 +628,13 @@
             <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
             <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
           </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">Zotero Integration</h2>
+            <button class="topic-link" data-topic="zotero-workspace">One Workspace, Two Interfaces</button>
+            <button class="topic-link" data-topic="zotero-install">Install, Update, and Remove the Plugin</button>
+            <button class="topic-link" data-topic="zotero-save">Save Papers and Preview PDFs</button>
+            <button class="topic-link" data-topic="zotero-connection">Connection Settings and Troubleshooting</button>
+          </section>
         </div>
         <div class="nav-part">
           <p class="nav-part-title">Part IV · Product Identity</p>
@@ -664,7 +671,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Version 1.0.0 · Build 1 · October 6, 2026 · Database and workflow edition</p>
+          <p class="guide-revision">Version 1.0.1 · Build 1 · October 25, 2026 · Zotero companion edition</p>
 
           <p><strong>Source-available research software.</strong> The Gewu Insight Academic and Non-Commercial Research License permits downloading, installing, building, running and modifying the software for academic/non-commercial research. Original and modified versions, derivative works and patches may be shared free of charge for those purposes under the same research-use terms, with retained notices and clearly identified modifications. Public research forks and pull requests within those terms need no separate permission. Commercial use, commercial redistribution, sublicensing and integration into commercial products or services require separate prior written authorization. Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved except for those express permissions. Read the complete <a href="https://github.com/LKong92/Gewu-Insight/blob/main/LICENSE">LICENSE</a>, also included with the local distribution and inside the App resources, before use. This is not an open-source license.</p>
 
@@ -717,7 +724,9 @@
 
           <div class="important"><span class="callout-title">Current distribution status</span>This guide does not claim that a supported Windows package is available today. Instructions that name Finder, Preview, Quick Look, the Dock, or macOS Trash describe the currently tested macOS integration. Consult the Windows branch for its own build instructions and current limitations; macOS screenshots do not establish Windows feature parity.</div>
 
-          <p><strong>This edition is the 1.0.0 research and writing baseline.</strong> The version identifies the product release; Build identifies its packaged revision. Check both in <span class="ui">Gewu Insight &gt; About Gewu Insight</span> when reporting a problem. This guide covers the existing feature set; adopting this release does not require a fresh database or another Library import.</p>
+          <p><strong>This edition adds the Zotero companion workflow to the October 6, 2026 manual.</strong> The App version and Build identify the host application; the companion plugin has its own version. The new chapter describes the local 0.3.1 preview, tested with Zotero 10.0.6 on macOS. It does not imply that the preview is included in older published installers. Check <span class="ui">Plugin &gt; Zotero Integration</span> for the package included with your App. Updating the guide or adding the plugin does not require a fresh database or another Library import.</p>
+
+          <div class="note"><span class="callout-title">Use the same Gewu workspace in Zotero</span>The standalone App and the Zotero companion are two interfaces to one Gewu Insight installation and the same selected Gewu Database. Start with <a href="#zotero-workspace">One Workspace, Two Interfaces</a>, then follow <a href="#zotero-install">Install, Update, and Remove the Plugin</a>.</div>
 
           <h2>What this guide covers</h2>
           <p>This guide follows the work you do in the app: put papers into the Library, organize them, manage publication versions and attachments, review new literature, and keep the database and files safe. It describes the current interface rather than the history of the project.</p>
@@ -3098,6 +3107,129 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Literature Data Source</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
+        <article class="help-topic guide-topic" id="zotero-workspace" data-group="Zotero Integration" data-title="One Workspace, Two Interfaces" data-keywords="Zotero plugin companion same database shared settings sync background quit paused lock monitor library MCP API">
+          <p class="topic-kicker">Zotero Integration</p>
+          <h1>Use One Gewu Workspace through Two Interfaces</h1>
+          <p class="lead">Keep one Gewu Insight installation and one selected Gewu Database on your computer. Choose whether to work in the standalone Gewu App or in its Zotero tab.</p>
+          <div class="important"><span class="callout-title">One Gewu, not two copies</span>The plugin is a companion interface to your existing Gewu Insight. Zotero displays the workspace and adds actions such as Save to Zotero; Gewu's local background service still runs the workspace. Installing the plugin does not create another Gewu Library, duplicate your Paper Files, or require a second set of monitor settings. Keep Gewu Insight installed even if you normally use it through Zotero.</div>
+          <h2>What stays shared</h2>
+          <table class="plain-table">
+            <tr><th>Part of your work</th><th>What happens when you change interfaces</th></tr>
+            <tr><td>Gewu Library, Spaces and Paper Files</td><td>Both interfaces read and change the same records, folder placements and files in the selected Gewu Database.</td></tr>
+            <tr><td>Monitors, My Publications and settings</td><td>Saved journals, subjects, authors, profiles, resource API settings and preferences remain available in either interface.</td></tr>
+            <tr><td>AI Access and MCP</td><td>Existing connections and their permissions remain attached to the same Gewu workspace. The plugin does not require an AI connection or grant additional access.</td></tr>
+            <tr><td>Browser page tabs and website logins</td><td>These belong to each interface. You may need to sign in to a publisher again inside Zotero.</td></tr>
+            <tr><td>Zotero's own library</td><td>This is a separate collection. Only an explicit Save to Zotero action copies a paper into it; later Zotero edits do not synchronize back into Gewu.</td></tr>
+          </table>
+          <p>For example, add a journal in Gewu's Journal Monitor inside Zotero, then close that tab and open the standalone App: the journal remains monitored. Change a saved setting in the standalone App, then open the same workspace in Zotero: that setting remains in effect. These are changes to the same data, not a synchronization process between two Gewu databases.</p>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/zotero-workspace.png" alt="Gewu Insight inside the real Zotero application, with all six Gewu tabs and its compact menu visible" loading="lazy">
+            <figcaption><strong>The same workspace in a Zotero tab.</strong> Library, My Publications, all three monitors and Browser remain available. The upper-right three-dot menu contains View, Loader, Settings, Help and Connection Settings. Zotero's My Library tab is separate.</figcaption>
+          </figure>
+          <h2>Open and switch interfaces</h2>
+          <ol class="steps">
+            <li>After installation, choose <span class="ui">Plugin &gt; Zotero Integration &gt; Open in Zotero</span> in the standalone App. This prepares the connection to the database you are using.</li>
+            <li>Once Zotero confirms that the workspace has opened, the standalone App quits. The Gewu background service keeps running, so files, settings and monitors remain available. If opening fails, the App stays open.</li>
+            <li>For later sessions, use <span class="ui">Tools &gt; Gewu Insight</span> in Zotero. With background startup enabled, the plugin starts the installed Gewu service when needed; you do not need to open the standalone window first.</li>
+            <li>To return to the standalone App, close the <span class="ui">Gewu Insight</span> tab in Zotero, then open Gewu Insight. You can leave Zotero itself running.</li>
+          </ol>
+          <h2>Why the standalone window may be paused</h2>
+          <p>While a connected Gewu tab is open in Zotero, the standalone main window and its editing menus pause. This prevents editing through a stale view in two windows. Closing the Gewu tab refreshes the standalone view before restoring interaction. Switching to Zotero's My Library tab is not the same as closing the Gewu tab.</p>
+          <p>This pause affects the interface; background monitoring and jobs can continue. Closing the Zotero tab also leaves the shared service running. It does not delete your workspace or require exporting and importing your data.</p>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#zotero-install">Install, Update, and Remove the Plugin</a><a href="#zotero-save">Save Papers and Preview PDFs</a><a href="#zotero-connection">Connection Settings and Troubleshooting</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="zotero-install" data-group="Zotero Integration" data-title="Install, Update, and Remove the Plugin" data-keywords="Zotero XPI install update plugin manager Tools Plugins Finder remove uninstall enable version">
+          <p class="topic-kicker">Zotero Integration</p>
+          <h1>Install, Update, and Remove the Zotero Plugin</h1>
+          <p class="lead">Start in the standalone Gewu App: choose Plugin &gt; Zotero Integration. The installation guide stays available in that window whenever you need it.</p>
+          <h2>Install for the first time</h2>
+          <ol class="steps">
+            <li>Install and open Zotero. In Gewu, open <span class="ui">Plugin &gt; Zotero Integration</span>. <span class="ui">Zotero app: Detected</span> means that Zotero is present; it does not mean the Gewu plugin is installed.</li>
+            <li>Click <span class="ui">Install in Zotero</span>. Gewu opens its persistent guide and reveals <strong>Gewu Insight for Zotero.xpi</strong> in Finder. This XPI file is the plugin package bundled with your Gewu App.</li>
+            <li>In Zotero's top menu, choose <span class="ui">Tools &gt; Plugins</span> to open <strong>Plugins Manager</strong>.</li>
+            <li>Drag the selected XPI file from Finder into the <strong>Plugins Manager window</strong>. Do not drop it into Zotero's literature list: that adds a file attachment rather than installing a plugin. If Finder is no longer open, click <span class="ui">Show Plugin File</span> in Gewu's guide.</li>
+            <li>Confirm Zotero's installation prompt. Check that <span class="ui">Gewu Insight</span> is enabled in Plugins Manager. When Gewu's integration window reports <span class="ui">Installed</span>, choose <span class="ui">Open in Zotero</span>.</li>
+          </ol>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/zotero-installation.png" alt="Actual Gewu Zotero Integration window showing separate app and plugin status and the expanded three-step installation guide" loading="lazy">
+            <figcaption><strong>The persistent installation guide.</strong> This example already has plugin 0.3.1 installed, so the primary button is Open in Zotero. Before installation it is Install in Zotero. The three steps and Show Plugin File remain available afterwards.</figcaption>
+          </figure>
+          <h2>Understand the primary button</h2>
+          <table class="plain-table">
+            <tr><th>Button</th><th>When to use it</th></tr>
+            <tr><td>Install in Zotero</td><td>No installed plugin is detected. Follow the guide and confirm installation in Zotero.</td></tr>
+            <tr><td>Open in Zotero</td><td>The plugin is installed and ready for everyday use with the current Gewu database.</td></tr>
+            <tr><td>Update Plugin</td><td>Your Gewu App includes a newer plugin. Replace the installed companion with that bundled version.</td></tr>
+          </table>
+          <h2>Update an existing plugin</h2>
+          <p>After updating Gewu Insight, check this window. If it offers <span class="ui">Update Plugin</span>, click it and follow any displayed instructions. For an installed 0.2 or later plugin, the update is applied without dragging the XPI again. Previously saved Zotero items and Gewu data are retained.</p>
+          <p>Update Plugin uses the package already included with your Gewu App; it is not an online update check and is not required every time you open Zotero. Reinstalling after removal, or replacing the earlier 0.1 preview, uses Plugins Manager again. A future Gewu change may require a companion update; compatibility is checked when the plugin connects.</p>
+          <h2>Disable or remove it yourself</h2>
+          <p>In Zotero, open <span class="ui">Tools &gt; Plugins</span>, find <span class="ui">Gewu Insight</span>, and use its menu to disable or remove the plugin. Close any remaining Gewu tab. Removing the plugin leaves your Gewu Database and previously saved Zotero items in place. To install it again, follow the first-time steps above.</p>
+          <p>Installation and updates are managed from the standalone App. The embedded Gewu menu in Zotero does not contain another Plugin &gt; Zotero Integration window.</p>
+          <div class="note"><span class="callout-title">Preview availability</span>This chapter documents companion 0.3.1, validated with Zotero 10.0.6 on macOS. Zotero 7/8 and Windows companion workflows have not been validated. An older Gewu installer may not include this preview; the installed App's integration window is the authority for its bundled plugin version.</div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#zotero-workspace">One Workspace, Two Interfaces</a><a href="#zotero-connection">Connection Settings and Troubleshooting</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="zotero-save" data-group="Zotero Integration" data-title="Save Papers and Preview PDFs" data-keywords="Zotero save destination collection library PDF default attachment copy one way sync Quick Look Space Preview">
+          <p class="topic-kicker">Zotero Integration</p>
+          <h1>Save Papers and Preview PDFs in Zotero</h1>
+          <p class="lead">Choose where to keep a paper. Saving to Gewu uses your existing Gewu Library; Save to Zotero creates or reuses an item in Zotero's own library.</p>
+          <table class="plain-table">
+            <tr><th>Action</th><th>Result</th></tr>
+            <tr><td>Save to Gewu / Add to Library</td><td>Use the normal Gewu destination and Paper Files workflow. The paper is available in the standalone App because it uses the same database.</td></tr>
+            <tr><td>Save to Zotero</td><td>Copy the paper's metadata into a selected writable Zotero library or collection, optionally with its available Default PDF.</td></tr>
+          </table>
+          <h2>Save a paper to Zotero</h2>
+          <ol class="steps">
+            <li>Find a paper in a Gewu monitor or select an existing paper in the Gewu Library, then click <span class="ui">Save to Zotero</span>.</li>
+            <li>Choose the destination library or collection in the dialog. Only destinations you can write to are available.</li>
+            <li>Leave <span class="ui">Include the Default PDF</span> checked to copy the existing local Default PDF, or uncheck it to save metadata only.</li>
+            <li>Confirm <span class="ui">Save to Zotero</span>. Read the result notification; <span class="ui">Show in Zotero</span> reveals the saved item in Zotero's library.</li>
+          </ol>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/zotero-save.png" alt="Save to Zotero in the installed companion, showing the destination and optional Default PDF copy" loading="lazy">
+            <figcaption><strong>Save to Zotero.</strong> Choose a destination in Zotero's own library. Include the Default PDF copies the available file and leaves the Gewu original in place. Cancel closes the dialog without saving.</figcaption>
+          </figure>
+          <p>The PDF is copied, not moved. Gewu retains its original and the rest of its Paper Files. This option does not copy every attachment, supplementary file or analysis note. If no local Default PDF is available, the item is saved with metadata only. A copy failure is reported separately so you can retry it.</p>
+          <p>To obtain a missing PDF, use Gewu's normal download workflow first, then save again. Publisher access requirements still apply. Repeated saves try to reuse a matching Zotero item and add it to the selected collection while preserving existing Zotero metadata edits and PDFs. Conflicting matches are reported instead of automatically merged.</p>
+          <div class="important"><span class="callout-title">Two libraries are not automatically synchronized</span>Save to Zotero is an explicit, one-way copy. Later edits, annotations, notes or attachment changes in Zotero do not flow back into Gewu, and later Gewu edits do not continuously update the copied Zotero item. Opening Gewu inside Zotero still uses the shared Gewu database; it does not merge the two products' libraries. Full Zotero-to-Gewu migration is a separate feature and is not included in this preview.</div>
+          <h2>Read without importing into Zotero</h2>
+          <p>In the Gewu Library or Paper Files, select a PDF and press <kbd>Space</kbd> for Quick Look. Scroll through the pages, click thumbnails to jump, or select text. Press <kbd>Space</kbd> or <kbd>Esc</kbd> to close the preview. <span class="ui">Open in Preview</span> opens the macOS reader.</p>
+          <p>The companion renders PDFs inside Gewu's preview using Zotero's PDF components. Previewing does not create a Zotero item or copy the file into Zotero storage. The standalone Gewu App keeps its own native preview behavior.</p>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#quick-look">Preview Files with Quick Look</a><a href="#zotero-workspace">One Workspace, Two Interfaces</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="zotero-connection" data-group="Zotero Integration" data-title="Connection Settings and Troubleshooting" data-keywords="Zotero connection reconnect local address localhost 127.0.0.1 background database missing empty paused settings">
+          <p class="topic-kicker">Zotero Integration</p>
+          <h1>Understand Connection Settings</h1>
+          <p class="lead">Connection Settings tells the Zotero companion which existing Gewu workspace to open and how to reach its background service on this computer. Normal use does not require changing these settings.</p>
+          <h2>Open the connection dialog</h2>
+          <p>In Zotero's Gewu tab, click the upper-right <span class="ui">…</span> menu, then <span class="ui">Connection Settings</span>. The standalone App's <span class="ui">Open in Zotero</span> action normally configures this connection for you.</p>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/zotero-connection.png" alt="Connection Settings in the installed Zotero companion with the selected Gewu Database and Advanced settings expanded" loading="lazy">
+            <figcaption><strong>Connection Settings.</strong> This connected example has Advanced expanded to show the local service address and background startup option. The displayed database path belongs to this Mac; use your own existing Gewu Database. Routine use does not require changing these fields.</figcaption>
+          </figure>
+          <table class="plain-table">
+            <tr><th>Control</th><th>Meaning and use</th></tr>
+            <tr><td>Gewu Database</td><td>The folder containing the Gewu papers, Paper Files and settings you want to use. Change Database selects an existing database root, not its data subfolder. This does not copy or migrate a database.</td></tr>
+            <tr><td>Advanced &gt; Local address</td><td>The address of Gewu's service on this computer, commonly http://127.0.0.1:8765. It is not a Zotero account or cloud-server address. Leave it unchanged unless troubleshooting a known local service configuration.</td></tr>
+            <tr><td>Start Gewu in the background</td><td>Allow the plugin to start the installed Gewu service when needed, without opening the standalone App window. Keep this enabled for routine use through Zotero.</td></tr>
+            <tr><td>Reconnect</td><td>Retry the connection using these settings. It does not import papers, merge libraries, or create an empty replacement database.</td></tr>
+          </table>
+          <h2>If something looks wrong</h2>
+          <ul>
+            <li><strong>The Library is empty or different.</strong> Compare Gewu Database in this dialog with <span class="ui">Gewu Insight &gt; Database Location…</span> in the standalone App's macOS menu. Close the Gewu tab, open the App with your usual database, then use <span class="ui">Plugin &gt; Zotero Integration &gt; Open in Zotero</span> again. Do not create a fresh database to repair a connection.</li>
+            <li><strong>The workspace does not connect.</strong> Check that Gewu Insight is still installed, the selected database folder is accessible, and background startup is enabled. Try Reconnect; use the standalone App to inspect a startup error if necessary.</li>
+            <li><strong>The Gewu tab remains but its menu is missing.</strong> Check Tools &gt; Plugins for an enabled Gewu Insight plugin. Close an old tab left after uninstalling, then open a new one through Tools &gt; Gewu Insight. Reinstall through the guide if the plugin is absent.</li>
+            <li><strong>The standalone window cannot be edited.</strong> Close the connected Gewu tab in Zotero and allow the App to refresh. Merely switching to another Zotero tab does not end the companion session.</li>
+            <li><strong>A PDF asks to download instead of previewing.</strong> Check the installed plugin version and update from the current Gewu App. The current companion provides an embedded PDF preview; no global Zotero PDF setting needs to be changed.</li>
+          </ul>
+          <p>Existing source API settings and AI Access permissions belong to the Gewu database. Reconnecting does not require entering them again, creating a new MCP connection, or widening its permissions.</p>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#zotero-install">Install, Update, and Remove the Plugin</a><a href="#startup">Startup, Monitor Cache, and Text Size</a><a href="#backup-migrate">Back Up or Move to Another Mac</a></div></div>
+        </article>
+
         <article class="help-topic guide-topic" id="visual-identity" data-group="About Gewu Insight" data-title="Visual Identity and Cultural Elements" data-keywords="visual identity cultural elements name meaning physics experimental phenomena physical pictures intuition imagination research mission brand symbols logo icon calligraphy 书法 祝枝山 集字 seal script 篆书 watermark 格物洞见 見 AI generated">
           <p class="topic-kicker">About Gewu Insight</p>
           <h1>Visual Identity and Cultural Elements</h1>
@@ -3270,7 +3402,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
 
           <h2 id="dock-entry">Keep the current App in the Dock</h2>
           <p>After moving from the old project App to Applications, the Dock may still show the old shortcut alongside the running App. Right-click the old shortcut and choose <span class="ui">Options &gt; Remove from Dock</span>. Open Gewu Insight from Applications, then right-click its running icon and choose <span class="ui">Options &gt; Keep in Dock</span>. Removing the shortcut does not delete the App, database or backup. Confirm Database Location before using the new shortcut for daily work.</p>
-          <p>For an existing installation, follow <a href="#upgrade-installation">Back Up and Upgrade</a> before replacing files. The manual's edition date can change while the product remains Version 1.0.0 / Build 1; a newer manual does not require a fresh Library.</p>
+          <p>For an existing installation, follow <a href="#upgrade-installation">Back Up and Upgrade</a> before replacing files. The manual's edition date and companion-plugin version can change independently of the App version; a newer manual does not require a fresh Library.</p>
 
           <h2>Normal startup</h2>
           <p>The first window frame contains the warm background, packaged icon, and Starting Gewu Insight panel. The native startup view is installed before the window is shown, so an empty white web background does not precede the branding. The panel stays visible while the local service and first Library view prepare, then fades into the workspace.</p>
