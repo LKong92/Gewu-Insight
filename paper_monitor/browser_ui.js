@@ -611,6 +611,7 @@
   $("browserSaveGewu").onclick = startCapture;
 
   function visibleDialog() {
+    if (capturePanel) return true;
     return [...document.querySelectorAll('[role="dialog"], dialog[open], .finder-drop-overlay')].some(element => {
       const style = getComputedStyle(element);
       return element.getClientRects().length && style.visibility !== "hidden" && style.display !== "none";

@@ -149,6 +149,11 @@ cp "$APP_ICON_ICNS_DEST" "$APP/Contents/Resources/PaperMonitor.icns"
 /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion ${MACOSX_DEPLOYMENT_TARGET:-14.0}" "$INFO_PLIST"
 /usr/libexec/PlistBuddy -c "Set :NSHumanReadableCopyright Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved." "$INFO_PLIST" 2>/dev/null || \
   /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved." "$INFO_PLIST"
+"$BUILD_PYTHON" "$PROJECT_DIR/scripts/build_zotero_plugin.py" --output "$APP/Contents/Resources/Gewu Insight for Zotero.xpi"
+if [[ -f "$APP/Contents/Resources/local-source.json" ]]; then
+  cp "$PROJECT_DIR/scripts/macos_source_server.sh" "$APP/Contents/MacOS/Gewu Insight Server"
+  chmod +x "$APP/Contents/MacOS/Gewu Insight Server"
+fi
 xattr -cr "$APP"
 TIMESTAMP_OPTION=--timestamp=none
 # Sign nested executable code before the bundle. Do not erase signature xattrs

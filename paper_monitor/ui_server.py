@@ -573,6 +573,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 from .ai_http import handle_admin
                 handle_admin(self)
                 return
+            if parsed.path in {"/embedded-ui.js", "/zotero-settings.js"}:
+                filename = "embedded_ui.js" if parsed.path == "/embedded-ui.js" else "zotero_settings.js"
+                self.send_bytes(Path(__file__).with_name(filename).read_bytes(), content_type="text/javascript; charset=utf-8")
+                return
             if parsed.path in {"/ai-access.js", "/ai-access.css"}:
                 name = "ai_access_ui.js" if parsed.path.endswith(".js") else "ai_access_ui.css"
                 self.send_bytes(Path(__file__).with_name(name).read_bytes(), content_type="text/javascript" if name.endswith(".js") else "text/css")
@@ -594,12 +598,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/markdown-preview":
                 self.handle_markdown_preview(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/integrations/zotero":
+                from .zotero_integration import status
+                self.send_json(status())
+                return
             if parsed.path == "/api/health":
                 from . import __version__, __build__
                 from .workspace import database_identity
                 health = {"ok": True, "version": __version__, "build": __build__,
                           "database_uuid": database_identity(self.configured_db_path),
-                          "instance_id": os.environ.get("GEWU_INSTANCE_ID", "")}
+                          "instance_id": os.environ.get("GEWU_INSTANCE_ID", ""),
+                          "integrations": {"zotero": 1}}
                 if self.server.workspace_access.accepts(self.headers):
                     health["database_path"] = str(Path(self.configured_db_path).resolve())
                     health["app_path"] = os.environ.get("GEWU_APP_PATH", "")
@@ -849,6 +858,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_set_author_monitor_photo()
                 return
             payload = self.read_json_body()
+            if parsed.path == "/api/integrations/zotero":
+                from .zotero_integration import configure
+                port = self.server.server_address[1]
+                origin = f"http://127.0.0.1:{port}"
+                self.send_json(configure(Path(self.configured_db_path).parent.parent, origin, str(payload.get("action", ""))))
+                return
             if parsed.path == "/api/manual-pdf-path":
                 self.handle_manual_pdf_path(payload)
                 return
@@ -60479,6 +60494,8 @@ INDEX_HTML = """<!doctype html>
   <script src="/ai-access.js"></script>
   <script src="/browser-keyboard.js"></script>
   <script src="/browser-ui.js"></script>
+  <script src="/zotero-settings.js"></script>
+  <script src="/embedded-ui.js"></script>
 </body>
 </html>
 """

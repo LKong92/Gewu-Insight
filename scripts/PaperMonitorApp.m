@@ -2230,6 +2230,13 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     fontSizeSettingsItem.target = self;
     settingMenuItem.submenu = settingMenu;
 
+    NSMenuItem *pluginMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    [mainMenu addItem:pluginMenuItem];
+    NSMenu *pluginMenu = [[NSMenu alloc] initWithTitle:@"Plugin"];
+    NSMenuItem *zoteroItem = [pluginMenu addItemWithTitle:@"Zotero Integration" action:@selector(openZoteroSettings:) keyEquivalent:@""];
+    zoteroItem.target = self;
+    pluginMenuItem.submenu = pluginMenu;
+
     NSMenuItem *helpMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:helpMenuItem];
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
@@ -2394,7 +2401,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)checkServerWithCompletion:(void (^)(BOOL available))completion {
     NSURL *healthURL = [self.url URLByAppendingPathComponent:@"api/health"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:healthURL];
+    NSMutableURLRequest *request = [self workspaceRequestForURL:healthURL];
     request.timeoutInterval = 0.7;
     [[[NSURLSession sharedSession] dataTaskWithRequest:request
                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
@@ -2402,8 +2409,15 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         BOOL available = (error == nil && httpResponse.statusCode == 200 && data.length > 0);
         if (available && getenv("GEWU_STANDALONE")) {
             NSDictionary *health = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            NSString *instance = getenv("GEWU_INSTANCE_ID") ? [NSString stringWithUTF8String:getenv("GEWU_INSTANCE_ID")] : @"";
-            available = [health isKindOfClass:NSDictionary.class] && [health[@"instance_id"] isEqualToString:instance];
+            if (![health isKindOfClass:NSDictionary.class]) health = @{};
+            NSString *root = getenv("GEWU_WORKSPACE_ROOT") ? [NSString stringWithUTF8String:getenv("GEWU_WORKSPACE_ROOT")] : @"";
+            NSString *expectedPath = [[[root stringByAppendingPathComponent:@"data/paper_monitor.sqlite"] stringByStandardizingPath] stringByResolvingSymlinksInPath];
+            NSString *actualPath = [health[@"database_path"] isKindOfClass:NSString.class] ? [health[@"database_path"] stringByResolvingSymlinksInPath] : @"";
+            NSString *identity = getenv("GEWU_DATABASE_UUID") ? [NSString stringWithUTF8String:getenv("GEWU_DATABASE_UUID")] : @"";
+            // A Zotero-started helper may already own this exact database. The
+            // workspace credential and identity, not the launching App, bind it.
+            available = [health isKindOfClass:NSDictionary.class] && root.length && [actualPath isEqualToString:expectedPath]
+                && (!identity.length || [health[@"database_uuid"] isEqualToString:identity]);
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(available);
@@ -2466,6 +2480,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openFontSizeSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openFontSizeSettings && window.openFontSizeSettings()" completionHandler:nil];
+}
+
+- (void)openZoteroSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openZoteroSettings && window.openZoteroSettings()" completionHandler:nil];
 }
 
 - (void)openAIAccessSettings:(id)sender {

@@ -271,6 +271,7 @@ notes and User Guide for installation and native behavior.
 | --- | --- |
 | [macOS User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) · [Both platform guides](https://gewu-insight.com/#resources) | Daily workflows, settings, shortcuts, backup, and troubleshooting; each App includes its own guide under Help → User Guide. |
 | [AI Access & MCP](docs/AI_ACCESS.md) | Client setup, collection grants, reading, analysis saves, imports, moves, and renames. |
+| [Gewu Insight for Zotero — local preview](docs/ZOTERO_MONITOR.md) | Use all six Gewu tabs and Save to Zotero with the same local database; macOS background startup and App setup. |
 | [Browser: Save to Gewu](docs/BROWSER_CAPTURE.md) | Reviewing article identity, PDF candidates, file types, and import destinations. |
 | [Browser: keyboard & bookmarks](docs/BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md) | Navigation, bookmark import/export, and explicit one-way sync. |
 | [Browser: PDFs](docs/BROWSER_PDF_PREVIEW.md) · [Passwords](docs/BROWSER_PASSWORD_AUTOFILL.md) | PDF viewing and the boundaries of system password integration. |
