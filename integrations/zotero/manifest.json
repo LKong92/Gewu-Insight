@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Gewu Insight",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Use your complete Gewu Insight workspace in Zotero, with shared Library, files and settings.",
   "author": "Gewu Insight",
   "homepage_url": "https://github.com/LKong92/Gewu-Insight",

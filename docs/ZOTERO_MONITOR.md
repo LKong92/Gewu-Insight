@@ -1,6 +1,6 @@
 # Gewu Insight for Zotero
 
-**Local preview 0.2.3 · Zotero 10 · macOS companion to Gewu Insight.**
+**Local preview 0.3.0 · Zotero 10 · macOS companion to Gewu Insight.**
 
 Use Library, My Publications, Journal Monitor, Subject Monitor, Author Monitor
 and Browser inside a Zotero tab. Both interfaces use the same local Gewu service
@@ -17,8 +17,12 @@ compatibility is checked when connecting.
 ## Install and connect
 
 1. In the updated Gewu App, choose **Plugin → Zotero Integration**.
-2. For the first installation, click **Install in Zotero**, open Zotero's
-   **Tools → Plugins**, and drag the highlighted XPI into the plugin manager.
+2. For the first installation, click **Install in Zotero**. The persistent
+   three-step guide shows **Tools → Plugins** and opens Finder with
+   **Gewu Insight for Zotero.xpi** selected. Drag that file into the **Plugins
+   Manager window**, not the literature list, and confirm Zotero's prompt.
+   **Installation Guide** remains available afterwards. The dialog reports
+   detection of the Zotero app separately from installation of the Gewu plugin.
 3. Choose **Open in Zotero** in Gewu, or **Tools → Gewu Insight** in Zotero.
    Gewu prepares the connection to its existing database. For a manual setup,
    choose that database's root folder, not its `data` subfolder.
@@ -35,19 +39,35 @@ compatibility is checked when connecting.
 The folder and local address are remembered. On macOS, the plugin can start the
 installed Gewu service in the background without opening its App window. Opening
 the App afterwards reuses that service when its authenticated database matches.
-Closing a Zotero tab clears its browser session, but does not stop the shared
-service or monitoring jobs. Opening the App is still useful for native platform
-operations and checking startup problems. A failed connection never creates an
+While a connected Gewu tab is open in Zotero, the standalone App pauses its main
+window and editing menus. Closing that tab refreshes the App from the shared
+database before restoring interaction. Merely running Zotero does not pause Gewu.
+This is an interface guard, not a database lock; monitoring and background jobs
+continue. It does not synchronize Zotero's own library back into Gewu.
+
+Choosing **Open in Zotero** waits for that workspace to acknowledge the request,
+then quits the standalone App while retaining the shared background service.
+If Zotero does not confirm, the App stays running. Closing a Zotero tab clears its
+browser session, but does not stop the shared service or monitoring jobs. Opening
+the App is still useful for native platform operations and checking startup
+problems. A failed connection never creates an
 empty replacement database. Use **Connection…** only to reconnect or change the
 selected database; use **Open in Zotero** again after changing databases in Gewu.
 
-For an installed 0.2 plugin, **Update Installed Plugin** installs the XPI bundled
-with the current Gewu App. Updating the earlier 0.1 preview requires installing
-the new XPI once through Zotero's plugin manager. Uninstall through that manager;
+The dialog offers one primary action: **Install in Zotero** when absent,
+**Open in Zotero** when installed, or **Update Plugin** when the App includes a
+newer version. Installation state comes from the local Zotero addon registry and
+package; disabled plugins and ambiguous profiles are reported separately.
+
+For an installed 0.2 or later plugin, **Update Plugin** replaces it with the XPI
+bundled with the current Gewu App, without dragging a file again. This is needed
+only when a newer bundled plugin is available; it does not download an update
+from the Internet. Updating the earlier 0.1 preview, or reinstalling after
+uninstalling, requires the plugin manager. Uninstall through that manager;
 previously saved Zotero items remain.
 
 To build from source, run `python3 scripts/build_zotero_plugin.py`; the output is
-`dist/gewu-insight-zotero-0.2.3.xpi`. This preview has not been published as a
+`dist/gewu-insight-zotero-0.3.0.xpi`. This preview has not been published as a
 GitHub Release. The update manifest currently lists no public updates.
 
 ## Preview PDFs
@@ -106,6 +126,12 @@ are not saved in plugin preferences, URLs, setup links or webpage JavaScript.
 App setup stores the database location and an expiring, single-use request ID;
 it does not copy the workspace credential.
 
+The plugin sends authenticated, process-local presence heartbeats. Closing a tab
+clears its presence; an abnormal exit expires after 12 seconds. Presence writes
+require the private host credential, not just a webpage's workspace cookie. App
+handoff requires acknowledgement of the matching setup request. Presence does
+not modify the database or MCP permissions.
+
 Browser uses separate Gecko content views for public websites, with no workspace
 credential or privileged Gewu bridge. It adapts the existing Gewu bookmark,
 history and Save to Gewu review workflows. Publisher cookies are separate from
@@ -132,6 +158,14 @@ Validated on macOS with Zotero **10.0.6** and isolated synthetic data:
   Renderer asset requests are restricted to Zotero's own PDF data resources.
 - 93 scoped Python integration/link/capture checks, five Node mapping/URL tests,
   syntax/compilation checks, native universal build and strict signature checks.
+- 0.3.0: seven Python setup/package/presence checks and six Node core/PDF checks
+  passed. The daily App and Zotero verified the persistent guide, Finder file
+  selection, in-place 0.2.3 → 0.3.0 update, acknowledged App quit with the backend
+  retained, reopening into the paused window, disabled editing menus, and
+  closing the Zotero tab to refresh and unlock the App. Both universal native
+  compilation and strict App signature verification passed. Missing/disabled
+  installation states and heartbeat expiry were checked with synthetic fixtures;
+  the daily addon was not uninstalled for this validation.
 
 Zotero 7/8 and Windows have not been validated; the manifest accepts Zotero 10.
 Group-library sync, large-library performance, publisher login/PDF behavior and

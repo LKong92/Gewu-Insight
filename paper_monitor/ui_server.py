@@ -397,6 +397,8 @@ class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler, *args, **kwargs):
         from .local_access import WorkspaceAccess
         self.workspace_access = WorkspaceAccess(handler.configured_db_path)
+        from .zotero_integration import ZoteroSessions
+        self.zotero_sessions = ZoteroSessions()
         super().__init__(server_address, handler, *args, **kwargs)
 
     def server_bind(self) -> None:
@@ -602,6 +604,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 from .zotero_integration import status
                 self.send_json(status())
                 return
+            if parsed.path == "/api/integrations/zotero/session":
+                self.send_json(self.server.zotero_sessions.status())
+                return
             if parsed.path == "/api/health":
                 from . import __version__, __build__
                 from .workspace import database_identity
@@ -612,6 +617,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if self.server.workspace_access.accepts(self.headers):
                     health["database_path"] = str(Path(self.configured_db_path).resolve())
                     health["app_path"] = os.environ.get("GEWU_APP_PATH", "")
+                    health["zotero_active"] = self.server.zotero_sessions.status()["active"]
                 self.send_json(health)
                 return
             if parsed.path == "/api/app-icon":
@@ -858,6 +864,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_set_author_monitor_photo()
                 return
             payload = self.read_json_body()
+            if parsed.path == "/api/integrations/zotero/session":
+                if not self.server.workspace_access.matches(self.headers.get("X-Gewu-Workspace", "")):
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "Zotero host authentication is required.")
+                    return
+                self.send_json(self.server.zotero_sessions.update(payload))
+                return
             if parsed.path == "/api/integrations/zotero":
                 from .zotero_integration import configure
                 port = self.server.server_address[1]

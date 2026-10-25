@@ -13,6 +13,51 @@ from paper_monitor import zotero_integration as integration
 ROOT = Path(__file__).resolve().parents[1]
 
 class ZoteroIntegrationTests(unittest.TestCase):
+    def test_plugin_detection_requires_registry_and_package_and_distinguishes_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "profiles.ini").write_text("[Profile0]\nPath=Profiles/default\nIsRelative=1\nDefault=1\n")
+            profile = root / "Profiles/default"
+            (profile / "extensions").mkdir(parents=True)
+            registry = profile / "extensions.json"
+            addon = {"id": integration.PLUGIN_ID, "version": "0.2.3"}
+            registry.write_text(json.dumps({"addons": [addon]}))
+            self.assertEqual(integration.installed_plugin(root)["state"], "not_installed")
+            (profile / "extensions" / (integration.PLUGIN_ID + ".xpi")).write_bytes(b"fixture")
+            self.assertEqual(integration.installed_plugin(root), {"state": "installed", "version": "0.2.3"})
+            addon["userDisabled"] = True
+            registry.write_text(json.dumps({"addons": [addon]}))
+            self.assertEqual(integration.installed_plugin(root)["state"], "disabled")
+            registry.write_text("incomplete")
+            self.assertEqual(integration.installed_plugin(root)["state"], "unknown")
+
+    def test_versions_compare_numerically_and_never_offer_downgrades(self):
+        self.assertTrue(integration.newer_version("0.3.0", "0.2.3"))
+        self.assertTrue(integration.newer_version("0.2.10", "0.2.9"))
+        for bundled, installed in [("0.3.0", "0.3"), ("0.3.0", "0.4.0"), ("0.3.0", "unknown")]:
+            self.assertFalse(integration.newer_version(bundled, installed))
+
+    def test_presence_expires_after_crash_and_late_heartbeat_cannot_reopen_closed_tab(self):
+        now = [100.0]
+        sessions = integration.ZoteroSessions(clock=lambda: now[0])
+        beat = {"action": "heartbeat", "session": "tab-123456", "handoff_request": "request-1234567890"}
+        self.assertTrue(sessions.update(beat)["active"])
+        self.assertEqual(sessions.status()["handoff_requests"], [beat["handoff_request"]])
+        sessions.update({"action": "close", "session": beat["session"]})
+        self.assertFalse(sessions.update(beat)["active"])
+        beat["session"] = "tab-654321"
+        sessions.update(beat)
+        now[0] += 13
+        self.assertFalse(sessions.status()["active"])
+        self.assertEqual(sessions.status()["handoff_requests"], [])
+
+    def test_presence_of_another_tab_survives_one_tab_closing(self):
+        sessions = integration.ZoteroSessions()
+        for name in ["session-1", "session-2"]:
+            sessions.update({"action": "heartbeat", "session": name})
+        self.assertTrue(sessions.update({"action": "close", "session": "session-1"})["active"])
+        self.assertFalse(sessions.update({"action": "close", "session": "session-2"})["active"])
+
     def test_package_has_complete_host_and_no_machine_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             package = Path(directory) / "plugin.xpi"

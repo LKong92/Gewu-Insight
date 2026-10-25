@@ -19,6 +19,7 @@ var GewuMonitor = {
       throw new Error("Open Zotero Integration in Gewu Insight and try again.");
     if (url.pathname !== "/"+config.action || !["open","update"].includes(config.action)) throw new Error("Unsupported integration request.");
     // Consume the setup request before performing any update.
+    const requestID = config.request_id;
     delete config.request_id; await IOUtils.writeUTF8(file,JSON.stringify(config));
     this.setPref("databaseFolder",config.workspace); this.setPref("origin",GewuZoteroCore.origin(config.origin));
     if(config.app_path) this.setPref("appPath",config.app_path);
@@ -33,6 +34,8 @@ var GewuMonitor = {
     const window=Zotero.getMainWindow(); window.focus();
     const tab=await this.open(window);
     if (tab.folder!==config.workspace || tab.origin!==config.origin) await this.connect(tab,config.workspace,config.origin);
+    tab.handoffRequest=requestID;
+    if(tab.ready) this.startPresence(tab);
   },
 
   pref(name) { return Zotero.Prefs.get(`extensions.gewu-monitor.${name}`, true); },
@@ -84,13 +87,18 @@ var GewuMonitor = {
       data: { icon: "gewu-insight" }, onClose: () => {
         if (state.tab?.timer) window.clearTimeout(state.tab.timer);
         if (state.tab?.statusTimer) window.clearTimeout(state.tab.statusTimer);
-        state.tab?.web?.dispose();
-        state.tab?.cookies?.dispose();
-        if (state.tab) state.tab.token = "";
+        const closing=state.tab;
+        if(closing){
+          closing.closed=true;
+          closing.web?.dispose();
+          this.stopPresence(closing).finally(()=>closing.cookies?.dispose());
+          closing.token="";
+        }
         state.tab = null;
       } });
     state.tab = tab;
     tab.window = window;
+    tab.sessionID=Services.uuid.generateUUID().toString().replace(/[{}]/g,"");
     tab.cookies = Zotero.HTTP.newCookieContext();
     const root = this.element(document, "div", "", { class: "gewu-zotero-host" });
     const style = this.element(document, "style");
@@ -244,7 +252,7 @@ var GewuMonitor = {
   },
 
   async request(tab, path, payload) {
-    if (!/^\/api\/(?:health$|paper\?|paper-files\?|integrations\/zotero$|browser-capture-file$)/.test(path)) throw new Error("Unsupported Gewu request.");
+    if (!/^\/api\/(?:health$|paper\?|paper-files\?|integrations\/zotero(?:\/session)?$|browser-capture-file$)/.test(path)) throw new Error("Unsupported Gewu request.");
     let response;
     try {
       response = await Zotero.HTTP.request(payload === undefined ? "GET" : "POST", tab.origin + path, {
@@ -268,6 +276,8 @@ var GewuMonitor = {
 
   async connectWorkspace(tab, folder, address) {
     if (!folder) throw new Error("Choose your Gewu Database folder first.");
+    await this.stopPresence(tab);
+    tab.sessionID=Services.uuid.generateUUID().toString().replace(/[{}]/g,"");
     tab.save.disabled = true;
     tab.ready = false; tab.selectedPaper = "";
     tab.browser.hidden = true;
@@ -347,6 +357,7 @@ var GewuMonitor = {
       if (tab.timer) tab.window.clearTimeout(tab.timer);
       tab.setup.hidden = true;
       this.status(tab, "");
+      this.startPresence(tab);
     } else if (name === "selection") {
       tab.selectedPaper = String(data || "").slice(0, 200);
       tab.save.disabled = !!tab.saving || !tab.selectedPaper;
@@ -356,10 +367,32 @@ var GewuMonitor = {
       const url = GewuZoteroCore.website(data);
       if (url) Zotero.launchURL(url);
     } else if (name === "error") {
+      this.stopPresence(tab);
       tab.ready = false; this.showConnection(tab);
       this.status(tab, "Gewu could not open this workspace. Reconnect using its database folder.", true);
     }
     return true;
+  },
+
+  startPresence(tab) {
+    if(tab.closed || !tab.ready)return;
+    if(tab.presenceTimer)tab.window.clearInterval(tab.presenceTimer);
+    const heartbeat=()=>{
+      if(tab.closed || !tab.ready || tab.presenceBusy)return;
+      tab.presenceBusy=true;
+      this.request(tab,"/api/integrations/zotero/session",{
+        action:"heartbeat",session:tab.sessionID,version:this.version,handoff_request:tab.handoffRequest||""
+      }).catch(()=>{}).finally(()=>{tab.presenceBusy=false;});
+    };
+    heartbeat();tab.presenceTimer=tab.window.setInterval(heartbeat,2500);
+  },
+
+  async stopPresence(tab) {
+    if(tab.presenceTimer)tab.window.clearInterval(tab.presenceTimer);
+    tab.presenceTimer=null;
+    if(tab.token && tab.origin && tab.sessionID){
+      try{await this.request(tab,"/api/integrations/zotero/session",{action:"close",session:tab.sessionID});}catch(_){}
+    }
   },
 
   send(tab, name, data) {

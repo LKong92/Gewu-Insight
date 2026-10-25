@@ -570,6 +570,14 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 
 @end
 
+@interface GewuZoteroPauseView : NSView
+@end
+@implementation GewuZoteroPauseView
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)keyDown:(NSEvent *)event {}
+- (void)mouseDown:(NSEvent *)event {}
+@end
+
 @interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler, QLPreviewPanelDataSource, QLPreviewPanelDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
@@ -596,6 +604,15 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @property(nonatomic) BOOL serverReadinessPollActive;
 @property(nonatomic) BOOL applicationIsTerminating;
 @property(nonatomic) BOOL mainAppHasLoaded;
+@property(nonatomic) BOOL zoteroLocked;
+@property(nonatomic) BOOL zoteroRefreshing;
+@property(nonatomic) BOOL zoteroPollBusy;
+@property(nonatomic) BOOL preserveServerForZotero;
+@property(nonatomic, strong) NSTimer *zoteroPresenceTimer;
+@property(nonatomic, strong) NSView *zoteroPauseView;
+@property(nonatomic, strong) NSArray<NSView *> *zoteroHiddenViews;
+@property(nonatomic, copy) NSString *zoteroHandoffRequest;
+@property(nonatomic, strong) NSDate *zoteroHandoffDeadline;
 @property(nonatomic) BOOL startupFailurePresented;
 @property(nonatomic, strong) NSAlert *startupFailureAlert;
 @property(nonatomic) NSInteger serverRestartAttempts;
@@ -637,6 +654,10 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 - (void)appendLauncherLogMessage:(NSString *)message;
 - (void)dismissStartupFailureAlert;
 - (void)recheckServerWhileStartupFailureIsVisible;
+- (void)pollZoteroPresence;
+- (void)setZoteroWorkspaceActive:(BOOL)active;
+- (void)finishZoteroRefresh;
+- (void)beginZoteroHandoff:(NSString *)requestID;
 @end
 
 @implementation PaperMonitorDelegate
@@ -666,6 +687,10 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     [self installMainMenu];
     [NSApp activateIgnoringOtherApps:YES];
     [self ensureServerThenLoad];
+    __weak typeof(self) weakSelf = self;
+    self.zoteroPresenceTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
+        [weakSelf pollZoteroPresence];
+    }];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
@@ -713,15 +738,145 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     self.applicationIsTerminating = YES;
+    [self.zoteroPresenceTimer invalidate];
     [self.browserController invalidate];
     [self closeNativeQuickLookNotifyingWeb:NO];
-    if (self.ownedServerTask && self.ownedServerTask.isRunning) {
+    if (!self.preserveServerForZotero && !self.zoteroLocked && self.ownedServerTask && self.ownedServerTask.isRunning) {
         [self.ownedServerTask terminate];
     }
 }
 
 - (NSInteger)numberOfPreviewItemsInPreviewPanel:(QLPreviewPanel *)panel {
     return self.nativeQuickLookURL ? 1 : 0;
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (!self.zoteroLocked && !self.zoteroRefreshing) return YES;
+    return item.action == @selector(closeActiveWindow:) || item.action == @selector(openUserGuide:)
+        || item.action == @selector(contactUs:);
+}
+
+- (void)setZoteroWorkspaceActive:(BOOL)active {
+    if (active == self.zoteroLocked) return;
+    self.zoteroLocked = active;
+    if (!active) {
+        // Keep the pause screen until the newly loaded workspace is ready.
+        self.zoteroRefreshing = YES;
+        // WebKit may suspend a hidden view. Render beneath the opaque pause
+        // screen so its readiness message can release the lock after reload.
+        self.webView.hidden = NO;
+        [self loadApp];
+        return;
+    }
+    self.zoteroRefreshing = NO;
+    [self closeNativeQuickLookNotifyingWeb:NO];
+    [self.loaderWindow orderOut:nil];
+    [self.browserController invalidate];
+    self.browserController = nil;
+    if (self.zoteroPauseView) return;
+    NSView *content = self.window.contentView;
+    NSMutableArray *hidden = [NSMutableArray array];
+    for (NSView *view in content.subviews) {
+        if (!view.hidden) { [hidden addObject:view]; view.hidden = YES; }
+    }
+    self.zoteroHiddenViews = hidden;
+    NSView *pause = [[GewuZoteroPauseView alloc] initWithFrame:content.bounds];
+    pause.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    pause.wantsLayer = YES;
+    pause.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+    NSImageView *icon = [[NSImageView alloc] init];
+    icon.image = [[NSImage alloc] initWithContentsOfURL:[[NSBundle mainBundle] URLForResource:@"GewuInsightAppIcon" withExtension:@"png"]];
+    [icon.widthAnchor constraintEqualToConstant:64].active = YES;
+    [icon.heightAnchor constraintEqualToConstant:64].active = YES;
+    NSTextField *title = [NSTextField labelWithString:@"Your workspace is open in Zotero"];
+    title.font = [NSFont boldSystemFontOfSize:20];
+    NSTextField *detail = [NSTextField wrappingLabelWithString:@"Editing here is paused while the Gewu Insight tab is open in Zotero.\nClose that tab to refresh this window and continue here."];
+    detail.font = [NSFont systemFontOfSize:13];
+    detail.textColor = NSColor.secondaryLabelColor;
+    detail.alignment = NSTextAlignmentCenter;
+    [detail.widthAnchor constraintEqualToConstant:480].active = YES;
+    NSButton *open = [NSButton buttonWithTitle:@"Open in Zotero" target:self action:@selector(openPausedWorkspaceInZotero:)];
+    open.bezelStyle = NSBezelStyleRounded;
+    NSStackView *stack = [NSStackView stackViewWithViews:@[icon,title,detail,open]];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeCenterX;
+    stack.spacing = 16;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [pause addSubview:stack];
+    [stack.centerXAnchor constraintEqualToAnchor:pause.centerXAnchor].active = YES;
+    [stack.centerYAnchor constraintEqualToAnchor:pause.centerYAnchor].active = YES;
+    [content addSubview:pause];
+    self.zoteroPauseView = pause;
+    [self.window makeFirstResponder:pause];
+}
+
+- (void)finishZoteroRefresh {
+    self.zoteroRefreshing = NO;
+    for (NSView *view in self.zoteroHiddenViews) {
+        if (view.superview == self.window.contentView) view.hidden = NO;
+    }
+    self.zoteroHiddenViews = nil;
+    [self.zoteroPauseView removeFromSuperview];
+    self.zoteroPauseView = nil;
+    [self.window makeFirstResponder:self.webView];
+}
+
+- (void)beginZoteroHandoff:(NSString *)requestID {
+    if (![requestID isKindOfClass:NSString.class] || requestID.length < 16 || requestID.length > 80) return;
+    self.zoteroHandoffRequest = requestID;
+    self.zoteroHandoffDeadline = [NSDate dateWithTimeIntervalSinceNow:25];
+    [self pollZoteroPresence];
+}
+
+- (void)openPausedWorkspaceInZotero:(id)sender {
+    NSMutableURLRequest *request = [self workspaceRequestForURL:[self.url URLByAppendingPathComponent:@"api/integrations/zotero"]];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = [@"{\"action\":\"open\"}" dataUsingEncoding:NSUTF8StringEncoding];
+    request.timeoutInterval = 10;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *result = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([result isKindOfClass:NSDictionary.class] && [result[@"ok"] boolValue]) [self beginZoteroHandoff:result[@"request_id"]];
+            else {
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = @"Could not open Zotero";
+                alert.informativeText = @"Check that Zotero and the Gewu plugin are installed, then try again. Gewu is still running.";
+                [alert beginSheetModalForWindow:self.window completionHandler:nil];
+            }
+        });
+    }] resume];
+}
+
+- (void)pollZoteroPresence {
+    if (!self.mainAppHasLoaded || self.zoteroPollBusy || self.applicationIsTerminating) return;
+    self.zoteroPollBusy = YES;
+    NSMutableURLRequest *request = [self workspaceRequestForURL:[self.url URLByAppendingPathComponent:@"api/integrations/zotero/session"]];
+    request.timeoutInterval = 2;
+    request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *state = data && !error ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        BOOL valid = [response isKindOfClass:NSHTTPURLResponse.class] && ((NSHTTPURLResponse *)response).statusCode == 200
+            && [state isKindOfClass:NSDictionary.class] && [state[@"ok"] boolValue];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.zoteroPollBusy = NO;
+            if (self.applicationIsTerminating) return;
+            if (valid) {
+                [self setZoteroWorkspaceActive:[state[@"active"] boolValue]];
+                NSArray *requests = [state[@"handoff_requests"] isKindOfClass:NSArray.class] ? state[@"handoff_requests"] : @[];
+                if (self.zoteroHandoffRequest && [state[@"active"] boolValue] && [requests containsObject:self.zoteroHandoffRequest]) {
+                    self.preserveServerForZotero = YES;
+                    [NSApp terminate:nil];
+                    return;
+                }
+            }
+            if (self.zoteroHandoffDeadline && self.zoteroHandoffDeadline.timeIntervalSinceNow < 0) {
+                self.zoteroHandoffRequest = nil;
+                self.zoteroHandoffDeadline = nil;
+                [self.webView evaluateJavaScript:@"window.gewuZoteroHandoffFailed && window.gewuZoteroHandoffFailed()" completionHandler:nil];
+            }
+        });
+    }] resume];
 }
 
 - (id<QLPreviewItem>)previewPanel:(QLPreviewPanel *)panel previewItemAtIndex:(NSInteger)index {
@@ -893,6 +1048,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     [userContentController addScriptMessageHandler:self name:@"publisherPdfDownload"];
     [userContentController addScriptMessageHandler:self name:@"appReady"];
     [userContentController addScriptMessageHandler:self name:@"browser"];
+    [userContentController addScriptMessageHandler:self name:@"zotero"];
     configuration.userContentController = userContentController;
     self.webView = [[GewuInsightWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
@@ -952,6 +1108,17 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"zotero"]) {
+        NSURL *frameURL = message.frameInfo.request.URL;
+        if (message.webView != self.webView || !message.frameInfo.isMainFrame
+            || ![frameURL.scheme isEqualToString:self.url.scheme]
+            || ![frameURL.host isEqualToString:self.url.host] || ![frameURL.port isEqual:self.url.port]
+            || ![message.body isKindOfClass:NSDictionary.class]) return;
+        if ([message.body[@"action"] isEqual:@"handoff"]) [self beginZoteroHandoff:message.body[@"request_id"]];
+        return;
+    }
+    if ((self.zoteroLocked || self.zoteroRefreshing) && ![message.name isEqualToString:@"appReady"]
+        && ![message.name isEqualToString:@"openUserGuidePDF"]) return;
     if ([message.name isEqualToString:@"browser"]) {
         NSURL *frameURL = message.frameInfo.request.URL;
         if (message.webView != self.webView || !message.frameInfo.isMainFrame
@@ -979,6 +1146,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     }
     if ([message.name isEqualToString:@"appReady"]) {
         [self dismissStartupOverlay];
+        if (self.zoteroRefreshing && !self.zoteroLocked) [self finishZoteroRefresh];
         return;
     }
     if ([message.name isEqualToString:@"libraryItemDrag"]) {
@@ -2268,7 +2436,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     } completionHandler:^{
         [overlay removeFromSuperview];
         PaperMonitorDelegate *strongSelf = weakSelf;
-        if (strongSelf) [strongSelf.window makeFirstResponder:strongSelf.webView];
+        if (strongSelf && !strongSelf.zoteroLocked) [strongSelf.window makeFirstResponder:strongSelf.webView];
     }];
 }
 
@@ -2420,6 +2588,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
                 && (!identity.length || [health[@"database_uuid"] isEqualToString:identity]);
         }
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (available) [self setZoteroWorkspaceActive:[[[NSJSONSerialization JSONObjectWithData:data options:0 error:nil] objectForKey:@"zotero_active"] boolValue]];
             completion(available);
         });
     }] resume];
