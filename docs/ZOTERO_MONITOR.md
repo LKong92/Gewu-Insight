@@ -1,6 +1,6 @@
 # Gewu Insight for Zotero
 
-**Local preview 0.3.0 · Zotero 10 · macOS companion to Gewu Insight.**
+**Local preview 0.3.1 · Zotero 10 · macOS companion to Gewu Insight.**
 
 Use Library, My Publications, Journal Monitor, Subject Monitor, Author Monitor
 and Browser inside a Zotero tab. Both interfaces use the same local Gewu service
@@ -27,7 +27,7 @@ compatibility is checked when connecting.
    Gewu prepares the connection to its existing database. For a manual setup,
    choose that database's root folder, not its `data` subfolder.
 4. In Zotero, the six Gewu tabs occupy the workspace directly. The **…** menu at
-   the upper right contains View, Loader, Settings, Help and **Connection…**.
+   the upper right contains View, Loader, Settings, Help and **Connection Settings**.
    Plugin installation and updates stay in the standalone Gewu App's **Plugin**
    menu; the embedded Zotero interface does not repeat that menu or its integration dialog.
    Connection settings are a dialog; there are no extra permanent toolbar or
@@ -51,7 +51,7 @@ If Zotero does not confirm, the App stays running. Closing a Zotero tab clears i
 browser session, but does not stop the shared service or monitoring jobs. Opening
 the App is still useful for native platform operations and checking startup
 problems. A failed connection never creates an
-empty replacement database. Use **Connection…** only to reconnect or change the
+empty replacement database. Use **Connection Settings** only to reconnect or change the
 selected database; use **Open in Zotero** again after changing databases in Gewu.
 
 The dialog offers one primary action: **Install in Zotero** when absent,
@@ -67,8 +67,25 @@ uninstalling, requires the plugin manager. Uninstall through that manager;
 previously saved Zotero items remain.
 
 To build from source, run `python3 scripts/build_zotero_plugin.py`; the output is
-`dist/gewu-insight-zotero-0.3.0.xpi`. This preview has not been published as a
+`dist/gewu-insight-zotero-0.3.1.xpi`. This preview has not been published as a
 GitHub Release. The update manifest currently lists no public updates.
+
+## Plugin windows
+
+Save to Zotero, Connection Settings and Browser's bookmark, page-action and
+confirmation dialogs use one plugin-local utility-window style matching Gewu's
+centered title bars, close controls, compact text, inset groups and equal-width
+action buttons. Notifications wrap their detail beneath a short title, with
+Show in Zotero on its own row. These styles do not modify standalone App windows
+or Zotero's other plugins.
+
+Connection Settings shows the current **Gewu Database** folder and connection
+state. This selects which Gewu papers, files and settings the plugin uses.
+**Local address**, under **Advanced**, is the loopback address of Gewu's service
+on this computer. Open in Zotero configures the connection automatically; normal
+use does not require editing it. **Reconnect** retries the selected connection;
+**Start Gewu in the background** starts the existing service if needed. It does
+not create or migrate a database.
 
 ## Preview PDFs
 
@@ -166,6 +183,12 @@ Validated on macOS with Zotero **10.0.6** and isolated synthetic data:
   compilation and strict App signature verification passed. Missing/disabled
   installation states and heartbeat expiry were checked with synthetic fixtures;
   the daily addon was not uninstalled for this validation.
+- 0.3.1: seven Python and six Node checks passed; JavaScript syntax, package and
+  App signature checks passed. Daily Zotero visually verified both connection
+  settings states, the save dialog, bookmark-folder editor and notification
+  presentation with synthetic result text. Cancel and Escape closed the dialogs;
+  no formal items were saved during these UI checks. The standalone App's shared
+  window styles and native executable were not changed.
 
 Zotero 7/8 and Windows have not been validated; the manifest accepts Zotero 10.
 Group-library sync, large-library performance, publisher login/PDF behavior and

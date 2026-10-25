@@ -3,11 +3,13 @@ var GewuZoteroCore;
 var GewuBrowserHost;
 var GewuWorkspaceSource;
 var GewuPDFResources;
+var GewuZoteroUI;
 
 async function startup({ id, version, rootURI }) {
   await Zotero.initializationPromise;
   Services.scriptloader.loadSubScript(rootURI + "workspace-source.js", this);
   Services.scriptloader.loadSubScript(rootURI + "core.js", this);
+  Services.scriptloader.loadSubScript(rootURI + "ui.js", this);
   Services.scriptloader.loadSubScript(rootURI + "browser.js", this);
   Services.scriptloader.loadSubScript(rootURI + "pdf-resources.js", this);
   Services.scriptloader.loadSubScript(rootURI + "monitor.js", this);

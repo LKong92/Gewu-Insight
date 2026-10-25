@@ -76,27 +76,25 @@ var GewuBrowserHost = class {
     const status = await picker.show();
     return [picker.returnOK,picker.returnReplace].includes(status) ? picker.file : null;
   }
-  async form(title, fields, button = "Save") {
+  async form(title, fields, button = "Save", description = "") {
     if (this.dialog) return null;
     const doc = this.tab.window.document, make = (...args) => this.plugin.element(doc,...args);
-    const overlay = make("div"); overlay.style.cssText = "position:absolute;inset:0;background:#0005;display:grid;place-items:center;z-index:5";
-    const form = make("form"); form.style.cssText = "background:Canvas;color:CanvasText;padding:24px;border-radius:12px;min-width:360px;max-width:80%;display:grid;gap:12px";
-    form.append(make("h2",title));
-    const inputs = {};
-    for (const field of fields) {
-      const label = make("label",field.label); label.style.cssText = "display:grid;gap:4px";
-      const input = make(field.options ? "select" : "input");
-      if (field.options) for (const option of field.options) input.append(make("option",option.label,{value:String(option.value)}));
-      input.value = field.value || ""; input.style.cssText = "font:inherit;padding:7px";
-      inputs[field.name] = input; label.append(input); form.append(label);
-    }
-    const row = make("div"), cancel = make("button","Cancel",{type:"button"}), save = make("button",button,{type:"submit"});
-    row.append(cancel,save); form.append(row); overlay.append(form); this.tab.surface.append(overlay); this.dialog = overlay; this.layout();
     return new Promise(resolve => {
-      const finish = result => { overlay.remove(); this.dialog = null; this.layout(); resolve(result); };
-      cancel.onclick = () => finish(null);
-      form.onsubmit = event => { event.preventDefault(); finish(Object.fromEntries(Object.entries(inputs).map(([k,v]) => [k,v.value]))); };
-      form.onkeydown = event => { if (event.key === "Escape") finish(null); };
+      const finish = result => { dialog.overlay.remove(); this.dialog = null; this.layout(); this.tab.browser.focus(); resolve(result); };
+      const dialog=GewuZoteroUI.dialog(make,this.tab.surface,title,"",()=>finish(null),true);
+      const group=make("div","",{class:"gewu-group"}),inputs={};
+      if(description){const row=make("div","",{class:"gewu-row"});row.append(make("p",description,{class:"gewu-confirm-message"}));group.append(row);}
+      for (const field of fields) {
+        const label=make("label",field.label,{class:"gewu-field gewu-row"});
+        const input=make(field.options?"select":"input","",field.options?{}:{type:"text"});
+        if(field.options)for(const option of field.options)input.append(make("option",option.label,{value:String(option.value)}));
+        input.value=field.value||"";inputs[field.name]=input;label.append(input);group.append(label);
+      }
+      dialog.body.append(group);
+      const row=make("div","",{class:"gewu-buttons"}),cancel=make("button","Cancel",{type:"button"}),save=make("button",button,{type:"submit",class:"gewu-save"});
+      row.append(cancel,save);dialog.body.append(row);dialog.overlay.hidden=false;this.dialog=dialog.overlay;this.layout();
+      cancel.onclick=()=>finish(null);
+      dialog.panel.onsubmit=event=>{event.preventDefault();finish(Object.fromEntries(Object.entries(inputs).map(([k,v])=>[k,v.value])));};
       (Object.values(inputs)[0] || cancel).focus();
     });
   }
@@ -129,7 +127,8 @@ var GewuBrowserHost = class {
         this.emit({event:"editor-result",cancelled:!result,...result}); break;
       }
       case "confirm": {
-        const result = await this.form(p.title,[{name:"message",label:p.message,value:"",...(p.history ? {label:"Remove browsing history",value:"all",options:[{value:"hour",label:"Last hour"},{value:"day",label:"Today"},{value:"all",label:"All history"}]} : {options:[{value:"yes",label:"Confirm"}]})}],p.button);
+        const fields=p.history?[{name:"message",label:"Time range",value:"all",options:[{value:"hour",label:"Last hour"},{value:"day",label:"Today"},{value:"all",label:"All history"}]}]:[];
+        const result = await this.form(p.title,fields,p.button,p.message);
         this.emit({event:"confirm-result",confirmed:!!result,range:result?.message||"all"}); break;
       }
       case "capture": await this.capturePage(p); break;
@@ -220,11 +219,10 @@ var GewuBrowserHost = class {
   showSuggestions(p) {
     this.suggestions?.remove(); this.suggestions=null;
     if(!p.items?.length) return;
-    const doc=this.tab.window.document, box=this.plugin.element(doc,"div");
-    box.style.cssText=`position:absolute;left:${Math.max(0,p.x)}px;top:${Math.max(0,p.y)}px;width:${Math.max(100,p.width)}px;background:Canvas;border:1px solid #bbb;z-index:6;box-shadow:0 4px 15px #0003`;
+    const doc=this.tab.window.document, box=this.plugin.element(doc,"div","",{class:"gewu-suggestions"});
+    box.style.cssText=`left:${Math.max(0,p.x)}px;top:${Math.max(0,p.y)}px;width:${Math.max(100,p.width)}px;max-width:100%`;
     for(const [index,item] of p.items.slice(0,8).entries()) {
-      const button=this.plugin.element(doc,"button",item.title||item.url); button.style.cssText="display:block;width:100%;text-align:left;padding:8px;border:0";
-      if(index===p.selected) button.style.background="Highlight";
+      const button=this.plugin.element(doc,"button",item.title||item.url,{"aria-selected":String(index===p.selected)});
       button.onmousedown=event=>{event.preventDefault();this.emit({event:"address-suggestion",url:this.url(item.url)});box.remove();};
       box.append(button);
     }

@@ -102,59 +102,47 @@ var GewuMonitor = {
     tab.cookies = Zotero.HTTP.newCookieContext();
     const root = this.element(document, "div", "", { class: "gewu-zotero-host" });
     const style = this.element(document, "style");
-    style.textContent = `
-      .gewu-zotero-host {position:relative;display:flex;flex:1;min-height:0;height:100%;color:CanvasText;background:Canvas;font:13px system-ui;}
-      .gewu-zotero-host [hidden] {display:none!important;}
-      .gewu-zotero-host button,.gewu-zotero-host select,.gewu-zotero-host input[type=text] {font:inherit;padding:7px 10px;border:1px solid #a7b3c2;border-radius:6px;background:Field;color:FieldText;}
-      .gewu-zotero-host button {cursor:pointer;}
-      .gewu-zotero-host button:disabled {opacity:.5;cursor:default;}
-      .gewu-zotero-host .gewu-save {background:#285b8f;color:white;border-color:#285b8f;}
-      .gewu-zotero-host .gewu-status {position:absolute;right:16px;bottom:42px;z-index:20;display:flex;align-items:center;gap:12px;max-width:min(620px,85%);padding:12px 16px;border:1px solid #cbd5e1;border-radius:9px;background:Canvas;box-shadow:0 3px 18px #0002;}
-      .gewu-zotero-host .gewu-status[data-error=true] {color:#a52424;border-color:#d8a3a3;}
-      .gewu-zotero-modal {position:absolute;inset:0;z-index:10;background:#0003;display:grid;place-items:center;padding:24px;}
-      .gewu-zotero-panel {box-sizing:border-box;width:440px;max-width:100%;max-height:100%;overflow:auto;background:Canvas;border:1px solid #cbd5e1;border-radius:12px;padding:24px;box-shadow:0 8px 36px #0002;line-height:1.5;}
-      .gewu-zotero-panel h2 {font-size:18px;margin:0 0 12px;}
-      .gewu-zotero-panel p {margin:10px 0;}
-      .gewu-zotero-panel .gewu-buttons {display:flex;justify-content:flex-end;gap:8px;margin-top:20px;}
-      .gewu-zotero-panel .gewu-field {display:grid;gap:6px;margin:14px 0;}
-      .gewu-zotero-panel .gewu-target,.gewu-zotero-panel .gewu-address {box-sizing:border-box;width:100%;}
-      .gewu-zotero-folder {overflow-wrap:anywhere;font-size:12px;color:GrayText;}
-    `;
+    style.textContent = GewuZoteroUI.css;
     root.appendChild(style);
     const make = (...args) => this.element(document, ...args);
-    const modal = title => {
-      const overlay=make("div", "", {class:"gewu-zotero-modal",hidden:"true",role:"dialog","aria-modal":"true","aria-label":title});
-      const panel=make("div","",{class:"gewu-zotero-panel"}); panel.append(make("h2",title)); overlay.append(panel);
-      overlay.addEventListener("keydown",event=>{if(event.key==="Escape"){event.stopPropagation();this.closeDialog(tab,overlay);}});
-      overlay.addEventListener("click",event=>{if(event.target===overlay&&tab.ready)this.closeDialog(tab,overlay);});
-      root.append(overlay); return {overlay,panel};
+    const modal = (title, subtitle) => {
+      const dialog=GewuZoteroUI.dialog(make,root,title,subtitle,()=>this.closeDialog(tab,dialog.overlay));
+      dialog.overlay.addEventListener("click",event=>{if(event.target===dialog.overlay&&tab.ready)this.closeDialog(tab,dialog.overlay);});
+      return dialog;
     };
     tab.status=make("div","",{class:"gewu-status",role:"status","aria-live":"polite",hidden:"true"});
-    tab.statusText=make("span");
-    tab.show=make("button","Show in Zotero",{hidden:"true"});
+    const statusCopy=make("div","",{class:"gewu-status-copy"});
+    tab.statusTitle=make("strong","",{class:"gewu-status-title"});
+    tab.statusText=make("span","",{class:"gewu-hint"});
+    tab.show=make("button","Show in Zotero",{class:"gewu-status-action",hidden:"true"});
     tab.show.onclick=async()=>{if(tab.lastItemID){window.Zotero_Tabs.select("zotero-pane");await window.ZoteroPane.selectItem(tab.lastItemID);}};
-    const dismiss=make("button","×",{"aria-label":"Dismiss notification"});
-    dismiss.onclick=()=>this.status(tab,""); tab.status.append(tab.statusText,tab.show,dismiss); root.append(tab.status);
-    const destination=modal("Save to Zotero"); tab.saveDialog=destination.overlay;
-    const targetLabel=make("label","Destination",{class:"gewu-field"});
+    const dismiss=make("button","×",{class:"gewu-status-dismiss","aria-label":"Dismiss notification"});
+    dismiss.onclick=()=>this.status(tab,"");statusCopy.append(tab.statusTitle,tab.statusText,tab.show);tab.status.append(statusCopy,dismiss);root.append(tab.status);
+    const destination=modal("Save to Zotero","Add this paper to your Zotero library.");tab.saveDialog=destination.overlay;
+    const saveGroup=make("div","",{class:"gewu-group"});
+    const targetLabel=make("label","Destination",{class:"gewu-field gewu-row"});
     tab.target=make("select","",{class:"gewu-target","aria-label":"Save to Zotero collection"});
-    targetLabel.append(tab.target); destination.panel.append(targetLabel);
-    const pdfLabel=make("label"); tab.copyPDF=make("input","",{type:"checkbox"});
+    targetLabel.append(tab.target);saveGroup.append(targetLabel);
+    const pdfLabel=make("label","",{class:"gewu-check gewu-row"});tab.copyPDF=make("input","",{type:"checkbox"});
     tab.copyPDF.checked=this.pref("copyPDF")!==false;
-    pdfLabel.append(tab.copyPDF,document.createTextNode(" Copy the available Default PDF")); destination.panel.append(pdfLabel);
+    const pdfCopy=make("span","Include the Default PDF");
+    pdfCopy.append(make("span","Copies the available PDF into Zotero. The Gewu original stays in place.",{class:"gewu-hint"}));
+    pdfLabel.append(tab.copyPDF,pdfCopy);saveGroup.append(pdfLabel);destination.body.append(saveGroup);
     const saveButtons=make("div","",{class:"gewu-buttons"}),cancelSave=make("button","Cancel");
     cancelSave.onclick=()=>this.closeDialog(tab,tab.saveDialog);
     tab.save=make("button","Save to Zotero",{class:"gewu-save",disabled:"true"});
     tab.save.onclick=()=>{
-      const id=tab.pendingPaper; this.closeDialog(tab,tab.saveDialog);
-      this.setPref("copyPDF",tab.copyPDF.checked); this.setPref("destination",tab.target.value);
+      const id=tab.pendingPaper;this.closeDialog(tab,tab.saveDialog);
+      this.setPref("copyPDF",tab.copyPDF.checked);this.setPref("destination",tab.target.value);
       this.saveSelected(tab,id);
     };
-    saveButtons.append(cancelSave,tab.save);destination.panel.append(saveButtons);
-    const connection=modal("Gewu Connection"); tab.setup=connection.overlay;
-    connection.panel.append(make("p","Uses the same database and settings as Gewu Insight."));
-    tab.folderLabel=make("p","",{class:"gewu-zotero-folder"});connection.panel.append(tab.folderLabel);
-    const choose=make("button","Choose Gewu Database…");
+    saveButtons.append(cancelSave,tab.save);destination.body.append(saveButtons);
+    const connection=modal("Connection Settings","Use the same Gewu database, files and settings.");tab.setup=connection.overlay;tab.connectionClose=connection.close;
+    tab.connectionState=make("p","",{class:"gewu-connection-state"});connection.body.append(tab.connectionState);
+    const databaseGroup=make("div","",{class:"gewu-group"}),databaseRow=make("div","",{class:"gewu-row gewu-database-row"});
+    const databaseCopy=make("div");databaseCopy.append(make("strong","Gewu Database"));
+    tab.folderLabel=make("p","",{class:"gewu-zotero-folder"});databaseCopy.append(tab.folderLabel);
+    const choose=make("button","Change Database");
     choose.onclick=async()=>{
       try {
         const {FilePicker}=ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs");
@@ -162,22 +150,26 @@ var GewuMonitor = {
         if(await picker.show()!==picker.returnOK)return;
         await this.connect(tab,picker.file,tab.address.value);
         this.setPref("databaseFolder",picker.file);this.setPref("origin",tab.origin);
-      } catch(error){this.status(tab,error.message,true);}
+      }catch(error){this.status(tab,error.message,true);}
     };
-    connection.panel.append(choose);
-    const advanced=make("details"),summary=make("summary","Advanced");advanced.style.marginTop="18px";advanced.append(summary);
+    tab.chooseDatabase=choose;databaseRow.append(databaseCopy,choose);databaseGroup.append(databaseRow);connection.body.append(databaseGroup);
+    connection.body.append(make("p","Configured automatically when you choose Open in Zotero in Gewu Insight. Change this only to switch databases or fix a connection.",{class:"gewu-hint"}));
+    const advanced=make("details","",{class:"gewu-advanced"}),summary=make("summary","Advanced");advanced.append(summary);
+    const advancedGroup=make("div","",{class:"gewu-group"}),addressRow=make("div","",{class:"gewu-row"});
     const addressLabel=make("label","Local address",{class:"gewu-field"});
-    tab.address=make("input","",{type:"text",class:"gewu-address","aria-label":"Local Gewu address"});
-    tab.address.value=this.pref("origin")||"http://127.0.0.1:8765";addressLabel.append(tab.address);advanced.append(addressLabel);
-    const automatic=make("label");tab.autoStart=make("input","",{type:"checkbox"});
+    tab.address=make("input","",{type:"text",class:"gewu-address","aria-label":"Local Gewu address",spellcheck:"false"});
+    tab.address.value=this.pref("origin")||"http://127.0.0.1:8765";addressLabel.append(tab.address);addressRow.append(addressLabel);
+    addressRow.append(make("p","The Gewu background service on this computer. Normally, leave this unchanged.",{class:"gewu-hint"}));advancedGroup.append(addressRow);
+    const automatic=make("label","",{class:"gewu-check gewu-row"});tab.autoStart=make("input","",{type:"checkbox"});
     tab.autoStart.checked=this.pref("autoStart")!==false;
     tab.autoStart.onchange=()=>this.setPref("autoStart",tab.autoStart.checked);
-    automatic.append(tab.autoStart,document.createTextNode(" Start Gewu in the background when needed"));
-    advanced.append(automatic);connection.panel.append(advanced);
+    const autoCopy=make("span","Start Gewu in the background");autoCopy.append(make("span","Starts the service when needed, without opening the Gewu App window.",{class:"gewu-hint"}));
+    automatic.append(tab.autoStart,autoCopy);advancedGroup.append(automatic);advanced.append(advancedGroup);connection.body.append(advanced);
     const connectButtons=make("div","",{class:"gewu-buttons"}),close=make("button","Close"),retry=make("button","Reconnect",{class:"gewu-save"});
+    tab.connectionCancel=close;
     close.onclick=()=>this.closeDialog(tab,tab.setup);
     retry.onclick=()=>this.connect(tab,this.pref("databaseFolder"),tab.address.value).catch(error=>this.status(tab,error.message,true));
-    connectButtons.append(close,retry);connection.panel.append(connectButtons);
+    connectButtons.append(close,retry);connection.body.append(connectButtons);
     const browser = document.createXULElement("browser");
     browser.setAttribute("type", "content");
     browser.setAttribute("remote", "true");
@@ -208,7 +200,10 @@ var GewuMonitor = {
 
   status(tab, message, error = false, showItem = false) {
     if(tab.statusTimer)tab.window.clearTimeout(tab.statusTimer);
-    tab.statusText.textContent=String(message);
+    const text=String(message), saved=showItem && text.match(/^(Saved to Zotero\.|Already in Zotero; destination updated\.)\s*(.*)$/s);
+    tab.statusTitle.textContent=saved?(error?"Saved with a notice":text.startsWith("Already")?"Already in Zotero":"Saved to Zotero"):(error?"Could not complete the action":text);
+    tab.statusText.textContent=saved?saved[2]:(error?text:"");
+    tab.statusText.hidden=!tab.statusText.textContent;
     tab.status.dataset.error=String(error);tab.status.hidden=!message;
     tab.show.hidden=!showItem||!tab.lastItemID;
     if(message)tab.statusTimer=tab.window.setTimeout(()=>{tab.status.hidden=true;},error?14000:7000);
@@ -221,7 +216,11 @@ var GewuMonitor = {
 
   showConnection(tab) {
     tab.folderLabel.textContent=tab.folder||this.pref("databaseFolder")||"Choose the database you use in Gewu Insight.";
-    tab.setup.hidden=false;tab.web?.layout();tab.setup.querySelector("button")?.focus();
+    tab.connectionState.textContent=tab.ready?"Connected to your Gewu workspace":"Connect your Gewu workspace";
+    tab.connectionState.dataset.connected=String(!!tab.ready);
+    tab.connectionClose.disabled=tab.connectionCancel.disabled=!tab.ready;
+    tab.chooseDatabase.textContent=tab.folder||this.pref("databaseFolder")?"Change Database":"Choose Database";
+    tab.setup.hidden=false;tab.web?.layout();tab.setup.querySelector(".gewu-zotero-panel")?.focus();
   },
 
   async promptSave(tab, paperID) {
@@ -417,7 +416,7 @@ var GewuMonitor = {
   async command(tab, command) {
     if (!command) return;
     if (command === "connection") return this.showConnection(tab);
-    if (command === "database") return this.alert(tab.window, tab.folder || "No Gewu database connected.");
+    if (command === "database") return this.showConnection(tab);
     if (command === "app") {
       const file = Zotero.File.pathToFile(this.pref("appPath") || "/Applications/Gewu Insight.app");
       file.launch(); return;

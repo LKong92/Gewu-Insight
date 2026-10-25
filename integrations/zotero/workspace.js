@@ -35,10 +35,10 @@
     .library-search-tools{right:54px!important}
     #primaryViewSwitcher{max-width:calc(100vw - 180px);overflow-x:auto;scrollbar-width:none}
     .library-detail .paper-detail-action-row{max-width:100%;flex-wrap:wrap}
-    #gewuHostMenu{position:fixed;right:12px;top:42px;z-index:10000;width:260px;max-height:calc(100vh - 64px);overflow:auto;padding:8px;background:#fff;color:#263347;border:1px solid #d6dce6;border-radius:10px;box-shadow:0 6px 28px #0002;font:13px system-ui}
+    #gewuHostMenu{position:fixed;right:12px;top:42px;z-index:10000;width:240px;max-height:calc(100vh - 64px);overflow:auto;padding:5px;background:#f6f6f7;color:#1d2433;border:1px solid rgba(60,60,67,.22);border-radius:8px;box-shadow:0 8px 28px #0002;font:11.5px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
     #gewuHostMenu[hidden]{display:none!important}
-    #gewuHostMenu summary{padding:9px 10px;cursor:pointer;font-weight:600;border-radius:5px}
-    #gewuHostMenu button{display:block;text-align:left;width:100%;padding:8px 12px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;cursor:pointer}
+    #gewuHostMenu summary{padding:6px 9px;cursor:pointer;font-weight:600;border-radius:5px}
+    #gewuHostMenu button{display:block;text-align:left;width:100%;min-height:28px;padding:5px 10px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;cursor:pointer}
     #gewuHostMenu details button{padding-left:25px}
     #gewuHostMenu button:hover,#gewuHostMenu summary:hover{background:#edf3fc}
     #gewuHostMenu hr{border:0;border-top:1px solid #e4e8ef;margin:5px 4px}
@@ -65,7 +65,7 @@
     group.ontoggle=()=>{if(group.open)for(const other of menu.querySelectorAll("details"))if(other!==group)other.open=false;};
     for(const [name,label] of choices)action(group,name,label);menu.append(group);
   }
-  menu.append(document.createElement("hr"));action(menu,"connection","Connection…");
+  menu.append(document.createElement("hr"));action(menu,"connection","Connection Settings");
   menuButton.onclick=()=>{menu.hidden=!menu.hidden;menuButton.setAttribute("aria-expanded",String(!menu.hidden));if(!menu.hidden)menu.querySelector("summary").focus();};
   document.addEventListener("pointerdown",event=>{if(!menu.hidden&&!menu.contains(event.target)&&event.target!==menuButton)closeMenu();});
   menu.onkeydown=event=>{if(event.key==="Escape"){event.stopPropagation();closeMenu();menuButton.focus();}};
