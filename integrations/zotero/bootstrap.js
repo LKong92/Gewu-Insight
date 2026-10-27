@@ -4,6 +4,7 @@ var GewuBrowserHost;
 var GewuWorkspaceSource;
 var GewuPDFResources;
 var GewuZoteroUI;
+var GewuZoteroImport;
 
 async function startup({ id, version, rootURI }) {
   await Zotero.initializationPromise;
@@ -13,7 +14,9 @@ async function startup({ id, version, rootURI }) {
   Services.scriptloader.loadSubScript(rootURI + "browser.js", this);
   Services.scriptloader.loadSubScript(rootURI + "pdf-resources.js", this);
   Services.scriptloader.loadSubScript(rootURI + "monitor.js", this);
+  Services.scriptloader.loadSubScript(rootURI + "import.js", this);
   GewuMonitor.init({ id, version, rootURI, workspaceScript:GewuWorkspaceSource });
+  GewuMonitor.migration = GewuZoteroImport;
   Zotero.GewuMonitor = GewuMonitor;
   GewuMonitor.registerProtocol();
   Services.io.getProtocolHandler("resource").QueryInterface(Ci.nsIResProtocolHandler)
@@ -41,6 +44,7 @@ function onMainWindowUnload({ window }) {
 }
 
 function shutdown() {
+  GewuZoteroImport?.shutdown();
   if (!GewuMonitor) return;
   GewuMonitor.unregisterProtocol();
   for (const window of Zotero.getMainWindows()) GewuMonitor.removeFromWindow(window);

@@ -10,7 +10,7 @@
     "name-citation": () => post("/api/settings/library-naming", {rule:"citation"}),
     cache: async () => { const result=await post("/api/cache/clear-web", {}); alert(`Removed ${result.removed_files || 0} monitor cache files.`); },
     list: () => window.setLibraryContentView("list"), table: () => window.setLibraryContentView("table"),
-    loader: () => window.openLibraryLoader(), metadata: () => window.openMetadataRefreshWindow(),
+    loader: () => window.openLibraryLoader(), "import-zotero": () => window.openZoteroImport(), metadata: () => window.openMetadataRefreshWindow(),
     identifiers: () => window.openIdentifierRecoveryWindow(), naming: () => window.openPdfRenameSettings(),
     preview: () => window.openQuickLookSettings(), destination: () => window.openLibraryDestinationSettings(),
     websites: () => window.openWebsiteLinkSettings(), ai: () => window.openAIAccessSettings(),

@@ -575,6 +575,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 from .ai_http import handle_admin
                 handle_admin(self)
                 return
+            if parsed.path == "/zotero-import.js":
+                self.send_bytes(Path(__file__).with_name("zotero_import.js").read_bytes(), content_type="text/javascript; charset=utf-8")
+                return
+            if parsed.path == "/api/zotero-import":
+                from .zotero_import.http import handle
+                handle(self)
+                return
             if parsed.path in {"/embedded-ui.js", "/zotero-settings.js"}:
                 filename = "embedded_ui.js" if parsed.path == "/embedded-ui.js" else "zotero_settings.js"
                 self.send_bytes(Path(__file__).with_name(filename).read_bytes(), content_type="text/javascript; charset=utf-8")
@@ -836,6 +843,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not self.trusted_local_request(browser=parsed.path == "/api/browser"):
             return
         try:
+            if parsed.path in {"/api/zotero-import", "/api/zotero-import/host"}:
+                from .zotero_import.http import handle
+                handle(self)
+                return
             if parsed.path.startswith("/api/v1/"):
                 from .ai_http import handle_api
                 handle_api(self)
@@ -60507,6 +60518,7 @@ INDEX_HTML = """<!doctype html>
   <script src="/browser-keyboard.js"></script>
   <script src="/browser-ui.js"></script>
   <script src="/zotero-settings.js"></script>
+  <script src="/zotero-import.js"></script>
   <script src="/embedded-ui.js"></script>
 </body>
 </html>

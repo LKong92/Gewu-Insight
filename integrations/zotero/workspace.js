@@ -57,7 +57,7 @@
   };
   for(const [title,choices] of [
     ["View",[["list","List View"],["table","Table View"]]],
-    ["Loader",[["loader","Open Loader"],["metadata","Refresh All Metadata"],["identifiers","Find Missing Identifiers"]]],
+    ["Loader",[["loader","Open Loader"],["import-zotero","Import from Zotero"],["metadata","Refresh All Metadata"],["identifiers","Find Missing Identifiers"]]],
     ["Settings",[["name-title","Naming Rule: Title"],["name-citation","Naming Rule: Citation"],["naming","PDF Rename"],["preview","Quick Look"],["destination","Add to Library"],["websites","Website Links"],["ai","AI Access"],["arxiv","arXiv Scope"],["sources","Literature Data Source"],["fields","Fields"],["font","Font Size"],["cache","Clear Monitor Cache"]]],
     ["Help",[["guide","User Guide"],["database","Database Location"],["app","Open Gewu App"]]],
   ]){

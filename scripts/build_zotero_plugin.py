@@ -16,7 +16,7 @@ def main():
     output = args.output or root / "dist" / f"gewu-insight-zotero-{manifest['version']}.xpi"
     output.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
-        for name in ("manifest.json", "bootstrap.js", "core.js", "ui.js", "monitor.js", "actor-parent.mjs", "actor-child.mjs", "workspace.js", "pdf-preview.js", "pdf-resources.js", "browser.js", "web-parent.mjs", "web-child.mjs"):
+        for name in ("manifest.json", "bootstrap.js", "core.js", "ui.js", "monitor.js", "import.js", "actor-parent.mjs", "actor-child.mjs", "workspace.js", "pdf-preview.js", "pdf-resources.js", "browser.js", "web-parent.mjs", "web-child.mjs"):
             archive.write(source / name, name)
         workspace_script = (source / "workspace.js").read_text() + "\n" + (source / "pdf-preview.js").read_text()
         archive.writestr("workspace-source.js", "var GewuWorkspaceSource = " + json.dumps(workspace_script) + ";\n")

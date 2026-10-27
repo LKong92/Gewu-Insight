@@ -13,6 +13,7 @@ var GewuMonitor = {
   },
   async protocolAction(uri) {
     if (!Zotero.isMac) throw new Error("This setup link currently supports macOS.");
+    if (new URL(uri.spec).pathname === "/import") return GewuZoteroImport.connect(uri);
     const url=new URL(uri.spec), file=PathUtils.join(Services.dirsvc.get("Home", Ci.nsIFile).path,"Library","Application Support","Gewu Insight","zotero-connection.json");
     const config=JSON.parse(await IOUtils.readUTF8(file));
     if (!config.request_id || url.searchParams.get("request") !== config.request_id || Date.now()/1000-config.requested_at>300 || Date.now()/1000<config.requested_at-5)

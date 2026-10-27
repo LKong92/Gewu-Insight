@@ -2357,6 +2357,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSMenu *loaderMenu = [[NSMenu alloc] initWithTitle:@"Loader"];
     NSMenuItem *openLoaderItem = [loaderMenu addItemWithTitle:@"Open Loader" action:@selector(openLibraryLoader:) keyEquivalent:@"l"];
     openLoaderItem.target = self;
+    NSMenuItem *importZoteroItem = [loaderMenu addItemWithTitle:@"Import from Zotero" action:@selector(openZoteroImport:) keyEquivalent:@""];
+    importZoteroItem.target = self;
     NSMenuItem *refreshMetadataItem = [loaderMenu addItemWithTitle:@"Refresh All Metadata" action:@selector(openMetadataRefresh:) keyEquivalent:@""];
     refreshMetadataItem.target = self;
     NSMenuItem *findMissingIdentifiersItem = [loaderMenu addItemWithTitle:@"Find All Missing Identifiers" action:@selector(openIdentifierRecovery:) keyEquivalent:@""];
@@ -2669,6 +2671,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openLibraryLoader:(id)sender {
     [self showLibraryLoaderWindow];
+}
+
+- (void)openZoteroImport:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openZoteroImport && window.openZoteroImport()" completionHandler:nil];
 }
 
 - (void)openMetadataRefresh:(id)sender {

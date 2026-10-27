@@ -1,6 +1,6 @@
 # Gewu Insight for Zotero
 
-**Local preview 0.3.1 · Zotero 10 · macOS companion to Gewu Insight.**
+**Local preview 0.4.0 · Zotero 10 · macOS companion to Gewu Insight.**
 
 Use Library, My Publications, Journal Monitor, Subject Monitor, Author Monitor
 and Browser inside a Zotero tab. Both interfaces use the same local Gewu service
@@ -67,7 +67,7 @@ uninstalling, requires the plugin manager. Uninstall through that manager;
 previously saved Zotero items remain.
 
 To build from source, run `python3 scripts/build_zotero_plugin.py`; the output is
-`dist/gewu-insight-zotero-0.3.1.xpi`. This preview has not been published as a
+`dist/gewu-insight-zotero-0.4.0.xpi`. This preview has not been published as a
 GitHub Release. The update manifest currently lists no public updates.
 
 ## Plugin windows
@@ -201,7 +201,7 @@ use a separate Zotero profile **and an existing, separate data directory**.
 Never switch a test instance to the user's real data when prompted. Test
 workspaces and logs stay ignored.
 
-Full Zotero-to-Gewu migration remains a separate, unfinished task. Save to Zotero
+Zotero-to-Gewu migration is available as an explicit **Loader → Import from Zotero** operation; see [the migration guide](ZOTERO_MIGRATION.md). Save to Zotero
 is an explicit copy, not bidirectional synchronization of Zotero edits or files.
 
 API references: [Zotero plugin development](https://www.zotero.org/support/dev/zotero_10_for_developers)
