@@ -19486,6 +19486,11 @@ def paper_storage_mode(paper: dict[str, Any], *, merged_pdf: str = "", main_pdf:
     if copy_mode in {"copy", "link"}:
         return copy_mode
     if source_path and source_path in {merged_pdf, main_pdf}:
+        # Making a Paper File independent records its managed copy here even
+        # though its source and current paths are equal and no import batch remains.
+        imported = parse_raw_json(paper).get("import")
+        if isinstance(imported, dict) and imported.get("copy_mode") == "copy":
+            return "copy"
         return "link"
     return "local"
 
