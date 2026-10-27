@@ -294,6 +294,9 @@ def prepare(storage, paper, *, current_id='', linked_preprint_id=''):
         payload['doi']=doi(payload['doi']) or str(payload['doi']).strip().casefold()
     current=storage.get_paper(payload['paper_id'])
     if current:
+        if storage._paper_raw_dict(current).get('manual_doi_reassignments'):
+            from .manual_doi import reject_retired_doi
+            reject_retired_doi(storage, current, payload)
         kind_reasons = review_reasons(storage, current, payload)
         if 'dataset_article_conflict' in kind_reasons:
             raise IdentityReviewRequired(current, payload, kind_reasons)

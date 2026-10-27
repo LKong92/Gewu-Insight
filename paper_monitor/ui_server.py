@@ -578,6 +578,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/zotero-import.js":
                 self.send_bytes(Path(__file__).with_name("zotero_import.js").read_bytes(), content_type="text/javascript; charset=utf-8")
                 return
+            if parsed.path == "/manual-doi.js":
+                self.send_bytes(Path(__file__).with_name("manual_doi.js").read_bytes(), content_type="text/javascript; charset=utf-8")
+                return
             if parsed.path == "/api/zotero-import":
                 from .zotero_import.http import handle
                 handle(self)
@@ -4884,6 +4887,25 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            if payload.get("kind") == "doi":
+                from . import manual_doi
+                item_id = int(payload.get("item_id") or 0)
+                if payload.get("conflict_action"):
+                    result = manual_doi.resolve_conflict(storage, paper_id, identifier,
+                        action=payload["conflict_action"], fingerprint=payload.get("fingerprint"), item_id=item_id)
+                    papers = annotate_papers_with_library_status(storage, result["changed_papers"])
+                    self.send_json({"paper": paper_to_api(papers[0]),
+                        "changed_papers": [paper_to_api(p) for p in papers],
+                        "merged_paper_id": result["merged_paper_id"], "warning": result["warning"],
+                        "library_items": [library_item_to_api(dict(row), papers[0]) for row in storage.conn.execute(
+                            'SELECT * FROM library_items WHERE paper_id=?', (papers[0]["paper_id"],))],
+                        "paper_files": [paper_files_state_payload(storage, papers[0]["paper_id"])],
+                        "publications": [my_publication_to_api(row) for row in storage.list_my_publications()]})
+                    return
+                conflict = manual_doi.review(storage, paper_id, identifier, item_id=item_id)
+                if conflict:
+                    self.send_json({"doi_conflict": conflict}, status=HTTPStatus.CONFLICT)
+                    return
             paper = (metadata_refresh.save_doi(storage, paper_id, identifier) if payload.get("kind") == "doi"
                      else update_manual_preprint_identifier(storage, paper_id, identifier))
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
@@ -4892,6 +4914,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except OSError as exc:
+            self.send_error_json(HTTPStatus.CONFLICT, str(exc))
             return
         finally:
             storage.close()
@@ -40305,13 +40330,41 @@ INDEX_HTML = """<!doctype html>
       if (finishEditing) identifierSaveNotice(root, context, "Saving identifier…");
       const request = (async () => {
         try {
+          const selectedItem = state.mode === "library" && state.libraryTab !== "my-publications"
+            && state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id) : null;
+          const itemId = selectedItem?.paper_id === paper.paper_id ? selectedItem.id : 0;
           const res = await fetch("/api/library/preprint-identifier", {
             method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({paper_id: paper.paper_id, kind, identifier: value})
+            body: JSON.stringify({paper_id: paper.paper_id, kind, identifier: value, ...(kind === "doi" && itemId ? {item_id: itemId} : {})})
           });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Could not save identifier");
-          return finish(data.paper);
+          let data = await res.json();
+          if (kind === "doi" && data.doi_conflict) {
+            data = await window.reviewManualDoiConflict(data.doi_conflict);
+            if (!data) throw new Error("DOI change cancelled. Records and files were not changed.");
+            if (data.merged_paper_id) {
+              updatePaperState(data.merged_paper_id, data.paper);
+              delete state.paperFilesByPaperId[data.merged_paper_id];
+              state.libraryItems = state.libraryItems.filter(item => ![data.merged_paper_id, data.paper.paper_id].includes(item.paper_id))
+                .concat(data.library_items || []);
+              state.libraryPaperLocationsLoaded.clear();
+              state.libraryLoadedFolderIds.clear();
+              state.reportCache = {};
+              state.reportCacheOrder = [];
+              state.themePapersByDate = {};
+              Object.values(state.monitorPaperDomCache || {}).forEach(cached => { if (cached) cached.signature = ""; });
+              invalidateAuthorMonitorViewCache();
+              rebuildLibraryIndexes();
+            }
+            (data.changed_papers || []).forEach(p => updatePaperState(p.paper_id, p));
+            if (data.publications) state.myPublications = data.publications;
+            applyPaperFilesPayloads(data.paper_files);
+            // Reload only the current paper's file/folder view. Monitor rows are
+            // updated in place above, retaining their date/group provenance.
+            if (data.merged_paper_id) loadLibraryPaperLocations({paper_id: data.paper.paper_id});
+          } else if (!res.ok) throw new Error(data.error || "Could not save identifier");
+          const saved = finish(data.paper);
+          if (data.warning) identifierSaveNotice(root, context, data.warning, true);
+          return saved;
         } catch (error) {
           if (finishEditing) identifierSaveNotice(root, context, error.message || "Could not save identifier", true);
           throw error;
@@ -60518,6 +60571,7 @@ INDEX_HTML = """<!doctype html>
   <script src="/browser-keyboard.js"></script>
   <script src="/browser-ui.js"></script>
   <script src="/zotero-settings.js"></script>
+  <script src="/manual-doi.js"></script>
   <script src="/zotero-import.js"></script>
   <script src="/embedded-ui.js"></script>
 </body>
