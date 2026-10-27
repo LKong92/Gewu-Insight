@@ -26,6 +26,11 @@ PDF_OUTPUT = ROOT / "paper_monitor" / "Gewu_Insight_User_Guide.pdf"
 VERSION_SOURCE = ROOT / "paper_monitor" / "__init__.py"
 
 IMAGE_ROUTES = {
+    "/user-guide-assets/zotero-import-scope.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-import-scope.png",
+    "/user-guide-assets/zotero-import-destination.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-import-destination.png",
+    "/user-guide-assets/zotero-import-preview.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-import-preview.png",
+    "/user-guide-assets/manual-doi-conflict.png": ROOT / "assets" / "user-guide" / "screenshots" / "manual-doi-conflict.png",
+
     "/user-guide-assets/zotero-save.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-save.png",
     "/user-guide-assets/zotero-connection.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-connection.png",
     "/user-guide-assets/zotero-installation.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-installation.png",

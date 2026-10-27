@@ -1,11 +1,11 @@
 # User Guide screenshot inventory
 
-Edition: October 25, 2026 · Version 1.0.1 / Build 1 · Zotero companion 0.3.1 preview.
-HTML and PDF share 42 packaged PNG captures. This pass adds the real standalone
-installation guide and the installed Zotero companion workspace, Save to Zotero
-and Connection Settings dialogs. All six workspace tabs remain visible.
-The other 38 captures are retained, including the October 10
-Space, shortcut and Guide images and the clean empty Add Monitored Author form.
+Edition: October 27, 2026 · Version 1.0.1 / Build 1 · Zotero companion 0.4.0 preview.
+HTML and PDF share 46 packaged PNG captures. This pass adds three real Zotero
+import views and the manual DOI review, and replaces the Guide opening. The
+October 25 companion figures remain valid; their captions identify the pictured
+0.3.1 version. Earlier captures are retained, including the clean empty Add
+Monitored Author form, Hong Ding, Nature with figures and classified Paper Files.
 
 ## Capture rules and retained capture history
 
@@ -17,13 +17,13 @@ Space, shortcut and Guide images and the clean empty Add Monitored Author form.
 - Retain the original normal empty Add Monitored Author illustration, with no red message. The user explicitly requested this on October 5. The live form currently shows a genuine Google Scholar cooldown; that temporary error/limit state is not a suitable menu/form illustration and is not included, erased or retouched.
 - Existing Settings figures still match their controls; source credentials stay masked and no tokens are shown. Saved AI permissions illustrate that connection only, not recommended defaults.
 - The older About capture remains an identity illustration. Current legal permissions are stated in the guide and LICENSE; this figure is not a complete current legal-dialog reference.
-- No explicit provider refresh, download, import, deletion, classification edit, permission change or network-setting change was performed for these images. Normal navigation and existing results were used. Subject and Author selections were restored. No restart is required for the updated HTML guide.
+- Earlier captures used navigation and existing results without provider refresh, download, import, deletion, classification, permission or network-setting changes. The October 27 capture opened the real importer, reconnected its existing source session and generated a preview only; no formal import or folder creation was started. It also opened a manual DOI conflict review and cancelled it without selecting either resolution. Reopening both records confirmed the original DOI assignments and Gewu Keys. Subject Monitor selection was restored. No restart is required for the updated HTML guide.
 
 ## Packaged figures
 
 | Topic | Capture | Captured / reviewed | Contents |
 |---|---|---|---|
-| Guided Tour | [user-guide-window.png](../assets/user-guide/screenshots/user-guide-window.png) | Oct 10 | The User Guide window. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF. Recaptured with the pointer outside the window and no control overlay. |
+| Guided Tour | [user-guide-window.png](../assets/user-guide/screenshots/user-guide-window.png) | Oct 27 | The updated User Guide window with the October 27 edition and all existing topic navigation. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF. Recaptured with the pointer outside the window and no control overlay. |
 | Library Layout | [library-paper-files.png](../assets/user-guide/screenshots/library-paper-files.png) | Sep 13; reviewed Oct 2 | Library and Paper Files. This real paper has two already-classified files: Preprint and Published version. The published file is marked Default. Its folder placement, related files, and Paper Details remain connected. |
 | Folders, Shortcuts, and Spaces | [space-workspace.png](../assets/user-guide/screenshots/space-workspace.png) | Oct 10 | A Space with an open folder. AI remains the heading across its folder and content columns. Literature Project has its own heading beneath it. The Space heading stops at the Details divider; the right-hand Details pane keeps its full height. |
 | Folders, Shortcuts, and Spaces | [add-shortcut.png](../assets/user-guide/screenshots/add-shortcut.png) | Sep 13; reviewed Oct 2 | Add Shortcut. Choose an existing Library folder through the column picker. Add creates a navigation shortcut to that folder. |
@@ -65,3 +65,7 @@ Space, shortcut and Guide images and the clean empty Add Monitored Author form.
 | Zotero: Install, Update, and Remove the Plugin | [zotero-installation.png](../assets/user-guide/screenshots/zotero-installation.png) | Oct 25 | Actual original Gewu App, installed 0.3.1 state, persistent three-step guide expanded. Caption explicitly distinguishes installed Open in Zotero from first-time Install in Zotero. Fullscreen, no control overlay or visible pointer. No uninstall or reinstallation for the illustration. |
 | Zotero: Save Papers and Preview PDFs | [zotero-save.png](../assets/user-guide/screenshots/zotero-save.png) | Oct 25 | Actual daily Zotero Save to Zotero dialog, destination and optional Default PDF copy. All six tabs retained; no overlay or pointer. Cancelled without creating a Zotero item. |
 | Zotero: Connection Settings and Troubleshooting | [zotero-connection.png](../assets/user-guide/screenshots/zotero-connection.png) | Oct 25 | Actual connected companion with Advanced expanded, existing database path, local address and background startup. All six tabs retained; no overlay or pointer. Closed without changing settings. The path is explicitly identified as one Mac's example. |
+| Import a Zotero Library | [zotero-import-scope.png](../assets/user-guide/screenshots/zotero-import-scope.png) | Oct 27 | Real original App, existing connected source session, My Library, all collections and unfiled items, Gewu target and import-folder controls. All six tabs retained. No papers imported. |
+| Import a Zotero Library | [zotero-import-destination.png](../assets/user-guide/screenshots/zotero-import-destination.png) | Oct 27 | Real column picker with Library, nested folders and full selected path. Cancelled without changing the import destination or default Save to Gewu setting. |
+| Import a Zotero Library | [zotero-import-preview.png](../assets/user-guide/screenshots/zotero-import-preview.png) | Oct 27 | Genuine read-only source preview, with existing removed-record review notices. No warning was hidden or fabricated. Import into Gewu was not clicked; only the preview manifest was saved. |
+| Edit DOI and arXiv Identifiers | [manual-doi-conflict.png](../assets/user-guide/screenshots/manual-doi-conflict.png) | Oct 27 | Real App review of an unconfirmed DOI entry between two existing, distinct papers; neither option selected. Caption explains that the entered DOI belongs to the existing record and Cancel is appropriate. Cancelled; neither record, PDF, location nor identifier was changed. |

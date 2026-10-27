@@ -592,6 +592,7 @@
           <section class="nav-group">
             <h2 class="nav-heading">Import and Transfer</h2>
             <button class="topic-link" data-topic="folder-loader">Use Folder Loader</button>
+            <button class="topic-link" data-topic="zotero-import">Import a Zotero Library</button>
             <button class="topic-link" data-topic="desktop-copy">Make a Portable Desktop Copy</button>
             <button class="topic-link" data-topic="backup-migrate">Back Up or Move to Another Mac</button>
           </section>
@@ -671,7 +672,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Version 1.0.1 · Build 1 · October 25, 2026 · Zotero companion edition</p>
+          <p class="guide-revision">Version 1.0.1 · Build 1 · October 27, 2026 · Zotero import edition</p>
 
           <p><strong>Source-available research software.</strong> The Gewu Insight Academic and Non-Commercial Research License permits downloading, installing, building, running and modifying the software for academic/non-commercial research. Original and modified versions, derivative works and patches may be shared free of charge for those purposes under the same research-use terms, with retained notices and clearly identified modifications. Public research forks and pull requests within those terms need no separate permission. Commercial use, commercial redistribution, sublicensing and integration into commercial products or services require separate prior written authorization. Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved except for those express permissions. Read the complete <a href="https://github.com/LKong92/Gewu-Insight/blob/main/LICENSE">LICENSE</a>, also included with the local distribution and inside the App resources, before use. This is not an open-source license.</p>
 
@@ -724,9 +725,9 @@
 
           <div class="important"><span class="callout-title">Current distribution status</span>This guide does not claim that a supported Windows package is available today. Instructions that name Finder, Preview, Quick Look, the Dock, or macOS Trash describe the currently tested macOS integration. Consult the Windows branch for its own build instructions and current limitations; macOS screenshots do not establish Windows feature parity.</div>
 
-          <p><strong>This edition adds the Zotero companion workflow to the October 6, 2026 manual.</strong> The App version and Build identify the host application; the companion plugin has its own version. The new chapter describes the local 0.3.1 preview, tested with Zotero 10.0.6 on macOS. It does not imply that the preview is included in older published installers. Check <span class="ui">Plugin &gt; Zotero Integration</span> for the package included with your App. Updating the guide or adding the plugin does not require a fresh database or another Library import.</p>
+          <p><strong>This edition adds Zotero library import and manual DOI conflict review to the companion guide.</strong> The App version and Build identify the host application; the companion plugin has its own version. The Zotero chapters describe the local 0.4.0 preview, tested with Zotero 10.0.6 on macOS. It does not imply that the preview is included in older published installers. Check <span class="ui">Plugin &gt; Zotero Integration</span> for the package included with your App. Updating the guide or adding the plugin does not require a fresh database or another Library import.</p>
 
-          <div class="note"><span class="callout-title">Use the same Gewu workspace in Zotero</span>The standalone App and the Zotero companion are two interfaces to one Gewu Insight installation and the same selected Gewu Database. Start with <a href="#zotero-workspace">One Workspace, Two Interfaces</a>, then follow <a href="#zotero-install">Install, Update, and Remove the Plugin</a>.</div>
+          <div class="note"><span class="callout-title">Use the same Gewu workspace in Zotero</span>The standalone App and the Zotero companion are two interfaces to one Gewu Insight installation and the same selected Gewu Database. Start with <a href="#zotero-workspace">One Workspace, Two Interfaces</a>, then follow <a href="#zotero-install">Install, Update, and Remove the Plugin</a>. To copy Zotero's own collection into Gewu, use the separate <a href="#zotero-import">Import a Zotero Library</a> workflow.</div>
 
           <h2>What this guide covers</h2>
           <p>This guide follows the work you do in the app: put papers into the Library, organize them, manage publication versions and attachments, review new literature, and keep the database and files safe. It describes the current interface rather than the history of the project.</p>
@@ -1596,7 +1597,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#identifiers">Edit DOI and arXiv Identifiers</a><a href="#paper-files">Understand Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="identifiers" data-group="Papers and Files" data-title="Edit DOI and arXiv Identifiers" data-keywords="DOI arXiv preprint edit inline return refresh wrong identifier empty download open">
+        <article class="help-topic guide-topic" id="identifiers" data-group="Papers and Files" data-title="Edit DOI and arXiv Identifiers" data-keywords="DOI arXiv preprint edit inline return refresh wrong identifier empty download open conflict merge reassign records Default Monitor">
           <p class="topic-kicker">Library</p>
           <h1>Edit DOI and arXiv Identifiers</h1>
           <p class="lead">DOI and arXiv can identify the same work across publication stages. Correct either value in Paper Details before downloading or synchronizing versions.</p>
@@ -1604,14 +1605,34 @@
           <h2>Save or correct either identifier</h2>
           <ol class="steps">
             <li><strong>Select the DOI or arXiv value.</strong> Enter the identifier, including in an empty row. DOI URLs are accepted; arXiv accepts forms such as <code>arXiv:2106.14849</code> and valid legacy IDs.</li>
-            <li><strong>Press <kbd>Return</kbd>.</strong> Wait for the server to save it. The field leaves editing and the green message above the metadata reads <span class="ui">Identifier updated</span>, or <span class="ui">Identifier saved</span> if unchanged. Invalid input stays editable with an error.</li>
+            <li><strong>Press <kbd>Return</kbd>.</strong> Wait for the server to save it, or review the two records if the DOI is already assigned elsewhere. After a normal save, the field leaves editing and the green message above the metadata reads <span class="ui">Identifier updated</span>, or <span class="ui">Identifier saved</span> if unchanged. Invalid input stays editable with an error.</li>
             <li><strong>Choose <span class="ui">Refresh Info</span>.</strong> Saving alone does not request remote metadata. Refresh uses the saved DOI and/or arXiv ID; a DOI is not required for an arXiv-only paper. A changed DOI still in the editor is saved before refresh.</li>
             <li><strong>Inspect the result.</strong> Hover over <span class="ui">Refresh Info</span> for its information box below the button: changed fields, last check, source outcomes and conflicts. Keyboard focus also reveals it; pointer departure or Escape dismisses it.</li>
           </ol>
           <p>To clear either identifier, save an empty value with Return. Both rows remain available for later edits. The arXiv row also has an arrow to open its website and a download control for the latest available PDF.</p>
           <h2>Replace an incorrectly identified work</h2>
           <p>If an automatically recognized DOI belongs to the wrong article or book, replace it and press Return first. Clearing and then entering the correct value also records a correction. On the next Refresh Info, a primary source must return that exact corrected identifier before the old automatic bibliography can be replaced. The old information is retained in correction history; missing or mismatched responses leave it available while you retry. This is why an ordinary automatic conflict guard does not prevent a verified manual correction.</p>
-          <p>The correction keeps the same Gewu Key, paper locations, files, classifications, Default and user notes. It does not move the paper into another object's bundle. If another paper already owns the entered identifier, the app reports the conflict instead of merging the two; inspect both records before proceeding. After a correction is applied, later refreshes use the normal conflict checks again.</p>
+          <p>An ordinary correction keeps the same Gewu Key, paper locations, files, classifications, Default and user notes. A manual DOI edit that conflicts with another record opens the explicit review below before changing either record. After a correction is applied, later refreshes use the normal conflict checks again.</p>
+          <h2 id="manual-doi-conflict">Review a DOI already assigned to another record</h2>
+          <p>This review applies only when you manually enter or correct a DOI in Paper Details. It does not enable automatic merging during discovery, import, Refresh Info or arXiv editing. A matching DOI is a reason to compare the records, not proof that they represent the same paper.</p>
+          <ol class="steps">
+            <li>Open the paper from the Library or Space location you want to retain as its main location. Check its Default PDF before editing the DOI.</li>
+            <li>Enter the verified DOI and press Return. <span class="ui">Review DOI Conflict</span> compares <span class="ui">Current paper</span> with <span class="ui">Existing DOI record</span>, including titles, authors, Gewu Keys, Default files, file counts, locations and Monitor sources.</li>
+            <li>Choose the appropriate option only after checking the actual articles, then read and confirm the action. <span class="ui">Cancel</span> leaves both records and their files unchanged.</li>
+          </ol>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/manual-doi-conflict.png" alt="Actual Review DOI Conflict dialog comparing two existing records with neither action selected" loading="lazy">
+            <figcaption><strong>Compare before choosing.</strong> This capture shows a deliberately unconfirmed entry between two different articles. Here the entered DOI belongs to the existing record, so Cancel is appropriate. Neither merge nor reassignment was applied; the picture is not a recommendation to move this DOI.</figcaption>
+          </figure>
+          <table class="plain-table">
+            <tr><th>What you have verified</th><th>Choice and result</th></tr>
+            <tr><td>Both records represent the same paper</td><td>Select <span class="ui">These are the same paper</span>, then <span class="ui">Merge Records</span>. Keep the current Gewu Key, selected main location and current Default PDF. Other managed files, including the other record's former main PDF, join its Associated Files bundle. Folder memberships and Monitor sources remain attached to the shared paper.</td></tr>
+            <tr><td>They are different papers, and the existing record wrongly owns the DOI that belongs to the current paper</td><td>Select <span class="ui">These are different papers</span>, then <span class="ui">Correct DOI Assignment</span>. Clear the incorrect DOI on the existing record and assign it to the current paper. Both records keep their separate Gewu Keys, files and Monitor entries.</td></tr>
+            <tr><td>The new entry is wrong, or the evidence is uncertain</td><td>Cancel. Do not use reassignment merely because the titles differ; it is only for a DOI verified to belong to the current paper.</td></tr>
+          </table>
+          <p>A confirmed merge updates managed disk paths as well as the visible Library. The main PDF stays at the chosen current location, and the other managed files follow the corresponding Associated Files path. Other folder references are retained using the existing storage rules; externally linked originals are not moved or deleted.</p>
+          <p>If the existing record came from a Monitor, it remains visible there after merging. Its shared status shows that the paper is already in Library; the Monitor entry does not disappear. After either operation, inspect Paper Files and Paper Details. Metadata refresh remains a separate action.</p>
+
           <h2>Follow a preprint into publication</h2>
           <p>Explicit links from arXiv, Crossref, OpenAlex, Semantic Scholar or configured ADS can connect a preprint and its published DOI. A newly linked DOI loads detailed publication metadata while retaining the arXiv ID. Title similarity alone cannot bind identifiers. Manual corrections and cleared values are preserved; a DOI owned by another Gewu Key is reported without merging records.</p>
 
@@ -1998,6 +2019,7 @@
           <p class="topic-kicker">Import and Transfer</p>
           <h1>Use Folder Loader</h1>
           <p class="lead">Folder Loader imports an existing directory tree into managed Library storage while preserving relative paths.</p>
+          <p>For a Zotero library, use <a href="#zotero-import">Loader &gt; Import from Zotero</a> instead. It reads collections, attachment relationships and notes from Zotero; selecting Zotero's storage directory in Folder Loader does not preserve that library structure.</p>
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/folder-loader.png" alt="Folder Loader in the original Gewu Insight App" loading="lazy">
@@ -2048,6 +2070,79 @@
           <div class="note"><span class="callout-title">Note</span>For an ordinary folder, Loader does not guess paper-to-attachment relationships from similar filenames. A verified Gewu Insight export manifest can restore those relationships. After paper identity and ownership are known, the normal Default and Associated Files rules determine where that paper’s managed files belong.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#desktop-copy">Make a Portable Desktop Copy</a><a href="#loader-maintenance">Refresh Info: One Paper, a Folder, or the Library</a><a href="#backup-migrate">Back Up or Move to Another Mac</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="zotero-import" data-group="Import and Transfer" data-title="Import a Zotero Library" data-keywords="Zotero migration import collections hierarchy empty folders destination linked attachments ZotFile ZotMoov Attanger notes annotations preview pause resume retry copy safety">
+          <p class="topic-kicker">Import and Transfer</p>
+          <h1>Import a Zotero Library</h1>
+          <p class="lead">Copy a Zotero library or selected collections into your current Gewu Database, with collection hierarchy, Paper Files and readable notes. Zotero's records, original attachments and annotations stay unchanged.</p>
+          <div class="important"><span class="callout-title">Choose the workflow you mean</span>Opening the Gewu tab in Zotero displays your existing Gewu workspace. It does not import Zotero's own library. <span class="ui">Import from Zotero</span> makes an explicit copy from that separate library into Gewu; it is not continuous synchronization.</div>
+
+          <h2>Before you start</h2>
+          <p>Use a Gewu App with companion <strong>0.4.0 or later</strong> and keep Zotero running during preview and import. This preview has been exercised with Zotero 10.0.6 on macOS; older Zotero versions, Windows and every third-party plugin configuration are not covered by that validation. In the standalone App, <span class="ui">Plugin &gt; Zotero Integration</span> shows the bundled and installed versions. Follow its installation guide or use <span class="ui">Update Plugin</span> when offered.</p>
+          <p>Download cloud-only attachments in Zotero first, check that linked files open on this Mac, and allow enough free space for independent copies and any exported annotations or notes. You do not need to export a Zotero database or locate its internal storage folders.</p>
+
+          <h2>Open the importer in either interface</h2>
+          <table class="plain-table">
+            <tr><th>Where you work</th><th>Entry point</th></tr>
+            <tr><td>Standalone Gewu Insight</td><td>macOS menu: <span class="ui">Loader &gt; Import from Zotero</span>.</td></tr>
+            <tr><td>Gewu Insight tab inside Zotero</td><td>Upper-right <span class="ui">… &gt; Loader &gt; Import from Zotero</span>.</td></tr>
+          </table>
+          <p>Both open the same importer for the same selected Gewu Database. You do not import once for the App and again for the plugin. <span class="ui">Connect Zotero</span> or <span class="ui">Reconnect Zotero</span> connects this import session to Zotero's loaded library; it is separate from the workspace's <a href="#zotero-connection">Connection Settings</a>.</p>
+
+          <h2>Choose scope and destination</h2>
+          <ol class="steps">
+            <li>Open the importer, choose <span class="ui">New import</span> if needed, and click <span class="ui">Connect Zotero</span>. Wait for the library choices to appear.</li>
+            <li>Choose <span class="ui">Zotero library</span>. Group libraries appear only when available in your local Zotero profile.</li>
+            <li>Keep <span class="ui">All collections and unfiled items</span> selected to copy the whole library, or clear it and select collections. A selected collection includes its subcollections; unselected ancestors are not added above the selected subtree.</li>
+            <li>Click <span class="ui">Gewu destination</span>. Browse the columns from Library or a Space into the required folder. Read the full path at the bottom and click <span class="ui">Confirm</span>. This selects the import target; it does not change your default Save to Gewu destination.</li>
+            <li>Set <span class="ui">Import folder</span>, for example <strong>Zotero — My Library</strong>. This folder contains the imported hierarchy beneath the selected destination.</li>
+          </ol>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/zotero-import-scope.png" alt="Real App Import from Zotero window connected to My Library with collection scope, Gewu destination and import folder controls" loading="lazy">
+            <figcaption><strong>Select the source and target.</strong> This connected session is ready for Preview Import. The source is Zotero's My Library; the target is a new import folder under the Gewu Library. Connecting alone does not copy papers.</figcaption>
+          </figure>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/zotero-import-destination.png" alt="Real App hierarchical Gewu destination picker showing workspaces, Library folders and a selected folder's children" loading="lazy">
+            <figcaption><strong>Choose a destination by hierarchy.</strong> Each column opens the next level. Confirm accepts the path shown at the bottom; Cancel keeps the previous destination. The folder names shown are examples from this workspace.</figcaption>
+          </figure>
+
+          <h2>Preview, then start the copy</h2>
+          <ol class="steps">
+            <li>Click <span class="ui">Preview Import</span>. This reads the source and prepares a saved preview. It does not create Library papers, collection folders or their disk directories.</li>
+            <li>Check the source, destination, item count, available attachments and original file size. Expand <span class="ui">What's included</span> and read <span class="ui">Items to review</span>. Available attachments are local source files, not a promise that every item has a PDF; original file size is not a complete estimate of exported notes and annotated copies.</li>
+            <li>Repair missing source files or uncertain identities before proceeding. Files or papers deliberately removed from Gewu are not silently recreated. A changed Zotero item or repaired file needs <span class="ui">New import</span> and a fresh preview.</li>
+            <li>When the scope and review results are correct, click <span class="ui">Import into Gewu</span>. The importer creates the selected hierarchy and verified copies, then reports completed and unfinished entries.</li>
+            <li>Inspect the result in the chosen Gewu folder. Check a nested collection and its Paper Files; use Finder to inspect the corresponding managed directories if needed.</li>
+          </ol>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/zotero-import-preview.png" alt="Real App import preview showing counts, file size and items requiring review before Import into Gewu" loading="lazy">
+            <figcaption><strong>Review before importing.</strong> This real preview includes previously imported records that were later removed from Gewu. They are flagged instead of silently restored. Counts and warnings depend on your library. No import was started for this capture.</figcaption>
+          </figure>
+
+          <h2>How collections and files are stored</h2>
+          <table class="plain-table">
+            <tr><th>In Zotero</th><th>In Gewu</th></tr>
+            <tr><td>Collections and subcollections</td><td>Folders under the import folder, in the same selected hierarchy. Empty collections also become real directories, with matching Associated Files directories, when import starts.</td></tr>
+            <tr><td>One item in several collections</td><td>One paper and Gewu Key with several folder memberships. Secondary placements follow Gewu's existing shortcut rules.</td></tr>
+            <tr><td>Stored or linked attachments</td><td>Independent, verified copies in Paper Files. The source remains in its original location.</td></tr>
+            <tr><td>Multiple PDFs and supplements</td><td>Separate Paper Files. The Default file occupies the canonical Library or Space location; other files belong in its mirrored Associated Files bundle. Existing manual Default choices and classifications are retained.</td></tr>
+            <tr><td>Item without a local PDF</td><td>A metadata record. Import does not fabricate a DOI or automatically download a missing PDF.</td></tr>
+            <tr><td>Notes and PDF annotations</td><td>Readable notes plus original archives; native PDF annotations can produce a separate annotated PDF and annotation text. Annotations already embedded in a PDF remain in its copied bytes.</td></tr>
+            <tr><td>Tags, citation keys and extra fields</td><td>Preserved in Zotero Metadata and the migration record. This does not add a new tag editor or reproduce every plugin's interface.</td></tr>
+          </table>
+          <p>For example, choosing <strong>Library / Research</strong> as the destination and <strong>Zotero — My Library</strong> as the import folder places <strong>Materials / Empty collection</strong> beneath that root both in Gewu and under <strong>data / Library / Research / Zotero — My Library / Materials / Empty collection</strong>. The matching hierarchy exists under <strong>data / Associated Files</strong>. A Space target uses its existing Space storage rules. The importer does not clone Zotero's internal <code>storage</code> directory layout. See <a href="#storage-model">How Gewu Insight Stores Files</a> for canonical files and secondary aliases.</p>
+          <p>Original note archives retain richer formatting and embedded assets. Zotero-specific interactive annotation links, saved searches, Trash, sync credentials and plugin settings are not recreated as Gewu controls.</p>
+
+          <h2>If you use ZotFile, ZotMoov or Attanger</h2>
+          <p>The importer follows the attachment registered in Zotero, including stored files, absolute linked paths and paths relative to its Linked Attachment Base Directory. The arrangement used by a file-management plugin can therefore be imported when the file is registered and locally accessible. It does not scan an unrelated plugin folder, reproduce that folder's arbitrary hierarchy, or claim compatibility with every plugin version.</p>
+          <p>External tablet or backup copies that are not registered as Zotero attachments are not included. Better Notes content stored as ordinary Zotero notes follows the note mapping; external synchronized Markdown files and custom plugin state are not reconstructed. Fix missing links or legacy Mac aliases in Zotero, then prepare a new preview.</p>
+
+          <h2>Pause, resume and repeat safely</h2>
+          <p><span class="ui">Pause Import</span> keeps completed copies. <span class="ui">Resume Import</span> continues the saved session; <span class="ui">Retry Unfinished</span> retries incomplete entries. You can close the window and reopen it through Loader, then choose the session from <span class="ui">Import session</span>. After either app or its service restarts, use <span class="ui">Reconnect Zotero</span> before resuming.</p>
+          <p>Repeated imports recognize previously mapped source records and unchanged files; they do not make a second full copy. Mapped folders are reused, while changed file versions may coexist with earlier copies. Later Zotero collection renames or deletions do not rename or delete Gewu folders. Folder Loader's <span class="ui">Delete Import</span> belongs to that separate workflow, not this importer.</p>
+          <div class="important"><span class="callout-title">Source safety</span>Import copies and verifies files rather than moving Zotero's originals. It does not edit Zotero's library records, transfer away PDF annotations or rewrite linked paths. A blocking file, shortcut or conflicting destination is reported without being overwritten. Manage the resulting Gewu copies through Gewu's normal file controls.</div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#zotero-workspace">One Workspace, Two Interfaces</a><a href="#zotero-install">Install, Update, and Remove the Plugin</a><a href="#storage-model">How Gewu Insight Stores Files</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="desktop-copy" data-group="Import and Transfer" data-title="Make a Portable Desktop Copy" data-keywords="make copy desktop export alias real files manifest associated portable folder">
@@ -3119,7 +3214,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
             <tr><td>Monitors, My Publications and settings</td><td>Saved journals, subjects, authors, profiles, resource API settings and preferences remain available in either interface.</td></tr>
             <tr><td>AI Access and MCP</td><td>Existing connections and their permissions remain attached to the same Gewu workspace. The plugin does not require an AI connection or grant additional access.</td></tr>
             <tr><td>Browser page tabs and website logins</td><td>These belong to each interface. You may need to sign in to a publisher again inside Zotero.</td></tr>
-            <tr><td>Zotero's own library</td><td>This is a separate collection. Only an explicit Save to Zotero action copies a paper into it; later Zotero edits do not synchronize back into Gewu.</td></tr>
+            <tr><td>Zotero's own library</td><td>This is a separate collection. Save to Zotero copies a Gewu paper into it; Import from Zotero copies selected Zotero content into Gewu. Neither is continuous synchronization.</td></tr>
           </table>
           <p>For example, add a journal in Gewu's Journal Monitor inside Zotero, then close that tab and open the standalone App: the journal remains monitored. Change a saved setting in the standalone App, then open the same workspace in Zotero: that setting remains in effect. These are changes to the same data, not a synchronization process between two Gewu databases.</p>
           <figure class="guide-screenshot">
@@ -3168,7 +3263,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <h2>Disable or remove it yourself</h2>
           <p>In Zotero, open <span class="ui">Tools &gt; Plugins</span>, find <span class="ui">Gewu Insight</span>, and use its menu to disable or remove the plugin. Close any remaining Gewu tab. Removing the plugin leaves your Gewu Database and previously saved Zotero items in place. To install it again, follow the first-time steps above.</p>
           <p>Installation and updates are managed from the standalone App. The embedded Gewu menu in Zotero does not contain another Plugin &gt; Zotero Integration window.</p>
-          <div class="note"><span class="callout-title">Preview availability</span>This chapter documents companion 0.3.1, validated with Zotero 10.0.6 on macOS. Zotero 7/8 and Windows companion workflows have not been validated. An older Gewu installer may not include this preview; the installed App's integration window is the authority for its bundled plugin version.</div>
+          <div class="note"><span class="callout-title">Preview availability</span>This chapter documents companion 0.4.0, validated with Zotero 10.0.6 on macOS. Zotero 7/8 and Windows companion workflows have not been validated. An older Gewu installer may not include this preview; the installed App's integration window is the authority for its bundled plugin version.</div>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#zotero-workspace">One Workspace, Two Interfaces</a><a href="#zotero-connection">Connection Settings and Troubleshooting</a></div></div>
         </article>
 
@@ -3194,7 +3289,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           </figure>
           <p>The PDF is copied, not moved. Gewu retains its original and the rest of its Paper Files. This option does not copy every attachment, supplementary file or analysis note. If no local Default PDF is available, the item is saved with metadata only. A copy failure is reported separately so you can retry it.</p>
           <p>To obtain a missing PDF, use Gewu's normal download workflow first, then save again. Publisher access requirements still apply. Repeated saves try to reuse a matching Zotero item and add it to the selected collection while preserving existing Zotero metadata edits and PDFs. Conflicting matches are reported instead of automatically merged.</p>
-          <div class="important"><span class="callout-title">Two libraries are not automatically synchronized</span>Save to Zotero is an explicit, one-way copy. Later edits, annotations, notes or attachment changes in Zotero do not flow back into Gewu, and later Gewu edits do not continuously update the copied Zotero item. Opening Gewu inside Zotero still uses the shared Gewu database; it does not merge the two products' libraries. Full Zotero-to-Gewu migration is a separate feature and is not included in this preview.</div>
+          <div class="important"><span class="callout-title">Two libraries are not automatically synchronized</span>Save to Zotero is an explicit, one-way copy. Later edits, annotations, notes or attachment changes in Zotero do not flow back into Gewu, and later Gewu edits do not continuously update the copied Zotero item. Opening Gewu inside Zotero still uses the shared Gewu database; it does not merge the two products' libraries. To copy existing Zotero collections, files and notes into Gewu, follow <a href="#zotero-import">Import a Zotero Library</a>. That explicit import is also separate from continuous synchronization.</div>
           <h2>Read without importing into Zotero</h2>
           <p>In the Gewu Library or Paper Files, select a PDF and press <kbd>Space</kbd> for Quick Look. Scroll through the pages, click thumbnails to jump, or select text. Press <kbd>Space</kbd> or <kbd>Esc</kbd> to close the preview. <span class="ui">Open in Preview</span> opens the macOS reader.</p>
           <p>The companion renders PDFs inside Gewu's preview using Zotero's PDF components. Previewing does not create a Zotero item or copy the file into Zotero storage. The standalone Gewu App keeps its own native preview behavior.</p>
@@ -3205,6 +3300,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <p class="topic-kicker">Zotero Integration</p>
           <h1>Understand Connection Settings</h1>
           <p class="lead">Connection Settings tells the Zotero companion which existing Gewu workspace to open and how to reach its background service on this computer. Normal use does not require changing these settings.</p>
+          <p>To bring Zotero's own library into Gewu, use <a href="#zotero-import">Loader &gt; Import from Zotero</a>. Its Connect Zotero action connects a source library for import; this Connection Settings dialog selects which existing Gewu workspace the tab displays.</p>
           <h2>Open the connection dialog</h2>
           <p>In Zotero's Gewu tab, click the upper-right <span class="ui">…</span> menu, then <span class="ui">Connection Settings</span>. The standalone App's <span class="ui">Open in Zotero</span> action normally configures this connection for you.</p>
           <figure class="guide-screenshot">
