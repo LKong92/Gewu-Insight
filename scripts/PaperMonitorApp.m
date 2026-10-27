@@ -4,6 +4,7 @@
 #import <WebKit/WebKit.h>
 #import "GewuBrowserController.h"
 #import "GewuWorkspaceNavigation.h"
+#import "GewuUpdateController.h"
 #include <string.h>
 
 static const NSTimeInterval GewuInsightServerStartupTimeout = 120.0;
@@ -600,6 +601,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @property(nonatomic) NSInteger hiddenPublisherDiscoveryDepth;
 @property(nonatomic) NSInteger hiddenPublisherDiscoveryPageRetryCount;
 @property(nonatomic, strong) NSTask *ownedServerTask;
+@property(nonatomic, strong) GewuUpdateController *updates;
 @property(nonatomic, strong) NSDate *serverStartupDeadline;
 @property(nonatomic) BOOL serverReadinessPollActive;
 @property(nonatomic) BOOL applicationIsTerminating;
@@ -684,6 +686,32 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
     [[NSUserDefaults standardUserDefaults] setObject:@"None" forKey:@"AppleActionOnDoubleClick"];
 
     [self createWindow];
+    self.updates = [GewuUpdateController new];
+    __weak typeof(self) updateHost = self;
+    self.updates.request = ^NSMutableURLRequest *(NSString *action, NSString *token) {
+        PaperMonitorDelegate *host = updateHost;
+        if (!host.mainAppHasLoaded) return nil;
+        NSMutableURLRequest *request = [host workspaceRequestForURL:[host.url URLByAppendingPathComponent:@"api/macos-update"]];
+        request.HTTPMethod = @"POST";
+        [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"action":action,@"token":token} options:0 error:nil];
+        return request;
+    };
+    self.updates.busyReason = ^NSString *{
+        PaperMonitorDelegate *host = updateHost;
+        if (host.zoteroLocked || host.zoteroRefreshing) return @"Close the Gewu Insight tab in Zotero before installing the update.";
+        if (host.window.attachedSheet) return @"Finish or cancel the open file dialog before installing the update.";
+        if (host.hiddenPublisherContext || host.hiddenPublisherDownload || host.browserController.hasPendingFileOperations)
+            return @"Wait for the Browser's downloads and saves to finish before installing the update.";
+        return nil;
+    };
+    self.updates.preparingChanged = ^(BOOL preparing) {
+        PaperMonitorDelegate *host = updateHost;
+        host.window.ignoresMouseEvents = preparing;
+        host.browserController.preparingUpdate = preparing;
+        if (!preparing) [host ensureServerThenLoad];
+    };
+    [self.updates start];
     [self installMainMenu];
     [NSApp activateIgnoringOtherApps:YES];
     [self ensureServerThenLoad];
@@ -695,6 +723,10 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     return NO;
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    return [self.updates applicationShouldTerminate];
 }
 
 - (BOOL)windowShouldClose:(NSWindow *)sender {
@@ -751,6 +783,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (self.updates.preparing) return NO;
     if (!self.zoteroLocked && !self.zoteroRefreshing) return YES;
     return item.action == @selector(closeActiveWindow:) || item.action == @selector(openUserGuide:)
         || item.action == @selector(contactUs:);
@@ -849,6 +882,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 }
 
 - (void)pollZoteroPresence {
+    if (self.updates.preparing) return;
     if (!self.mainAppHasLoaded || self.zoteroPollBusy || self.applicationIsTerminating) return;
     self.zoteroPollBusy = YES;
     NSMutableURLRequest *request = [self workspaceRequestForURL:[self.url URLByAppendingPathComponent:@"api/integrations/zotero/session"]];
@@ -1108,6 +1142,7 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (self.updates.preparing) return;
     if ([message.name isEqualToString:@"zotero"]) {
         NSURL *frameURL = message.frameInfo.request.URL;
         if (message.webView != self.webView || !message.frameInfo.isMainFrame
@@ -2309,6 +2344,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Gewu Insight"];
     NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Gewu Insight" action:@selector(openAbout:) keyEquivalent:@""];
     aboutItem.target = self;
+    NSMenuItem *updateItem = [appMenu addItemWithTitle:@"Check for Updates" action:@selector(checkForUpdates:) keyEquivalent:@""];
+    updateItem.target = self.updates;
+    NSMenuItem *automaticItem = [appMenu addItemWithTitle:@"Automatically Check for Updates" action:@selector(toggleAutomaticChecks:) keyEquivalent:@""];
+    automaticItem.target = self.updates;
     if (getenv("GEWU_STANDALONE")) {
         NSMenuItem *databaseItem = [appMenu addItemWithTitle:@"Database Location…" action:@selector(showDatabaseLocation:) keyEquivalent:@""];
         databaseItem.target = self;
@@ -2455,6 +2494,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)startServerIfNeeded {
+    if (self.updates.preparing) return;
     if (self.ownedServerTask.isRunning) {
         return;
     }
@@ -2536,9 +2576,9 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)recoverServerAfterUnexpectedExit {
-    if (self.applicationIsTerminating) return;
+    if (self.applicationIsTerminating || self.updates.preparing) return;
     [self checkServerWithCompletion:^(BOOL available) {
-        if (self.applicationIsTerminating) return;
+        if (self.applicationIsTerminating || self.updates.preparing) return;
         if (available) {
             self.serverRestartAttempts = 0;
             return;
@@ -2551,7 +2591,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (BOOL)restartServerForCurrentOutageIfPossible {
-    if (self.applicationIsTerminating) return NO;
+    if (self.applicationIsTerminating || self.updates.preparing) return NO;
     if (self.ownedServerTask.isRunning) return YES;
     if (self.serverRestartAttempts >= GewuInsightServerMaxRestartAttempts) {
         self.serverReadinessPollActive = NO;
@@ -3204,6 +3244,7 @@ int main(int argc, const char *argv[]) {
         }
         NSApplication *application = [NSApplication sharedApplication];
         [application setActivationPolicy:NSApplicationActivationPolicyRegular];
+        if (![GewuUpdateController allowStartup]) return 0;
         if (!GewuConfigureDatabaseLocation()) return 0;
         PaperMonitorDelegate *delegate = [[PaperMonitorDelegate alloc] init];
         application.delegate = delegate;

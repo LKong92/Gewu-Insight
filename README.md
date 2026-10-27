@@ -21,7 +21,7 @@ the researcher.
 [AI & MCP](#work-with-an-ai-client) · [Citation](#citation) ·
 [License](#copyright-and-license)
 
-**macOS 1.0.1 · Windows 1.0.0** · Source-available research software
+**macOS 1.1.0 · Windows 1.0.0** · Source-available research software
 
 Academic/non-commercial research use is permitted under the custom
 [LICENSE](LICENSE). Commercial use requires separate prior written authorization.
@@ -60,12 +60,12 @@ is required. For installation help, contact
 
 | Platform | Requirements | Download |
 | --- | --- | --- |
-| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.1 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.1) |
+| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.1.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) |
 | Windows | Windows 10 version 1607+ (build 14393+) or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) |
 
 ### macOS
 
-1. Download **Gewu-Insight-macOS-1.0.1.dmg** and open it.
+1. Download **Gewu-Insight-macOS-1.1.0.dmg** and open it.
 2. Drag **Gewu Insight.app** to **Applications**, eject the disk image, and open
    the installed App.
 3. Choose **Create New Database** or **Open Existing Database**. Keep your
@@ -90,9 +90,14 @@ Details**, then create a Space for a project. Open **Help → User Guide** for
 the manual bundled with your platform. The [website](https://gewu-insight.com)
 also provides both platform guides.
 
-**Updating an existing installation:** close the App and back up the selected
-Gewu Database and its files first. Replacing the App preserves the separate
-database location. Older source-folder installations should follow the
+**Updating an existing installation:** Mac 1.0.x users need to download the
+1.1.0 DMG once, quit Gewu and replace the App in Applications. Keep the same
+Gewu Database. From 1.1.0 onward, use **Gewu Insight → Check for Updates** to
+download, install and restart. Daily automatic checks are optional; installation
+requires your choice. Close the Gewu tab in Zotero and finish or pause imports
+before installing. See [Mac updates](docs/MACOS_UPDATES.md) for data safety and
+recovery. Keep a complete backup of the database and research files. Older
+source-folder installations should follow the
 [migration instructions](docs/SOURCE_DATA_MIGRATION.md) before updating.
 For source-based setup, use [Manual setup](docs/DEVELOPMENT.md#manual-setup).
 
@@ -276,7 +281,7 @@ notes and User Guide for installation and native behavior.
 | [Browser: keyboard & bookmarks](docs/BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md) | Navigation, bookmark import/export, and explicit one-way sync. |
 | [Browser: PDFs](docs/BROWSER_PDF_PREVIEW.md) · [Passwords](docs/BROWSER_PASSWORD_AUTOFILL.md) | PDF viewing and the boundaries of system password integration. |
 | [Managed file layout](docs/MANAGED_FILE_LAYOUT.md) | Default files, Associated Files, aliases, and recovery boundaries. |
-| [macOS release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.1) · [Windows release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) | Current installers, requirements, checksums, and first-launch notes. |
+| [macOS release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) · [Windows release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) | Current installers, requirements, checksums, and first-launch notes. |
 | [Older source-installation migration](docs/SOURCE_DATA_MIGRATION.md) | Back up and separate research data from a legacy source checkout before updating. |
 | [Development guide](docs/DEVELOPMENT.md) | Manual setup, architecture, CLI commands, builds, updates, and verification. |
 | [Distribution guide](DISTRIBUTION.md) | Package formats, separate database storage, signing, and release checks. |

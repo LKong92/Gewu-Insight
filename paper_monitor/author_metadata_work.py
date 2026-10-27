@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 import threading
 import time
+from . import update_runtime
 
 from .storage import Storage
 
@@ -207,7 +208,8 @@ def run_scheduler(db_path):
     time.sleep(30)
     while True:
         try:
-            run_slice(db_path)
+            with update_runtime.work("Author metadata"):
+                run_slice(db_path)
         except Exception as exc:
             print(f'Author metadata scheduler error: {type(exc).__name__}')
         time.sleep(REST_SECONDS)

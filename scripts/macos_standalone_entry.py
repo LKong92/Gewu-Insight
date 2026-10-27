@@ -7,7 +7,15 @@ import sys
 def main():
     resources = Path(__file__).resolve().parent
     project = resources / "project"
+    source_adapter = resources / "local-source.json"
+    if source_adapter.is_file():
+        import json
+        project = Path(json.loads(source_adapter.read_text())["source_root"]).resolve()
+        if not (project / "paper_monitor/workspace.py").is_file():
+            raise RuntimeError("The configured Gewu source checkout is unavailable.")
     sys.path[:0] = [str(project), str(resources / "dependencies")]
+    from paper_monitor.update_runtime import check_startup
+    check_startup()
     from paper_monitor.workspace import read_locator, prepare_workspace, save_locator
     explicit = os.environ.get("GEWU_WORKSPACE_ROOT")
     remember = os.environ.get("GEWU_REMEMBER_DATABASE") == "1" or not explicit

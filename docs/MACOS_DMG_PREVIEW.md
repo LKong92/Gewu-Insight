@@ -1,6 +1,6 @@
 # Standalone macOS DMG packaging
 
-This packaging path creates a standalone DMG for private distribution and testing.
+This packaging path creates a standalone DMG for distribution and testing.
 It leaves the working checkout, installed development App and research data alone.
 It does not publish a GitHub Release or use an Apple account, Developer ID, or
 notarization. Local ad-hoc code signatures protect bundle integrity only.
@@ -29,6 +29,14 @@ wrong database identity, newer schema, busy database, or occupied service port
 stops startup instead of silently opening a different service or creating an
 empty replacement. Database upgrades receive an SQLite backup before migration.
 The App menu's **Database Location…** shows the active location.
+
+Version 1.1.0 adds **Check for Updates** in that menu. See
+[Mac software updates](MACOS_UPDATES.md) for the signed Mac feed, installation
+safety and the commit/push/build/publish sequence. Sparkle is fetched from its
+pinned official archive during the native build; `config/macos-updates.json`
+records its hash and public update key. Signing the release feed requires the
+maintainer's dedicated Keychain signing identity; ordinary builds do not.
+
 
 Logs are in `~/Library/Logs/Gewu Insight`. Rebuildable caches are in
 `~/Library/Caches/com.zhengranwu.gewuinsight`; macOS/WebKit continues to manage

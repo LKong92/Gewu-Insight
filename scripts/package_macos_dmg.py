@@ -101,6 +101,7 @@ def main():
     local_hashes = {}
     if args.working_tree:
         changed = subprocess.check_output(["git", "diff", "--name-only", commit], cwd=REPO, text=True).splitlines()
+        changed += subprocess.check_output(["git", "ls-files", "--others", "--exclude-standard", "--", "paper_monitor", "scripts", "config"], cwd=REPO, text=True).splitlines()
         changed += ["paper_monitor/workspace.py", "paper_monitor/database_migration.py", "scripts/GewuDatabaseLocation.h", "assets/macos-app-template.zip"]
         for name in sorted(set(changed)):
             path = REPO / name
@@ -117,6 +118,7 @@ def main():
     image_root.mkdir()
     app = image_root / "Gewu Insight.app"
     env = dict(os.environ, GEWU_BUILD_PYTHON=sys.executable, PYTHONDONTWRITEBYTECODE="1")
+    env.setdefault("GEWU_SPARKLE_CACHE", str(REPO / "tmp/macos-updater"))
     run("/bin/zsh", source / "scripts/build_macos_app.sh", "--output", app, env=env)
     resources = app / "Contents/Resources"
     project = resources / "project"
@@ -131,9 +133,9 @@ def main():
     copy_tree(source / "docs", project / "docs")
     copy_tree(inputs / "deps", resources / "dependencies")
     shutil.rmtree(resources / "dependencies/bin", ignore_errors=True)
-    shutil.copy2(HERE / "macos_standalone_entry.py", resources / "macos_standalone_entry.py")
+    shutil.copy2(source / "scripts/macos_standalone_entry.py", resources / "macos_standalone_entry.py")
     server = app / "Contents/MacOS/Gewu Insight Server"
-    shutil.copyfile(HERE / "macos_standalone_server.sh", server)
+    shutil.copyfile(source / "scripts/macos_standalone_server.sh", server)
     server.chmod(0o755)
     lock = json.loads((inputs / "runtime-lock.json").read_text())
     for arch in ("arm64", "x86_64"):
@@ -192,8 +194,9 @@ def main():
                 "dependencies": dependencies, "standalone_adapted_files": adapted,
                 "workspace": "User-selected Gewu Database",
                 "working_tree_files": local_hashes,
-                "packaging_scripts": {name: sha256(HERE / name) for name in
+                "packaging_scripts": {name: sha256(source / "scripts" / name) for name in
                     ("package_macos_dmg.py", "macos_standalone_entry.py", "macos_standalone_server.sh")}}
+    manifest["macos_updates"] = json.loads((source / "config/macos-updates.json").read_text())
     (resources / "Standalone Build.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (resources / "BUNDLED_RUNTIME_NOTICES.txt").write_text(
         "This build bundles CPython from Astral python-build-standalone.\n"
@@ -209,6 +212,8 @@ def main():
     run("/usr/bin/xattr", "-cr", app)
     binaries = []
     for path in sorted(app.rglob("*")):
+        if "Sparkle.framework" in path.parts:
+            continue  # Preserve upstream framework/XPC/installer signatures.
         if path.is_symlink() or not path.is_file():
             continue
         with path.open("rb") as stream:
@@ -240,6 +245,11 @@ Your selected Gewu Database folder contains data, reports, config and backups.
 The saved location is kept in ~/Library/Application Support/Gewu Insight.
 Logs are in ~/Library/Logs/Gewu Insight; browser data and caches remain in macOS Library.
 Replacing the App does not replace these files. Removing the App retains your data.
+After this upgrade, use Gewu Insight > Check for Updates to download, install
+and restart for later Mac releases. Automatic checks can be switched off in
+the same menu. Installation always needs your confirmation. Finish current
+work and close the Gewu tab in Zotero before installing; a busy workspace
+postpones installation. Windows releases are not offered to this Mac updater.
 The bundled User Guide explains the separate App and Gewu Database locations,
 first launch, backup, updates and migration. Follow this file for package-specific details.
 Optional Word conversion and TeX exports may require external tools.

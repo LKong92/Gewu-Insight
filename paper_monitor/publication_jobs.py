@@ -7,6 +7,7 @@ import hashlib
 import json
 import random
 import threading
+from . import update_runtime
 import time
 from urllib.parse import quote, parse_qs, urlparse
 
@@ -258,26 +259,27 @@ def start_workers(db_path):
             storage.close()
         def loop(step, import_worker=False):
             while True:
-                work = False
-                storage = None
-                try:
-                    storage = Storage(db_path)
-                    work = step(storage)
-                except Exception:
-                    # A transient SQLite failure must not kill the queue. Each
-                    # item is checkpointed before moving to the next one.
-                    if storage:
-                        storage.conn.rollback()
-                        try:
-                            table = 'publication_import_jobs' if import_worker else 'publication_identifier_tasks'
-                            old, new = ('running', 'queued') if import_worker else ('working', 'pending')
-                            storage.conn.execute(f"UPDATE {table} SET status=? WHERE status=?",(new,old))
-                            storage.conn.commit()
-                        except Exception:
+                with update_runtime.work("My Publications"):
+                    work = False
+                    storage = None
+                    try:
+                        storage = Storage(db_path)
+                        work = step(storage)
+                    except Exception:
+                        # A transient SQLite failure must not kill the queue. Each
+                        # item is checkpointed before moving to the next one.
+                        if storage:
                             storage.conn.rollback()
-                finally:
-                    if storage:
-                        storage.close()
+                            try:
+                                table = 'publication_import_jobs' if import_worker else 'publication_identifier_tasks'
+                                old, new = ('running', 'queued') if import_worker else ('working', 'pending')
+                                storage.conn.execute(f"UPDATE {table} SET status=? WHERE status=?",(new,old))
+                                storage.conn.commit()
+                            except Exception:
+                                storage.conn.rollback()
+                    finally:
+                        if storage:
+                            storage.close()
                 time.sleep(random.uniform(12,24) if work and import_worker else (0.5 if work else 3))
         threading.Thread(target=loop,args=(run_import_step,True),name='publication-import',daemon=True).start()
         threading.Thread(target=loop,args=(run_identifier_step,),name='publication-identifiers',daemon=True).start()

@@ -148,6 +148,17 @@
 
 @implementation GewuBrowserController
 
+- (BOOL)hasPendingFileOperations {
+    if (self.downloads.count || self.captures.count) return YES;
+    for (GewuBrowserTab *tab in self.tabs) {
+        GewuBrowserPage *page = tab.homePage;
+        if (page.exportingPDF || page.downloadTransitionPending || page.pendingRequestedDownload) return YES;
+        page = tab.contentPage;
+        if (page.exportingPDF || page.downloadTransitionPending || page.pendingRequestedDownload) return YES;
+    }
+    return NO;
+}
+
 - (void)ensureTabModel {
     if (!self.tabs) self.tabs = [NSMutableArray array];
     if (!self.selectedTab) {
@@ -564,6 +575,7 @@
 
 
 - (void)handleCommand:(NSDictionary *)command {
+    if (self.preparingUpdate) return;
     NSString *action = [command[@"action"] isKindOfClass:NSString.class] ? command[@"action"] : @"";
     if ([action isEqualToString:@"layout"]) {
         self.active = [command[@"active"] boolValue];
@@ -1435,7 +1447,7 @@
 
 - (void)registerDownload:(WKDownload *)download {
     if (!download) return;
-    if (self.invalidated) { [download cancel:nil]; return; }
+    if (self.invalidated || self.preparingUpdate) { [download cancel:nil]; return; }
     download.delegate = self;
     [self.downloads setObject:[NSMutableDictionary dictionary] forKey:download];
 }
@@ -1522,6 +1534,7 @@
     page.openingPDF = NO; page.downloadTransitionPending = NO;
 }
 - (void)registerPageDownload:(WKDownload *)download view:(WKWebView *)view {
+    if (self.preparingUpdate) { [download cancel:nil]; return; }
     GewuBrowserPage *page = [self pageForView:view];
     if (!page) { [download cancel:nil]; return; }
     [self cancelPDFDownloadsForPage:page];

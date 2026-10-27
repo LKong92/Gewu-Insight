@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import threading
+from . import update_runtime
 import uuid
 from .ai_store import APIError, authenticate, fail
 from .ai_writes import require_paper, receipt, save_receipt, apply_metadata
@@ -37,7 +38,7 @@ def execute_resolve(storage, authorization, operation, args):
                 storage.conn.execute('UPDATE ai_write_requests SET result_json=? WHERE connection_id=? AND request_id=?',(json.dumps(result),grant['id'],key))
             else: save_receipt(storage,grant,operation,key,digest,result)
             storage.conn.commit()
-            thread=threading.Thread(target=run,args=(storage.db_path,authorization,grant['id'],key,paper['storage_key']),daemon=True)
+            thread=update_runtime.Thread(target=run,args=(storage.db_path,authorization,grant['id'],key,paper['storage_key']),daemon=True)
             thread.start()
         except BaseException: SLOTS.release();raise
         return {k:v for k,v in result.items() if not k.startswith('_')}

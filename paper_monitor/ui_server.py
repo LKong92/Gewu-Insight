@@ -31,6 +31,7 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from . import update_runtime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
@@ -449,6 +450,7 @@ def run_ui_server(
 ) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("Gewu Insight serves local clients only; use a loopback host.")
+    update_runtime.enable()
     documentation_mode = str(os.environ.get("GEWU_DOCUMENTATION_MODE") or "").strip().lower() in {
         "1",
         "true",
@@ -481,10 +483,10 @@ def run_ui_server(
     config = load_config(db_path=db_path)
     journals = configured_source_names(config)
     if not documentation_mode:
-        threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
-        threading.Thread(target=trim_pdf_thumbnail_cache_if_needed, daemon=True).start()
-        threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
-        threading.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
+        update_runtime.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
+        update_runtime.Thread(target=trim_pdf_thumbnail_cache_if_needed, daemon=True).start()
+        update_runtime.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
+        update_runtime.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
@@ -505,7 +507,10 @@ def run_ui_server(
     print(f"Journal Monitor UI: {url}")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url + "/#workspace=" + server.workspace_access.bootstrap())).start()
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 class PaperMonitorUiHandler(BaseHTTPRequestHandler):
@@ -562,6 +567,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.UNAUTHORIZED, "Workspace authentication is required. AI clients must use the authorized /api/v1 interface.")
         return False
 
+    @update_runtime.request
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if not self.trusted_local_request():
@@ -841,11 +847,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
+    @update_runtime.request
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if not self.trusted_local_request(browser=parsed.path == "/api/browser"):
             return
         try:
+            if parsed.path == "/api/macos-update":
+                update_runtime.handle(self)
+                return
             if parsed.path in {"/api/zotero-import", "/api/zotero-import/host"}:
                 from .zotero_import.http import handle
                 handle(self)
@@ -1433,7 +1443,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 finish_active_fetch(selected)
                 fetch_storage.close()
 
-        threading.Thread(target=refresh_arxiv, daemon=True).start()
+        update_runtime.Thread(target=refresh_arxiv, daemon=True).start()
         self.send_json({"date": selected, "status": "started"})
 
     def handle_paper(self, query: dict[str, list[str]]) -> None:
@@ -2256,7 +2266,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         if needs_initial_import:
-            threading.Thread(
+            update_runtime.Thread(
                 target=refresh_author_monitor_for_db,
                 kwargs={
                     "db_path": self.configured_db_path,
@@ -2395,7 +2405,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 )
             finally:
                 storage.close()
-            threading.Thread(
+            update_runtime.Thread(
                 target=refresh_author_monitor_for_db,
                 kwargs={
                     "db_path": self.configured_db_path,
@@ -2718,7 +2728,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             identifiers_only=identifiers_only,
             max_papers=max_papers,
         )
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_author_monitor_enrichment_job,
             kwargs={
                 "job_id": job_id,
@@ -2919,7 +2929,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_json({"job_id": active["job_id"], "job": active})
             return
         job_id = create_my_publication_metrics_job()
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_my_publication_metrics_job,
             kwargs={"job_id": job_id, "db_path": self.configured_db_path},
             daemon=True,
@@ -3611,7 +3621,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             preserve_top_level=preserve_top_level,
             metadata_mode=metadata_mode,
         )
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_library_import_job,
             kwargs={
                 "job_id": job_id,
@@ -3649,7 +3659,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         skip_days = int(payload.get("skip_days") or 7)
         skip_days = max(0, min(90, skip_days))
         job_id = create_library_identifier_recovery_job(skip_days=skip_days)
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_library_identifier_recovery_job,
             kwargs={
                 "job_id": job_id,
@@ -6567,7 +6577,7 @@ def run_theme_keyword_recommendation_fetcher_threads(
     for term in search_terms:
         for source_name, fetcher in fetchers:
             result_queue: queue.Queue = queue.Queue(maxsize=1)
-            thread = threading.Thread(
+            thread = update_runtime.Thread(
                 target=theme_keyword_recommendation_fetch_worker,
                 args=(source_name, fetcher, term, result_queue),
                 daemon=True,
@@ -9297,18 +9307,19 @@ def run_auto_journal_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_JOURNAL_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            now = datetime.now().astimezone()
-            if auto_journal_monitor_due(now):
-                run_date = now.date()
-                storage = Storage(db_path)
-                try:
-                    claimed = claim_auto_journal_monitor_day(storage, run_date)
-                finally:
-                    storage.close()
-                if claimed:
-                    print(f"Auto Journal Monitor starting for {run_date.isoformat()}")
-                    run_auto_journal_monitor_once(db_path, run_date)
-                run_pending_auto_journal_monitor_once(db_path)
+            with update_runtime.work("Automatic journal monitor"):
+                now = datetime.now().astimezone()
+                if auto_journal_monitor_due(now):
+                    run_date = now.date()
+                    storage = Storage(db_path)
+                    try:
+                        claimed = claim_auto_journal_monitor_day(storage, run_date)
+                    finally:
+                        storage.close()
+                    if claimed:
+                        print(f"Auto Journal Monitor starting for {run_date.isoformat()}")
+                        run_auto_journal_monitor_once(db_path, run_date)
+                    run_pending_auto_journal_monitor_once(db_path)
             time.sleep(AUTO_JOURNAL_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Journal Monitor scheduler error: {exc}")
@@ -9513,9 +9524,10 @@ def run_auto_arxiv_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_ARXIV_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            result = run_auto_arxiv_monitor_once(db_path)
-            if result.get("status") not in {"skipped", "fetched"}:
-                print(f"Auto arXiv Monitor: {json.dumps(result, ensure_ascii=False, sort_keys=True)}")
+            with update_runtime.work("Automatic arxiv monitor"):
+                result = run_auto_arxiv_monitor_once(db_path)
+                if result.get("status") not in {"skipped", "fetched"}:
+                    print(f"Auto arXiv Monitor: {json.dumps(result, ensure_ascii=False, sort_keys=True)}")
             time.sleep(AUTO_ARXIV_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto arXiv Monitor scheduler error: {exc}")
@@ -9865,18 +9877,19 @@ def run_auto_subject_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_SUBJECT_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            now = datetime.now().astimezone()
-            if auto_subject_monitor_due(now):
-                run_date = now.date()
-                storage = Storage(db_path)
-                try:
-                    claimed = claim_auto_subject_monitor_day(storage, run_date)
-                finally:
-                    storage.close()
-                if claimed:
-                    print(f"Auto Subject Monitor starting for {run_date.isoformat()}")
-                    run_auto_subject_monitor_once(db_path, run_date)
-                run_due_auto_subject_retries_once(db_path, now)
+            with update_runtime.work("Automatic subject monitor"):
+                now = datetime.now().astimezone()
+                if auto_subject_monitor_due(now):
+                    run_date = now.date()
+                    storage = Storage(db_path)
+                    try:
+                        claimed = claim_auto_subject_monitor_day(storage, run_date)
+                    finally:
+                        storage.close()
+                    if claimed:
+                        print(f"Auto Subject Monitor starting for {run_date.isoformat()}")
+                        run_auto_subject_monitor_once(db_path, run_date)
+                    run_due_auto_subject_retries_once(db_path, now)
             time.sleep(AUTO_SUBJECT_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Subject Monitor scheduler error: {exc}")
@@ -10002,10 +10015,11 @@ def run_auto_author_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_AUTHOR_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            now = datetime.now(local_timezone())
-            run_auto_author_monitor_once(
-                db_path, now.date(), retry_only=now.hour < AUTO_AUTHOR_MONITOR_HOUR, now=now,
-            )
+            with update_runtime.work("Automatic author monitor"):
+                now = datetime.now(local_timezone())
+                run_auto_author_monitor_once(
+                    db_path, now.date(), retry_only=now.hour < AUTO_AUTHOR_MONITOR_HOUR, now=now,
+                )
             time.sleep(AUTO_AUTHOR_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Author Monitor scheduler error: {exc}")
@@ -10583,7 +10597,7 @@ def rebuild_author_monitor_card_cache(
 
 
 def request_author_monitor_card_cache_build(db_path: Path) -> None:
-    threading.Thread(
+    update_runtime.Thread(
         target=rebuild_author_monitor_card_cache,
         args=(db_path,),
         daemon=True,

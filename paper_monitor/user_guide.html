@@ -672,7 +672,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Version 1.0.1 · Build 1 · October 27, 2026 · Zotero import edition</p>
+          <p class="guide-revision">Version 1.1.0 · Build 11001 · October 28, 2026 · Mac updates and Zotero edition</p>
 
           <p><strong>Source-available research software.</strong> The Gewu Insight Academic and Non-Commercial Research License permits downloading, installing, building, running and modifying the software for academic/non-commercial research. Original and modified versions, derivative works and patches may be shared free of charge for those purposes under the same research-use terms, with retained notices and clearly identified modifications. Public research forks and pull requests within those terms need no separate permission. Commercial use, commercial redistribution, sublicensing and integration into commercial products or services require separate prior written authorization. Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved except for those express permissions. Read the complete <a href="https://github.com/LKong92/Gewu-Insight/blob/main/LICENSE">LICENSE</a>, also included with the local distribution and inside the App resources, before use. This is not an open-source license.</p>
 
@@ -725,7 +725,7 @@
 
           <div class="important"><span class="callout-title">Current distribution status</span>This guide does not claim that a supported Windows package is available today. Instructions that name Finder, Preview, Quick Look, the Dock, or macOS Trash describe the currently tested macOS integration. Consult the Windows branch for its own build instructions and current limitations; macOS screenshots do not establish Windows feature parity.</div>
 
-          <p><strong>This edition adds Zotero library import and manual DOI conflict review to the companion guide.</strong> The App version and Build identify the host application; the companion plugin has its own version. The Zotero chapters describe the local 0.4.0 preview, tested with Zotero 10.0.6 on macOS. It does not imply that the preview is included in older published installers. Check <span class="ui">Plugin &gt; Zotero Integration</span> for the package included with your App. Updating the guide or adding the plugin does not require a fresh database or another Library import.</p>
+          <p><strong>This edition includes Mac software updates, Zotero library import and manual DOI conflict review.</strong> The App version and Build identify the host application; the companion plugin has its own version. The Zotero chapters describe companion 0.4.0 bundled with Mac 1.1.0, tested with Zotero 10.0.6 on macOS. Older installers do not include these additions. Check <span class="ui">Plugin &gt; Zotero Integration</span> for the package included with your App. Updating the guide or adding the plugin does not require a fresh database or another Library import.</p>
 
           <div class="note"><span class="callout-title">Use the same Gewu workspace in Zotero</span>The standalone App and the Zotero companion are two interfaces to one Gewu Insight installation and the same selected Gewu Database. Start with <a href="#zotero-workspace">One Workspace, Two Interfaces</a>, then follow <a href="#zotero-install">Install, Update, and Remove the Plugin</a>. To copy Zotero's own collection into Gewu, use the separate <a href="#zotero-import">Import a Zotero Library</a> workflow.</div>
 
@@ -2190,6 +2190,17 @@
             <li><strong>Verify and store separately.</strong> Check the copied SQLite, file list and representative PDF/Markdown files before relying on the backup. Use another disk or a versioned backup location, outside the live research folder. Keep full backups private because they can include service credentials and connection tokens.</li>
           </ol>
           <p>A ZIP or filesystem copy that loses alias information is not an equivalent replacement for a verified Mac backup. A <code>.sparsebundle</code> backup container can be mounted in Finder to inspect its contents; keep the container intact and eject its mounted volume after use.</p>
+
+          <h2 id="mac-software-updates">Update the Mac App</h2>
+          <p><strong>Coming from 1.0.x:</strong> download the official <code>Gewu-Insight-macOS-1.1.0.dmg</code>, quit Gewu Insight and replace the App in Applications. Keep your selected Gewu Database in its existing folder. This one manual replacement adds the in-app updater; the old App cannot acquire that feature by checking GitHub source changes.</p>
+          <ol class="steps">
+            <li>In the standalone App, choose <span class="ui">Gewu Insight &gt; Check for Updates</span> in the macOS menu bar.</li>
+            <li>Review the available Mac version and choose <span class="ui">Install Update</span>. The App downloads and verifies the signed installer.</li>
+            <li>Finish file operations, close the Gewu tab in Zotero, and finish or pause Zotero imports. Choose <span class="ui">Install and Relaunch</span>. Busy work postpones installation; it is not force-stopped. When ready, the service closes safely and the updated App reopens the same workspace.</li>
+          </ol>
+          <p><span class="ui">Automatically Check for Updates</span> in the same App menu enables daily checks. You still choose when to install. The Mac updater only follows the stable Mac feed, even when Windows and Mac releases share the GitHub repository. A new source commit alone is not an App update.</p>
+          <p>Updates replace the program, not your selected database, PDFs or Associated Files. Keep full backups before major upgrades. If installation is interrupted after the App closes, replace the App with the latest official Mac DMG and reopen the same database. Do not create a new database to repair an update. An older App may be incompatible with a database already upgraded by a newer version.</p>
+          <div class="note"><span class="callout-title">App update and plugin update are separate</span><span class="ui">Update Plugin</span> under Zotero Integration installs the companion bundled with the current App. It does not check GitHub for a newer Gewu App. After updating Gewu, use that action if its companion needs updating.</div>
 
           <h2 id="upgrade-installation">Back Up and Upgrade</h2>
           <ol class="steps">

@@ -79,6 +79,8 @@ APP_ICON_PNG_DEST="$APP/Contents/Resources/$APP_ICON_BASENAME.png"
 STARTUP_ICON_PNG_DEST="$APP/Contents/Resources/GewuInsightAppIcon.png"
 APP_ICONSET="$APP/Contents/Resources/PaperMonitor.iconset"
 APP_ICON_ICNS_DEST="$APP/Contents/Resources/$APP_ICON_BASENAME.icns"
+"$BUILD_PYTHON" "$PROJECT_DIR/scripts/macos_update_framework.py" --app "$APP" \
+  --cache "${GEWU_SPARKLE_CACHE:-$PROJECT_DIR/tmp/macos-updater}"
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/paper-monitor-clang-cache}" \
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
   xcrun clang \
@@ -91,7 +93,10 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
     -framework WebKit \
     -framework ImageIO \
     -framework UniformTypeIdentifiers \
+    -F "$APP/Contents/Frameworks" -framework Sparkle \
+    -Wl,-rpath,@executable_path/../Frameworks \
     "$SOURCE" \
+    "$PROJECT_DIR/scripts/GewuUpdateController.m" \
     "$PROJECT_DIR/scripts/GewuBrowserController.m" \
     "$PROJECT_DIR/scripts/GewuBrowserAutoFill.m" \
     "$PROJECT_DIR/scripts/GewuBrowserCapture.m" \
@@ -152,6 +157,7 @@ cp "$APP_ICON_ICNS_DEST" "$APP/Contents/Resources/PaperMonitor.icns"
 "$BUILD_PYTHON" "$PROJECT_DIR/scripts/build_zotero_plugin.py" --output "$APP/Contents/Resources/Gewu Insight for Zotero.xpi"
 if [[ -f "$APP/Contents/Resources/local-source.json" ]]; then
   cp "$PROJECT_DIR/scripts/macos_source_server.sh" "$APP/Contents/MacOS/Gewu Insight Server"
+  cp "$PROJECT_DIR/scripts/macos_standalone_entry.py" "$APP/Contents/Resources/macos_standalone_entry.py"
   chmod +x "$APP/Contents/MacOS/Gewu Insight Server"
 fi
 xattr -cr "$APP"

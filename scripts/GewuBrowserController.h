@@ -6,6 +6,8 @@
 @interface GewuBrowserController : NSObject <WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate>
 @property(nonatomic, weak) WKWebView *workspace;
 @property(nonatomic, strong, readonly) WKWebView *webView;
+@property(nonatomic, readonly) BOOL hasPendingFileOperations;
+@property(nonatomic) BOOL preparingUpdate;
 @property(nonatomic, copy) void (^onEvent)(NSDictionary *event);
 // External Browser pages and authorized Science downloads share website state,
 // but always receive fresh configurations with no trusted workspace bridges.

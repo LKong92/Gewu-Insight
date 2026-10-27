@@ -125,6 +125,11 @@ class StagedBuildTests(unittest.TestCase):
         scripts.mkdir()
         for name in ['build_macos_app.sh', 'macos_signing.py', 'make_release.sh']:
             shutil.copy2(ROOT / 'scripts' / name, scripts / name)
+        # This fixture tests atomic replacement, not framework/plugin fetching.
+        # The real dependencies are checked in the standalone updater workflow.
+        (scripts / 'macos_update_framework.py').write_text('# isolated packaging stub\n')
+        (scripts / 'build_zotero_plugin.py').write_text(
+            'import pathlib,sys\npathlib.Path(sys.argv[sys.argv.index("--output")+1]).write_bytes(b"plugin fixture")\n')
         self.installed = self.root / 'Gewu Insight.app'
         macos = self.installed / 'Contents/MacOS'
         macos.mkdir(parents=True)
@@ -150,6 +155,8 @@ class StagedBuildTests(unittest.TestCase):
         (package / 'Gewu_Insight_User_Guide.pdf').write_bytes(b'guide fixture')
         assets = self.root / 'assets/branding'
         assets.mkdir(parents=True)
+        (assets / 'README.md').write_text('fixture provenance')
+        (assets / 'GewuSealGlyphs.provenance.json').write_text('{}')
         for path in [assets / 'GewuSealGlyphs.png', assets / 'GewuAboutCalligraphy.png',
                      assets.parent / 'gewu-insight-app-icon.png']:
             path.write_bytes(b'icon fixture')

@@ -1,6 +1,6 @@
 # Distributing Gewu Insight
 
-Gewu Insight is available as macOS 1.0.1 and Windows 1.0.0 installers.
+Gewu Insight is available as macOS 1.1.0 and Windows 1.0.0 installers.
 Both include Python and application dependencies. Source archives and the
 legacy folder-based packaging script are development paths, not the current
 end-user installers.
@@ -14,7 +14,7 @@ Do not change repository visibility as part of a build or update.
 
 | Platform | Requirements | Package and instructions |
 | --- | --- | --- |
-| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.0.1 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.1) |
+| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.1.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) |
 | Windows | Windows 10 version 1607+ or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) |
 
 On macOS, open the DMG, drag Gewu Insight.app to Applications, eject the image,
@@ -67,7 +67,7 @@ Outstanding artwork/font permissions are recorded in the
 does not supply those permissions.
 
 The [installer inventory](docs/RELEASE_COMPONENT_AUDIT.md) distinguishes current
-release metadata from historical package inspections. The macOS 1.0.1 build
+release metadata from historical package inspections. The macOS 1.1.0 build
 includes current notices, CONTRIBUTING.md and the referenced documents. Earlier
 package findings and Windows limitations remain recorded; previous release assets
 remain unchanged.
@@ -92,6 +92,13 @@ remain unchanged.
   expecting a standalone package or use its empty folders as formal data.
 
 ## macOS signing and updates
+
+Mac 1.0.x users manually replace the App once with 1.1.0. Later versions offer
+**Gewu Insight → Check for Updates** and optional daily checks. Sparkle verifies
+a signed Mac-only feed and installer; it never chooses the repository-wide
+latest Release or Windows package. Installation is explicit and waits for a
+safe workspace boundary. See [Mac update behavior and release sequence](docs/MACOS_UPDATES.md).
+
 
 Local builds explicitly use ad-hoc signing without an Apple certificate,
 Team ID or keychain password. Builders stage changes, verify signatures and the

@@ -5,6 +5,16 @@ October 10, 2026. Gewu's custom research license applies only to its
 own covered materials. It does not restrict the independent licenses below.
 Keep this file and the component-specific notices when redistributing Gewu.
 
+## macOS updater
+
+Mac builds from 1.1.0 bundle unmodified Sparkle 2.10.1 from
+https://github.com/sparkle-project/Sparkle/releases/tag/2.10.1.
+The exact archive digest is pinned in `config/macos-updates.json`. Sparkle and
+its included components retain their own licenses; the complete upstream
+license and component notices are included in the App as
+`Contents/Resources/Sparkle-LICENSE.txt`. Original framework and helper
+signatures are preserved. No Sparkle component is added to the Windows build.
+
 ## Bundled JavaScript
 
 The following original license texts are reproduced from the exact upstream
