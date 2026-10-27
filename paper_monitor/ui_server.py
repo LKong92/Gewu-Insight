@@ -3811,6 +3811,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             folder = storage.create_library_folder(parent_id=parent_id, name=name)
+            folder_rename.remember_new_empty_folder(storage, folder)
             snapshot = library_snapshot(storage) if include_snapshot else {}
             folder_api = library_folder_to_api(folder, storage)
         finally:
@@ -38023,6 +38024,11 @@ INDEX_HTML = """<!doctype html>
       return ensureLibraryFolderLoaded(folderId, options)
         .then(() => {
           if (state.mode === "library" && state.libraryTab !== "my-publications") {
+            // Keep an active rename input intact when a folder load finishes.
+            // Its data is already cached; saving/cancelling renders that data.
+            // Replacing the input here would trigger blur and save the draft.
+            if ((state.libraryRenamingFolderId || state.libraryRenamingItemId)
+                && document.querySelector("[data-library-rename-input]")) return;
             renderLibraryNavigationContent();
             refreshLibraryQuickLookForSelection();
           }
@@ -39496,7 +39502,7 @@ INDEX_HTML = """<!doctype html>
           event.stopPropagation();
           const nextRootId = Number(button.dataset.workspaceRootId || 0);
           if (!nextRootId) return;
-          const nextSelectedId = nextRootId === mainRootId ? Number(unsortedId || nextRootId) : nextRootId;
+          const nextSelectedId = nextRootId === mainRootId && !options.selectWorkspaceRoot ? Number(unsortedId || nextRootId) : nextRootId;
           renderLibraryAddMenu(menu, paperId, article, nextRootId, [], nextSelectedId, options);
           positionLibraryAddMenu(menu, article.querySelector('[data-action="add-library"]'));
         });
@@ -60283,6 +60289,7 @@ INDEX_HTML = """<!doctype html>
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     function handleGewuInsightWindowKeydown(event) {
       if ($("aiAccessBackdrop")?.classList.contains("open")) return;
+      if (event.target?.closest?.(".zotero-import-backdrop")) return;
       if (handlePreviewCloseShortcut(event)) return;
       if (handleSearchShortcut(event)) return;
       if (handleLibraryViewShortcut(event)) return;

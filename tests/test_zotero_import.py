@@ -168,8 +168,160 @@ class ZoteroImportTests(unittest.TestCase):
 
     def test_destination_inside_zotero_rejected(self):
         with patch.object(ui,'LIBRARY_LOCAL_COPY_ROOT',self.source/'forbidden'):
-            result=self.run_import()
-        self.assertTrue(result['issues']);self.assertFalse((self.source/'forbidden').exists())
+            with self.assertRaisesRegex(ValueError, 'overlaps a Zotero source'):
+                self.run_import()
+        self.assertFalse((self.source/'forbidden').exists())
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0],0)
+
+    def test_empty_hierarchy_materialized_in_library_and_space_with_mirrors(self):
+        space = self.storage.create_library_root_folder(name='Research Space')
+        for root in (1, space['id']):
+            with self.subTest(root=root):
+                target = self.storage.create_library_folder(parent_id=root, name='Destination')
+                self.job['config']['target_id'] = target['id']
+                # Child first: the catalog's ordering must not change the hierarchy.
+                self.job['config']['collections'].reverse()
+                mapping = importer.destinations(self.storage, self.job)
+                scope = 'Library' if root == 1 else 'Spaces'
+                prefix = Path('Destination/Imported Zotero') if root == 1 else Path('Research Space/Destination/Imported Zotero')
+                base = ui.LIBRARY_LOCAL_COPY_ROOT if root == 1 else ui.SPACES_LOCAL_COPY_ROOT
+                for key, suffix in (('', ''), ('COLLECT1', 'Quantum'), ('COLLECT2', 'Quantum/Reading')):
+                    expected = base / prefix / suffix
+                    self.assertEqual(ui.local_copy_dir_for_library_folder(self.storage, mapping[key]), expected)
+                    self.assertTrue(expected.is_dir())
+                    self.assertTrue((ui.ASSOCIATED_FILES_ROOT / scope / prefix / suffix).is_dir())
+                self.assertEqual(list((base / prefix / 'Quantum/Reading').iterdir()), [])
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM papers').fetchone()[0], 0)
+
+    def test_collection_paths_reuse_existing_name_rules(self):
+        self.job['config']['root_name'] = 'Zotero: Import'
+        self.job['config']['collections'] = [
+            {'key':'COLLECT1', 'name':'A/B', 'parent':''},
+            {'key':'COLLECT2', 'name':'A/B', 'parent':''},
+            {'key':'COLLECT3', 'name':'中文层级', 'parent':'COLLECT2'}]
+        mapping = importer.destinations(self.storage, self.job)
+        first = ui.local_copy_dir_for_library_folder(self.storage, mapping['COLLECT1'])
+        second = ui.local_copy_dir_for_library_folder(self.storage, mapping['COLLECT2'])
+        self.assertEqual(first, ui.LIBRARY_LOCAL_COPY_ROOT / 'Zotero- Import/A-B')
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.is_dir()); self.assertTrue(second.is_dir())
+        self.assertTrue((second / '中文层级').is_dir())
+
+    def test_repeated_collection_creation_preserves_existing_files_and_folder_ids(self):
+        first = importer.destinations(self.storage, self.job)
+        root = ui.local_copy_dir_for_library_folder(self.storage, first[''])
+        sentinel = root / 'Keep.txt'; sentinel.write_text('original Gewu content')
+        before = files.fingerprint(sentinel.stat())
+        leaf = root / 'Quantum/Reading'
+        leaf.rmdir()
+        second = importer.destinations(self.storage, self.job)
+        self.assertEqual(first, second)
+        self.assertTrue(leaf.is_dir())
+        self.assertEqual(sentinel.read_text(), 'original Gewu content')
+        self.assertEqual(files.fingerprint(sentinel.stat()), before)
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0], 3)
+
+    def test_distinct_collections_cannot_silently_collapse_to_one_disk_folder(self):
+        self.job['config']['collections'] = [
+            {'key':'COLLECT1', 'name':'A/B', 'parent':''},
+            {'key':'COLLECT2', 'name':'A:B', 'parent':''}]
+        with self.assertRaisesRegex(ValueError, 'same filesystem folder'):
+            importer.destinations(self.storage, self.job)
+        self.assertFalse(ui.LIBRARY_LOCAL_COPY_ROOT.exists())
+        self.assertFalse(ui.ASSOCIATED_FILES_ROOT.exists())
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0], 0)
+
+    def test_collection_directories_block_source_roots_and_shortcuts_before_writing(self):
+        before = sorted(str(p.relative_to(self.source)) for p in self.source.rglob('*'))
+        for root_name in ('LIBRARY_LOCAL_COPY_ROOT', 'ASSOCIATED_FILES_ROOT'):
+            with self.subTest(root=root_name):
+                with patch.object(ui, root_name, self.source / 'forbidden'):
+                    with self.assertRaisesRegex(ValueError, 'overlaps a Zotero source'):
+                        importer.destinations(self.storage, self.job)
+                self.assertFalse((self.source / 'forbidden').exists())
+                self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0], 0)
+        ui.LIBRARY_LOCAL_COPY_ROOT.mkdir()
+        link = ui.LIBRARY_LOCAL_COPY_ROOT / 'Imported Zotero'
+        link.symlink_to(self.source, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            importer.destinations(self.storage, self.job)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(sorted(str(p.relative_to(self.source)) for p in self.source.rglob('*')), before)
+        self.assertFalse(ui.ASSOCIATED_FILES_ROOT.exists())
+
+    def test_collection_directories_protect_registered_external_source_paths(self):
+        # Linked/snapshot sources can be outside Zotero's catalog roots.
+        path = ui.LIBRARY_LOCAL_COPY_ROOT / 'Imported Zotero'
+        self.storage.conn.execute('INSERT INTO zotero_import_sources VALUES(?,?)', (self.job['id'], str(path.resolve())))
+        self.storage.conn.commit()
+        with self.assertRaisesRegex(ValueError, 'overlaps a Zotero source'):
+            importer.destinations(self.storage, self.job)
+        self.assertFalse(ui.LIBRARY_LOCAL_COPY_ROOT.exists())
+        self.assertFalse(ui.ASSOCIATED_FILES_ROOT.exists())
+
+    def test_collection_directory_file_conflict_does_not_overwrite(self):
+        blocked = ui.ASSOCIATED_FILES_ROOT / 'Library/Imported Zotero/Quantum/Reading'
+        blocked.parent.mkdir(parents=True)
+        blocked.write_text('do not overwrite')
+        before = files.fingerprint(blocked.stat())
+        with self.assertRaisesRegex(ValueError, 'existing file blocks'):
+            importer.destinations(self.storage, self.job)
+        self.assertEqual(blocked.read_text(), 'do not overwrite')
+        self.assertEqual(files.fingerprint(blocked.stat()), before)
+        self.assertFalse(ui.LIBRARY_LOCAL_COPY_ROOT.exists())
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0], 0)
+
+    def test_collection_directory_failure_rolls_back_only_new_empty_directories(self):
+        root = ui.LIBRARY_LOCAL_COPY_ROOT
+        root.mkdir()
+        sentinel = root / 'Keep.txt'; sentinel.write_text('keep')
+        mkdir = Path.mkdir
+        def fail(path, *args, **kwargs):
+            if path.name == 'Reading':
+                raise PermissionError('fixture permission failure')
+            return mkdir(path, *args, **kwargs)
+        with patch.object(Path, 'mkdir', fail):
+            with self.assertRaisesRegex(PermissionError, 'fixture permission'):
+                importer.destinations(self.storage, self.job)
+        self.assertEqual(list(root.iterdir()), [sentinel])
+        self.assertFalse(ui.ASSOCIATED_FILES_ROOT.exists())
+        self.assertFalse(self.storage.conn.execute("SELECT 1 FROM library_folders WHERE name='Imported Zotero'").fetchone())
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0], 0)
+        self.assertTrue(importer.destinations(self.storage, self.job))
+
+    def test_collection_rollback_keeps_files_added_after_directory_creation(self):
+        root = ui.LIBRARY_LOCAL_COPY_ROOT
+        sentinel = root / 'Imported Zotero/Quantum/Keep.txt'
+        mkdir = Path.mkdir
+        def fail(path, *args, **kwargs):
+            if path.name == 'Reading':
+                sentinel.write_text('created by another operation')
+                raise PermissionError('fixture permission failure')
+            return mkdir(path, *args, **kwargs)
+        with patch.object(Path, 'mkdir', fail):
+            with self.assertRaises(PermissionError):
+                importer.destinations(self.storage, self.job)
+        self.assertEqual(sentinel.read_text(), 'created by another operation')
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0], 0)
+        importer.destinations(self.storage, self.job)
+        self.assertEqual(sentinel.read_text(), 'created by another operation')
+
+    def test_collection_directories_rollback_on_database_commit_failure(self):
+        connection = self.storage.conn
+        class FailedCommit:
+            def __getattr__(self, name):
+                return getattr(connection, name)
+            def commit(self):
+                raise sqlite3.OperationalError('fixture commit failure')
+        self.storage.conn = FailedCommit()
+        try:
+            with self.assertRaisesRegex(sqlite3.OperationalError, 'fixture commit'):
+                importer.destinations(self.storage, self.job)
+        finally:
+            self.storage.conn = connection
+        self.assertFalse(ui.LIBRARY_LOCAL_COPY_ROOT.exists())
+        self.assertFalse(ui.ASSOCIATED_FILES_ROOT.exists())
+        self.assertEqual(connection.execute('SELECT count(*) FROM zotero_import_folders').fetchone()[0], 0)
 
     def test_metadata_only_and_standalone_note_need_no_fake_doi(self):
         entry={'data':{'key':'NOTE0002','itemType':'note','note':'<p>Standalone note</p>'},'attachments':[],
@@ -293,10 +445,42 @@ class MigrationHTTPTests(unittest.TestCase):
     def test_empty_collection_preserved_and_disconnected_start_is_blocked(self):
         store.initialize(self.storage);job=store.create(self.storage)
         store.update(self.storage,job['id'],state='ready',config={'source_id':'zotero:test','library_id':1,'target_id':1,'root_name':'Empty import','collections':[{'key':'EMPTY001','name':'Empty folder','parent':''}]})
+        directory=ui.LIBRARY_LOCAL_COPY_ROOT/'Empty import/Empty folder'
         self.assertEqual(self.request('/api/zotero-import',{'action':'start','id':job['id']},workspace=True)[0],400)
+        self.assertFalse(directory.exists())
         store.update(self.storage,job['id'],adapter_seen=time.time())
         self.assertEqual(self.request('/api/zotero-import',{'action':'start','id':job['id']},workspace=True)[0],200)
         self.assertTrue(self.storage.conn.execute("SELECT 1 FROM library_folders WHERE name='Empty folder'").fetchone())
+        self.assertTrue(directory.is_dir())
+        self.assertTrue((ui.ASSOCIATED_FILES_ROOT/'Library/Empty import/Empty folder').is_dir())
+
+    def test_selected_empty_subtree_preview_writes_no_directories_then_start_keeps_hierarchy(self):
+        with patch.object(http,'launch',lambda storage,job,origin:store.update(storage,job['id'],generation='generation')):
+            code,job,_=self.request('/api/zotero-import',{'action':'connect'},workspace=True)
+        self.assertEqual(code,200)
+        job_id=job['id']
+        def host(action,**extra):
+            return self.request('/api/zotero-import/host',{'action':action,'id':job_id,'generation':'generation',**extra},workspace=True)
+        collections=[{'key':'PARENT01','name':'Not selected','parent':''},
+                     {'key':'SELECT01','name':'Selected','parent':'PARENT01'},
+                     {'key':'CHILD001','name':'Empty child','parent':'SELECT01'},
+                     {'key':'OTHER001','name':'Other collection','parent':''}]
+        catalog={'protocol':1,'protected_roots':[],'libraries':[{'id':1,'source_id':'zotero:test','name':'Test library','collections':collections}]}
+        self.assertEqual(host('hello',catalog=catalog)[0],200)
+        before=self.storage.conn.execute('SELECT count(*) FROM library_folders').fetchone()[0]
+        self.assertEqual(self.request('/api/zotero-import',{'action':'scan','id':job_id,'source_id':'zotero:test',
+            'target_id':1,'root_name':'Selected import','collection_keys':['SELECT01']},workspace=True)[0],200)
+        self.assertEqual(host('next')[1]['command'],'scan')
+        self.assertEqual(host('scanned')[0],200)
+        root=ui.LIBRARY_LOCAL_COPY_ROOT/'Selected import'
+        self.assertFalse(root.exists())
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM library_folders').fetchone()[0],before)
+        self.assertEqual(self.request('/api/zotero-import',{'action':'start','id':job_id},workspace=True)[0],200)
+        self.assertTrue((root/'Selected/Empty child').is_dir())
+        self.assertTrue((ui.ASSOCIATED_FILES_ROOT/'Library/Selected import/Selected/Empty child').is_dir())
+        self.assertEqual([p.name for p in root.iterdir()],['Selected'])
+        self.assertEqual(host('next')[1]['state'],'complete')
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM zotero_import_papers').fetchone()[0],0)
 
 
 if __name__=='__main__':unittest.main()

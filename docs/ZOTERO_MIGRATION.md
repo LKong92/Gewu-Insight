@@ -29,7 +29,7 @@ files are recognized across sessions; a second import is not a second full copy.
 
 | Zotero content | Gewu result |
 | --- | --- |
-| Collections and subcollections | Folder hierarchy under the chosen import folder, including empty collections |
+| Collections and subcollections | Folder hierarchy under the chosen import folder, including physical directories for empty collections |
 | One item in several collections | One Gewu paper/Key with several folder memberships |
 | Bibliographic item with no local PDF | Metadata record; no fabricated DOI or automatic download |
 | Stored files and externally linked files | Verified, independent managed copies in Paper Files |
@@ -39,6 +39,14 @@ files are recognized across sessions; a second import is not a second full copy.
 | Child and standalone notes | Readable Markdown plus an archive of original HTML/metadata and embedded images |
 | Legacy HTML snapshots with sibling assets | HTML copy and an archive preserving the snapshot's relative file structure |
 | Tags, citation keys, extra fields and relationships | Original fields retained in Zotero Metadata and the migration record; no new native tag/citation-key UI is implied |
+
+Starting the import creates the selected collection hierarchy on disk using Gewu's
+existing Library or Space paths and matching Associated Files directories, even
+when a collection has no papers. Preview alone creates neither these directories
+nor Library folders. Paper Files still follows Gewu's existing Default-file and
+attachment layout; this does not reproduce Zotero's internal `storage` folders.
+An existing file or a shortcut blocking a destination is reported without being
+overwritten. Repeated imports reuse the mapped folders.
 
 The original note archive preserves richer formatting than the readable Markdown.
 Images are included separately in that archive and embedded in the readable note

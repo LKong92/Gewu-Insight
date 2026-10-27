@@ -68,6 +68,12 @@ def mapped_folder(storage, source, target, key, parent, name):
 
 
 def destinations(storage, job):
+    from ..publication_jobs import MUTATION_LOCK
+    with MUTATION_LOCK:
+        return _destinations(storage, job)
+
+
+def _destinations(storage, job):
     source, config = source_id(job), job['config']
     target = int(config['target_id'])
     active(storage, target)
@@ -88,7 +94,28 @@ def destinations(storage, job):
             return mapping[key]
         for key in collections:
             add(key)
-        storage.conn.commit()
+        from .. import ui_server as ui
+        paths = []
+        owners = {}
+        for folder_id in mapping.values():
+            directory = ui.local_copy_dir_for_library_folder(storage, folder_id)
+            # Retain the existing Library/Space naming and Associated Files mirror.
+            base = next(root for root in (ui.LIBRARY_LOCAL_COPY_ROOT, ui.SPACES_LOCAL_COPY_ROOT)
+                        if directory.is_relative_to(root))
+            directory = base.resolve() / directory.relative_to(base)
+            if directory in owners and owners[directory] != folder_id:
+                raise ValueError('Two Zotero collections map to the same filesystem folder. Use distinct collection names: ' + str(directory))
+            owners[directory] = folder_id
+            scope = ui.associated_scope_for_path(directory)
+            if not scope:
+                raise ValueError('The import folder is outside the managed Library or Spaces.')
+            label, relative = scope
+            paths.extend((directory, ui.ASSOCIATED_FILES_ROOT.resolve() / label / relative))
+        protected = list(job['catalog'].get('protected_roots', []))
+        protected.extend(row['path'] for row in storage.conn.execute(
+            'SELECT path FROM zotero_import_sources WHERE job_id=?', (job['id'],)))
+        with files.collection_directories(paths, protected):
+            storage.conn.commit()
         return mapping
     except BaseException:
         storage.conn.rollback()

@@ -4,6 +4,7 @@ Moves and renames preserve registered files and Default selection. Alias
 discovery is one pass per operation; callers may save a receipt in the same
 transaction as the placement/path changes.
 """
+from collections import OrderedDict
 from contextlib import ExitStack
 import json
 import logging
@@ -16,6 +17,51 @@ from . import finder_alias
 from .download import paper_download_lock
 from .file_layout_journal import write_json
 from .publication_jobs import MUTATION_LOCK
+
+
+# One-use hints issued only by the UI's new-folder action, never by imports.
+# Losing a hint (eviction/restart) simply retains the complete rename workflow.
+_NEW_EMPTY_FOLDERS = OrderedDict()
+
+
+def remember_new_empty_folder(storage, folder):
+    from . import ui_server as ui
+    with MUTATION_LOCK:
+        try:
+            directory = _path(ui.local_copy_dir_for_library_folder(storage, folder['id']))
+            if os.path.lexists(directory):
+                return
+            roots = _roots(ui, directory)
+            if any(os.path.lexists(root) for root in roots):
+                return
+        except (OSError, ValueError):
+            # An optional speed hint must not change folder creation behavior.
+            return
+        key = (str(storage.db_path.resolve()), folder['id'])
+        _NEW_EMPTY_FOLDERS[key] = (dict(folder), roots)
+        while len(_NEW_EMPTY_FOLDERS) > 256:
+            _NEW_EMPTY_FOLDERS.popitem(last=False)
+
+
+def _begin_new_empty_rename(storage, folder, roots):
+    """Prove a fresh logical folder has nothing to move, under the SQL lock."""
+    key = (str(storage.db_path.resolve()), folder['id'])
+    if _NEW_EMPTY_FOLDERS.pop(key, None) != (folder, roots):
+        return False
+    storage.conn.execute('BEGIN IMMEDIATE')
+    try:
+        if (storage.get_library_folder(folder['id']) != folder
+                or storage.conn.execute('SELECT 1 FROM library_folders WHERE parent_id=? LIMIT 1', (folder['id'],)).fetchone()
+                or storage.conn.execute('SELECT 1 FROM library_items WHERE folder_id=? LIMIT 1', (folder['id'],)).fetchone()
+                or any(os.path.lexists(root) for root in roots)
+                or _references(storage, [(p, p.with_name('.rename-target')) for p in roots])):
+            storage.conn.rollback()
+            return False
+        # Keep the writer lock through commit: no second reference scan needed.
+        return True
+    except Exception:
+        storage.conn.rollback()
+        raise
 
 
 def _path(value):
@@ -329,15 +375,21 @@ def relocate(storage, folder_id, *, name=None, parent_id=None, workspace_tabs=No
             raise ValueError('Folder not found or root Library cannot be renamed')
         old_directory = _path(ui.local_copy_dir_for_library_folder(storage, folder_id))
         old_roots = _roots(ui, old_directory)
+        fast_empty = (parent_id is None and workspace_tabs is None and validate is None
+                      and before_commit is None and validate_paths is None
+                      and _begin_new_empty_rename(storage, old_folder, old_roots))
         # Hold download locks before SQLite's writer lock, as Recycle does.
         # Busy downloads produce a retry message instead of blocking on network.
-        preliminary = _references(storage, [(p, p.with_name('.rename-target')) for p in old_roots])
-        paper_ids = {pid for pid, _, _ in preliminary}
-        paper_ids.update(item['paper_id'] for item in ui.library_items_in_folder_tree(storage, folder_id))
-        for pid in sorted(paper_ids):
-            locks.enter_context(paper_download_lock(storage.db_path, pid, blocking=False))
+        paper_ids = set()
+        if not fast_empty:
+            preliminary = _references(storage, [(p, p.with_name('.rename-target')) for p in old_roots])
+            paper_ids = {pid for pid, _, _ in preliminary}
+            paper_ids.update(item['paper_id'] for item in ui.library_items_in_folder_tree(storage, folder_id))
+            for pid in sorted(paper_ids):
+                locks.enter_context(paper_download_lock(storage.db_path, pid, blocking=False))
         journal = None
-        storage.conn.execute('BEGIN IMMEDIATE')
+        if not fast_empty:
+            storage.conn.execute('BEGIN IMMEDIATE')
         try:
             if storage.get_library_folder(folder_id) != old_folder:
                 raise ValueError('The folder changed. Please retry the rename.')
@@ -359,10 +411,10 @@ def relocate(storage, folder_id, *, name=None, parent_id=None, workspace_tabs=No
                 for old, _ in pairs:
                     if finder_alias.is_alias(old):
                         raise ValueError('The folder location is a shortcut. Restore its real directory before renaming.')
-                references = _references(storage, pairs)
+                references = [] if fast_empty else _references(storage, pairs)
                 if {pid for pid, _, _ in references} - paper_ids:
                     raise ValueError('Folder contents changed. Please retry the rename.')
-                files, directories, aliases = _plan(storage, pairs)
+                files, directories, aliases = ([], set(), {}) if fast_empty else _plan(storage, pairs)
                 if validate_paths:
                     validate_paths(pairs, files, directories, aliases)
                 journal = RenameJournal(storage, pairs, files, directories, aliases)
@@ -403,6 +455,8 @@ def relocate(storage, folder_id, *, name=None, parent_id=None, workspace_tabs=No
                                      (value, folder['updated_at']))
             if before_commit:
                 before_commit(folder)
+            if fast_empty and any(os.path.lexists(root) for root in old_roots):
+                raise ValueError('Folder contents changed. Please retry the rename.')
             storage.conn.commit()
         except Exception:
             storage.conn.rollback()

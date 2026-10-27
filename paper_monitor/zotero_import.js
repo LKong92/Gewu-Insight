@@ -4,7 +4,7 @@
   window.openZoteroImport = async () => {
     if (panel) { panel.querySelector('section').focus(); return; }
     const previous = document.activeElement;
-    const backdrop = document.createElement('div'); backdrop.className='settings-backdrop open'; panel=backdrop;
+    const backdrop = document.createElement('div'); backdrop.className='settings-backdrop zotero-import-backdrop open'; panel=backdrop;
     backdrop.innerHTML=`<style>
       .zotero-import-window{width:640px;max-width:calc(100vw - 40px)}
       .zotero-import-window [hidden]{display:none!important}
@@ -13,6 +13,8 @@
       .zotero-import-window .zi-row{display:grid;grid-template-columns:118px minmax(0,1fr);align-items:center;gap:14px;padding:11px 12px;font-size:12px}
       .zotero-import-window .zi-row+.zi-row{border-top:1px solid #8882}
       .zotero-import-window .zi-row label{font-weight:600}
+      .zotero-import-window .zi-destination{display:flex;align-items:center;gap:10px;width:100%;min-width:0;min-height:30px;text-align:left;font:inherit}
+      .zotero-import-window .zi-destination span:first-child{flex:1;min-width:0;overflow-wrap:anywhere}
       .zotero-import-window select,.zotero-import-window input[type=text]{box-sizing:border-box;width:100%;min-width:0;padding:5px 8px;border:1px solid #8884;border-radius:6px;background:var(--card,#fff);color:var(--ink);font:inherit}
       .zotero-import-window .zi-check{display:flex;gap:7px;align-items:flex-start;padding:4px 0;font-size:12px;font-weight:400}
       .zotero-import-window .zi-collections{max-height:150px;overflow:auto;margin-top:5px}
@@ -37,7 +39,7 @@
         <div id="zi-config" class="zi-group" hidden>
           <div class="zi-row"><label for="zi-source">Zotero library</label><select id="zi-source"></select></div>
           <div class="zi-row"><label>Collections</label><div><label class="zi-check"><input id="zi-all" type="checkbox" checked>All collections and unfiled items</label><div id="zi-collections" class="zi-collections" hidden></div></div></div>
-          <div class="zi-row"><label for="zi-target">Gewu destination</label><select id="zi-target"></select></div>
+          <div class="zi-row"><label for="zi-target">Gewu destination</label><div><button id="zi-target" class="smallbtn zi-destination" type="button" value="1" data-action="add-library" aria-expanded="false" aria-haspopup="menu"><span id="zi-target-path">Library</span><span aria-hidden="true">▾</span></button><div class="library-add-menu" data-role="library-add-menu" role="menu" aria-label="Choose Gewu destination" aria-hidden="true" tabindex="-1"></div></div></div>
           <div class="zi-row"><label for="zi-name">Import folder</label><input type="text" id="zi-name" value="Zotero Library" maxlength="150"></div>
         </div>
         <div id="zi-summary" class="zi-group" hidden><div class="zi-row"><strong id="zi-summary-context" style="grid-column:1/-1;font-weight:400;line-height:1.5;white-space:pre-line;overflow-wrap:anywhere"></strong></div><div class="zi-stats"><div><strong id="zi-papers">0</strong>Items</div><div><strong id="zi-files">0</strong>Available attachments</div><div><strong id="zi-size">0 MB</strong>Original file size</div></div></div>
@@ -51,6 +53,26 @@
     document.body.append(backdrop);
     const el=id=>backdrop.querySelector('#zi-'+id), state=el('state'), primary=el('primary');
     let job=null, busy=false, fetching=false, timer, closed=false, catalogID='', destinations=[];
+    const destinationMenu=backdrop.querySelector('[data-role="library-add-menu"]');
+    const closeDestination=()=>{if(destinationMenu.classList.contains('open'))window.closeLibraryAddMenus();};
+    const setDestination=(id,path)=>{
+      const target=destinations.find(d=>Number(d.id)===Number(id));
+      el('target').value=String(target?.id||0);
+      el('target-path').textContent=path||target?.title||'Choose Folder';
+      el('target').title=el('target-path').textContent;
+    };
+    el('target').onclick=async event=>{
+      event.preventDefault();event.stopPropagation();
+      await window.openLibraryAddMenu(backdrop,'',el('target'),null,{
+        selectedFolderId:Number(el('target').value),portalRoot:backdrop,selectWorkspaceRoot:true,
+        onSelect:({folderId,path})=>{
+          if(closed||busy)return;
+          destinations=destinations.filter(d=>Number(d.id)!==folderId).concat({id:folderId,title:path});
+          setDestination(folderId,path);
+        }
+      });
+      if(!closed&&destinationMenu.classList.contains('open'))destinationMenu.focus({preventScroll:true});
+    };
     const running=()=>['running','scanning','scan_requested'].includes(job?.state);
     const refresh=()=>{window.signalLibraryRefresh?.('zotero-import');window.refreshMainLibrarySnapshot?.('zotero-import')?.catch(()=>{});};
     const text=(message,error=false)=>{state.textContent=message;state.dataset.error=String(error);};
@@ -84,10 +106,11 @@
         if(job.config?.source_id)el('source').value=job.config.source_id;
         collections();
         if(job.config?.root_name)el('name').value=job.config.root_name;
-        el('target').value=String(job.config?.target_id||1);
+        setDestination(job.config?.target_id||1);
         if(job.config?.collection_keys?.length){el('all').checked=false;el('collections').hidden=false;for(const box of el('collections').querySelectorAll('input'))box.checked=job.config.collection_keys.includes(box.value);}
       }
-      for(const control of el('config').querySelectorAll('input,select'))control.disabled=busy||!editable;
+      if(busy||!editable||el('config').hidden)closeDestination();
+      for(const control of el('config').querySelectorAll('input,select,button'))control.disabled=busy||!editable;
       el('summary').hidden=!job||!['ready','running','paused','needs_attention','complete'].includes(s);
       el('scope').hidden=el('summary').hidden;
       const source=job?.catalog?.libraries?.find(x=>x.source_id===job.config?.source_id),target=destinations.find(d=>d.id===job?.config?.target_id);
@@ -114,6 +137,7 @@
       if(['connected','scan_failed'].includes(s)){
         const keys=el('all').checked?[]:[...el('collections').querySelectorAll('input:checked')].map(c=>c.value);
         if(!el('all').checked&&!keys.length){text('Select at least one collection, or choose all collections.',true);return;}
+        if(!Number(el('target').value)){text('Choose a Gewu destination folder.',true);return;}
         return act('scan',{source_id:el('source').value,target_id:Number(el('target').value),root_name:el('name').value,collection_keys:keys});
       }
       if(['ready','paused','needs_attention'].includes(s))return act('start');
@@ -123,14 +147,14 @@
     const embedded=!!window.GewuZoteroHost;
     if(embedded)el('setup').hidden=true;
     el('history').onchange=async()=>{const id=el('history').value;catalogID='';job=id?{id}:null;if(job){try{job=await request();render();}catch(error){text(error.message,true);}}else{render();text('Connect Zotero to prepare a new import.');}};
-    const close=()=>{closed=true;if(!busy&&!running())clearInterval(timer);if(job?.counts?.done||job?.counts?.partial)refresh();backdrop.remove();panel=null;previous?.focus?.();};
+    const close=()=>{closeDestination();closed=true;if(!busy&&!running())clearInterval(timer);if(job?.counts?.done||job?.counts?.partial)refresh();backdrop.remove();panel=null;previous?.focus?.();};
     backdrop.querySelector('.settings-modal-close').onclick=close;
     backdrop.addEventListener('keydown',event=>{
-      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();}
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(destinationMenu.classList.contains('open'))closeDestination();else close();}
       if(event.key==='Tab'){const controls=[...backdrop.querySelectorAll('button,input,select')].filter(c=>!c.disabled&&c.getClientRects().length);const first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
     });
     try{
-      const list=await request();destinations=list.destinations||[];for(const d of destinations)addOption(el('target'),d.id,d.title);
+      const list=await request();destinations=list.destinations||[];setDestination(1);
       for(const j of list.jobs||[])addOption(el('history'),j.id,new Date(j.created*1000).toLocaleString()+' · '+j.state.replaceAll('_',' '));
       const latest=list.jobs?.[0];if(latest&&latest.state!=='complete'){job={id:latest.id};el('history').value=latest.id;job=await request();render();}
     }catch(error){text(error.message,true);}

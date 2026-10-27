@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import stat
@@ -34,6 +35,59 @@ def protect_destination(directory, source_roots):
         if destination == source or source in destination.parents:
             raise ValueError('The Gewu destination overlaps a Zotero source folder. Choose a separate Gewu database.')
     return destination
+
+
+@contextmanager
+def collection_directories(paths, source_roots):
+    """Materialize import folders; rollback only our own, still-empty directories.
+
+    Paths use resolved managed roots. Refuse shortcuts below those roots rather
+    than creating folders in another location. A crash may leave empty folders;
+    a retry reuses them without deleting or overwriting their contents.
+    """
+    protected = {Path(root).resolve() for root in source_roots}
+    paths = list(dict.fromkeys(paths))
+    created = []
+
+    def validate(path):
+        if path.resolve() != path:
+            raise ValueError('An import folder points to another location. Choose a regular Gewu destination folder.')
+        if any(parent in protected for parent in (path, *path.parents)):
+            raise ValueError('The Gewu destination overlaps a Zotero source folder. Choose a separate Gewu database.')
+        if os.path.lexists(path) and not path.is_dir():
+            raise ValueError('An existing file blocks the import folder: ' + str(path))
+
+    # Validate the entire hierarchy before the first filesystem write.
+    for path in paths:
+        validate(path)
+    try:
+        for path in paths:
+            missing, current = [], path
+            while not current.exists():
+                missing.append(current)
+                current = current.parent
+            for directory in reversed(missing):
+                validate(directory)
+                try:
+                    directory.mkdir()
+                except FileExistsError:
+                    validate(directory)
+                else:
+                    info = directory.lstat()
+                    created.append((directory, info.st_dev, info.st_ino))
+        for path in paths:
+            validate(path)
+        yield
+    except BaseException:
+        for path, device, inode in reversed(created):
+            try:
+                info = path.lstat()
+                if (path.resolve() == path and stat.S_ISDIR(info.st_mode)
+                        and (info.st_dev, info.st_ino) == (device, inode)):
+                    path.rmdir()  # Never remove contents added by another operation.
+            except OSError:
+                pass
+        raise
 
 
 def remove_owned(path, device, inode):

@@ -70,6 +70,8 @@ const f=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
   await open();await page.locator('#resetLibraryDestinationSettings').click();
   await page.waitForFunction(()=>document.querySelector('#libraryDestinationSettingsStatus').textContent==='Default folder saved.');
   assert.match((await read()).title,/unsorted/);
+  await page.locator('#closeLibraryDestinationSettings').click();
+  await require('./zotero_import_destination_ui_probe.cjs')(page,f);
   assert.deepEqual(errors,[]);
   console.log('Full product UI: default/choose/cancel/save/failure/reload/reset, Space destinations, three Monitor adds, Recycle exclusion and three widths passed.');
  } finally {await browser.close();}
