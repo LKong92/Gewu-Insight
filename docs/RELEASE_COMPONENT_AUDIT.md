@@ -1,5 +1,38 @@
 # Released installer components and notices
 
+## macOS 1.1.0 package — October 28, 2026
+
+[macOS 1.1.0](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0)
+Build 11001 was built from the pushed source commit
+`a61d1c8a1497ed8b7109b067df7dc5e8eeeb9652`, with no working-tree overlay.
+The universal DMG is 129,159,529 bytes.
+
+```text
+SHA-256: 53d40ae894819ff42e947cfcf266201a4aeccab7a3eafaee03b12818f42072d4
+```
+
+The package retains the prior pinned Python/dependency inputs and adds Sparkle
+2.10.1, verified against its pinned archive hash. Its upstream framework/helper
+signatures and license are preserved. The 144-page User Guide includes the new
+Zotero and Mac update workflows. The build and validation JSONs record the inputs,
+exact source revision, checks performed and their limits.
+
+The actual DMG was mounted read-only. Its copied App passed strict deep signature
+verification, service first launch/restart using a database created by 1.0.1,
+authenticated update preparation and graceful shutdown, the packaged PDF worker,
+and Intel runtime imports under Rosetta. The database identity, fixture setting,
+PDF and note hashes survived; SQLite integrity and all App file hashes remained
+unchanged. A separate real native Sparkle test covered install/relaunch, busy-work
+deferral, corrupt installer rejection, unavailable feeds and current-version checks.
+The daily original App retained its database and six-tab UI after the user renewed
+Desktop access. No physical Intel or clean external Mac test was performed.
+
+This package remains ad-hoc signed, without Developer ID signing or notarization.
+Sparkle's Ed25519 feed/archive signatures are separate from Apple code signing.
+These checks do not establish new artwork or font reuse rights. Windows and older
+release assets are unchanged by this Mac release. All five published Release
+assets were downloaded through public URLs and matched their local SHA-256 hashes.
+
 ## macOS 1.0.1 package — October 19, 2026
 
 [macOS 1.0.1](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.1)

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Gewu Insight for macOS</title>
+    <link>https://github.com/LKong92/Gewu-Insight/releases</link>
+    <description>Official stable Mac updates</description>
+    <item>
+      <title>Gewu Insight 1.1.0</title>
+      <sparkle:version>11001</sparkle:version>
+      <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description>Mac in-app software updates, the Zotero companion and safe Zotero library import, manual DOI conflict review, folder editing fixes, and an updated User Guide. Close the Gewu tab in Zotero and finish or pause imports before installing. Updates retain your existing Gewu Database and research files.
+</description>
+      <enclosure url="https://github.com/LKong92/Gewu-Insight/releases/download/macos-1.1.0/Gewu-Insight-macOS-1.1.0.dmg" length="129159529" type="application/octet-stream" sparkle:edSignature="JOw5ykNo42ZTRKkhAt9n5cDNpRBXV7jWAxL/s/LZIyUaBmKDOTtBVhCkrTm/OTbe1NTdXhZsOVW3DDbGRPjpBQ==" sparkle:os="macos"></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: bEjZDJbn8ivjCTM/AsNMgLTsjtzkaWoRITjRuCNAO26DOn8dez7dnqRXFJrHo3TRVj8NVu0+V5/CAHfQSoANBQ==
+length: 1476
+-->
