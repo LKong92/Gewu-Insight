@@ -6,7 +6,7 @@ Gewu Insight brings literature discovery, organization and reading into one
 workspace. Papers retain a shared identity as metadata, versions, supporting
 files and notes accumulate, so research context can be revisited and reused.
 
-**Version 1.0.0 · Build 1 · Windows desktop**
+**Version 1.1.0 · Build 11001 · Windows desktop**
 
 [Website](https://gewu-insight.com) · [Install](#quick-start-on-windows) ·
 [User Guide](windows/Windows_Preview_Guide.pdf) · [AI & MCP](docs/AI_ACCESS.md) ·
@@ -23,8 +23,8 @@ The repository and release downloads are publicly available.
 **Requirements:** Windows 10 version 1607 (build 14393) or later, or Windows 11,
 on an Intel/AMD x64 PC. Windows 10 ARM and 32-bit Windows are not supported.
 
-1. Download `Gewu-Insight-Windows-1.0.0-x64-Setup.exe` from the
-   [Windows release](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0).
+1. Download `Gewu-Insight-Windows-1.1.0-x64-Setup.exe` from the
+   [Windows release](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.1.0).
    Python, .NET and application dependencies are included. Setup reuses
    Microsoft WebView2 or installs it from Microsoft when needed.
 2. Run Setup and choose the program and **Gewu Database** folders independently.
@@ -41,16 +41,16 @@ and [development](docs/DEVELOPMENT.md) for build and verification instructions.
 
 For macOS, use the separate [macOS installer](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0).
 
-## Windows 1.1.0 candidate
+## New in Windows 1.1.0
 
-Windows 1.1.0 / Build 11001 is under validation and has not been published yet.
-The download link above still points to the released 1.0.0 installer. Candidate
-features below describe this source branch; they are not present in 1.0.0.
+Windows 1.1.0 / Build 11001 is available. Its application version matches macOS
+1.1.0; each platform retains its own branch and installer.
 
 - **Help → Check for Updates** checks a separate stable Windows channel and
   verifies the downloaded installer. Checks may run automatically once a day;
-  downloading and installing remain explicit actions. Existing 1.0.0 users will
-  need to install the next verified Setup.exe manually once to obtain the updater.
+  downloading and installing remain explicit actions. Existing 1.0.0 users
+  install the 1.1.0 Setup.exe manually once to obtain the updater, selecting
+  **Use existing Gewu Database** to retain their collection.
 - **Plugin → Zotero Integration** guides installation of the bundled 0.4.2
   companion. Zotero displays the same Gewu Library, Paper Files, monitors and
   settings through the existing Gewu installation and background service.
@@ -60,8 +60,9 @@ features below describe this source branch; they are not present in 1.0.0.
   Gewu's Default/Associated Files rules. Zotero records and originals remain
   unchanged. These transfers are explicit copies, not continuous synchronization.
 
-The public update channel currently advertises only the verified 1.0.0 release.
-It will point to 1.1.0 only after the final installer is published and checked.
+The Windows update channel points to the published, verified 1.1.0 installer.
+Its source is commit `190a968`; all five release attachments were downloaded
+again from their public URLs and matched the local verified files.
 
 ## Explore the workspace
 

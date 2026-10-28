@@ -1,12 +1,12 @@
 # Distributing Gewu Insight for Windows
 
-The Windows product is **1.0.0, Build 1**, delivered as a self-contained
+The Windows product is **1.1.0, Build 11001**, delivered as a self-contained
 `Gewu-Insight-Windows-VERSION-x64-Setup.exe`. The source checkout is for
 development. Normal use starts the installed **Gewu Insight** from the Start menu.
 
 ## Downloads and requirements
 
-- [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0):
+- [Windows 1.1.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.1.0):
   Windows 10 version 1607 (build 14393)+ or Windows 11, Intel/AMD x64.
   Python, .NET and application dependencies are included. Setup reuses WebView2
   or installs it using Microsoft's Evergreen bootstrapper; that step needs network access.
@@ -16,23 +16,27 @@ development. Normal use starts the installed **Gewu Insight** from the Start men
 The repository and downloads are public. The Windows installer is intentionally unsigned. It does not change Windows security settings. The
 x64 package does not support 32-bit Windows or Windows 10 ARM.
 
-## Windows 1.1.0 candidate status
+## Windows 1.1.0 release and update channel
 
-This source branch contains a 1.1.0 / Build 11001 candidate with Zotero companion
-0.4.2 and a Windows update client. The candidate is installed for isolated Win11
-validation; it is not a public Release. The current public download remains 1.0.0.
+The public `windows-1.1.0` release is built from the clean, pushed Windows commit
+`190a9689b92e4594ede10042bedc1c45b9324a52`, including companion 0.4.2 and the
+113-page Windows HTML/PDF guide. The native informational version embeds the
+same commit. Installer SHA-256 is
+`3d8a271de45e1d8d872313d270653e4cbac8666185895722c8d8cad19167fdae`
+(93,365,506 bytes). All five public attachments were downloaded and verified.
 
-The candidate uses `updates/windows/stable.json` for stable Windows x64 updates,
-independently of macOS release order. It checks the asset name, size and SHA-256.
-Installed checks have verified public update lookup/download, service prepare,
-cancel and shutdown, Zotero handoff and PDF preview, and preservation of the
-original Library. The Windows guide includes actual update, connected-import
-and empty-library preview screenshots. Full update installation/restart acceptance
-and an exact-commit release build remain pending.
+The installed final package passed 2,198 payload checks, normal Setup and its
+Open Gewu Insight restart, and original/recovery data preservation. Update
+lookup/download and guarded service shutdown were tested separately; no full
+GUI upgrade through a later public version was exercised. The release's
+validation JSON records this scope, including the empty real Zotero preview
+and populated isolated import tests. Windows 10 was not retested.
 
-Build the final installer from the exact reviewed and pushed commit. Publish and
-verify that installer before promoting the Windows feed to its version and hash.
-Preserve previous releases. A candidate build does not authorize publication.
+`updates/windows/stable.json` selects stable Windows x64 updates independently
+of macOS release order. Promote it only after the installer is published and
+verified. This post-publication metadata commit does not rebuild or replace the
+installer. Previous releases remain available. Existing 1.0.0 users manually
+install 1.1.0 once to obtain the in-app updater.
 
 ## Program, database and source
 
@@ -50,7 +54,7 @@ see [development and backups](docs/DEVELOPMENT.md#safe-updates-and-backups).
 
 ## Release source and verification
 
-The October 10 Windows asset and the current `windows-1.0.0` tag both reference
+The previous October 10 Windows asset and its `windows-1.0.0` tag both reference
 source commit `725ae8f`. A separately authorized release correction aligned the
 tag and build metadata; the installer bytes stayed unchanged. Read the release's
 build JSON when reproducing a package. The native informational version may
@@ -62,7 +66,7 @@ Build a fresh payload and versioned installer, test with an isolated collection,
 then install locally and verify the installed version, startup, database identity
 and retained data. See [builds and verification](docs/DEVELOPMENT.md#builds-and-verification).
 The Windows 10 minimum is a declared target; the latest recorded native run was
-on Windows 11. This repository cleanup does not add Windows 10 acceptance evidence.
+on Windows 11. The 1.1.0 release does not add Windows 10 acceptance evidence.
 
 ## Package contents and notices
 
