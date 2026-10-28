@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "channel": "stable",
+  "platform": "windows",
+  "architecture": "x64",
+  "version": "1.0.0",
+  "tag": "windows-1.0.0",
+  "asset": {
+    "name": "Gewu-Insight-Windows-1.0.0-x64-Setup.exe",
+    "url": "https://github.com/LKong92/Gewu-Insight/releases/download/windows-1.0.0/Gewu-Insight-Windows-1.0.0-x64-Setup.exe",
+    "size": 86255214,
+    "sha256": "b9056eab0ec6a0af40ae7608a24437d82cfd3508ecb300c8d43047286cf3445e"
+  }
+}
