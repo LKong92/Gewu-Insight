@@ -10,6 +10,12 @@ internal static class ParityProbeMain
     [STAThread]
     static void Main(string[] args)
     {
+        // The real shell relaunches this executable for its windowless helper.
+        if (args.Contains("--background")) {
+            using var gate = InstallationGuard.Enter(false);
+            Environment.ExitCode = BackgroundService.Run(args);
+            return;
+        }
         ApplicationConfiguration.Initialize();
         var window = new WorkspaceWindow(args);
         window.Shown += async (_, _) => await window.RunParityProbeAsync(args.Contains("--publisher-only"));

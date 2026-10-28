@@ -66,7 +66,7 @@
     });
   };
   window.webkit = {messageHandlers: Object.fromEntries(
-    ['browser', 'appReady', 'paperFileChooser', 'authorPhotoChooser', 'nativeFileDrag', 'libraryItemDrag', 'publisherPdfDownload', 'libraryLoaderWindow'].map(channel => [channel, {postMessage: payload => send(channel, payload)}]))};
+    ['browser', 'appReady', 'zotero', 'paperFileChooser', 'authorPhotoChooser', 'nativeFileDrag', 'libraryItemDrag', 'publisherPdfDownload', 'libraryLoaderWindow'].map(channel => [channel, {postMessage: payload => send(channel, payload)}]))};
   const pending = new Map();
   window.gewuChoosePath = kind => new Promise((resolve, reject) => {
     const request_id = crypto.randomUUID();

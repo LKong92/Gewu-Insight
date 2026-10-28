@@ -4,6 +4,7 @@ import hashlib
 from html import unescape
 import json
 import re
+import unicodedata
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -241,7 +242,16 @@ PLACEHOLDER_PUBLICATION_TITLE_KEYS = {
 
 def is_placeholder_publication_title(value: Any) -> bool:
     key = clean_text(value).casefold()
-    return key in PLACEHOLDER_PUBLICATION_TITLE_KEYS
+    return key in PLACEHOLDER_PUBLICATION_TITLE_KEYS or is_arxiv_page_header(value)
+
+
+def is_arxiv_page_header(value: Any) -> bool:
+    # PDF margin text can be mistaken for a title; normalization of titles may
+    # already have converted the version/date digits into Unicode subscripts.
+    value = unicodedata.normalize('NFKC', clean_text(value))
+    return bool(re.fullmatch(
+        r'arxiv:\s*(?:\d{4}\.\d{4,5}|[a-z.-]+/\d{7})(?:v\d+)?\s*'
+        r'\[[a-z.-]+\]\s*\d{1,2}\s*[a-z]{3}\s*\d{4}', value, re.I))
 
 
 def normalize_publication_title(value: Any) -> str:

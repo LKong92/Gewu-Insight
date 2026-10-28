@@ -26,6 +26,15 @@ PDF_OUTPUT = ROOT / "paper_monitor" / "Gewu_Insight_User_Guide.pdf"
 VERSION_SOURCE = ROOT / "paper_monitor" / "__init__.py"
 
 IMAGE_ROUTES = {
+    "/user-guide-assets/zotero-import-scope.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-import-scope.png",
+    "/user-guide-assets/zotero-import-destination.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-import-destination.png",
+    "/user-guide-assets/zotero-import-preview.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-import-preview.png",
+    "/user-guide-assets/manual-doi-conflict.png": ROOT / "assets" / "user-guide" / "screenshots" / "manual-doi-conflict.png",
+
+    "/user-guide-assets/zotero-save.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-save.png",
+    "/user-guide-assets/zotero-connection.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-connection.png",
+    "/user-guide-assets/zotero-installation.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-installation.png",
+    "/user-guide-assets/zotero-workspace.png": ROOT / "assets" / "user-guide" / "screenshots" / "zotero-workspace.png",
     "/api/about-calligraphy": ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png",
     "/api/app-icon": ROOT / "assets" / "gewu-insight-app-icon.png",
     "/api/startup-brand-art?v=ac0025861a5d": ROOT / "assets" / "branding" / "GewuSealGlyphsGuide.png",
@@ -35,6 +44,7 @@ IMAGE_ROUTES = {
     "/user-guide-assets/shortcut-path.png": ROOT / "assets" / "user-guide" / "screenshots" / "shortcut-path.png",
     "/user-guide-assets/my-publications.png": ROOT / "assets" / "user-guide" / "screenshots" / "my-publications.png",
     "/user-guide-assets/journal-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "journal-monitor.png",
+    "/user-guide-assets/publication-updates.png": ROOT / "assets" / "user-guide" / "screenshots" / "publication-updates.png",
     "/user-guide-assets/subject-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-monitor.png",
     "/user-guide-assets/author-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-monitor.png",
     "/user-guide-assets/browser.png": ROOT / "assets" / "user-guide" / "screenshots" / "browser.png",
@@ -64,6 +74,7 @@ IMAGE_ROUTES = {
     "/user-guide-assets/markdown-quick-look.png": ROOT / "assets" / "user-guide" / "screenshots" / "markdown-quick-look.png",
     "/user-guide-assets/author-add.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-add.png",
     "/user-guide-assets/about-window.png": ROOT / "assets" / "user-guide" / "screenshots" / "about-window.png",
+    "/user-guide-assets/database-location.png": ROOT / "assets" / "user-guide" / "screenshots" / "database-location.png",
     "/user-guide-assets/user-guide-window.png": ROOT / "assets" / "user-guide" / "screenshots" / "user-guide-window.png",
 }
 
@@ -79,6 +90,7 @@ PART_BY_GROUP = {
     "Author Monitor": "User Manual",
     "Browser": "User Manual",
     "Settings and Safety": "User Manual",
+    "Zotero Integration": "User Manual",
     "About Gewu Insight": "Product Identity",
     "Reference": "Technical and Operational Reference",
 }

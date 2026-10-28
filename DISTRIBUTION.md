@@ -10,12 +10,29 @@ development. Normal use starts the installed **Gewu Insight** from the Start men
   Windows 10 version 1607 (build 14393)+ or Windows 11, Intel/AMD x64.
   Python, .NET and application dependencies are included. Setup reuses WebView2
   or installs it using Microsoft's Evergreen bootstrapper; that step needs network access.
-- [macOS 1.0.0](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0):
+- [macOS 1.1.0](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0):
   a separate DMG maintained on `main`, for macOS 14+ on Apple silicon and Intel.
 
-GitHub access is required while the repository is private. The Windows installer
-is intentionally unsigned. It does not change Windows security settings. The
+The repository and downloads are public. The Windows installer is intentionally unsigned. It does not change Windows security settings. The
 x64 package does not support 32-bit Windows or Windows 10 ARM.
+
+## Windows 1.1.0 candidate status
+
+This source branch contains a 1.1.0 / Build 11001 candidate with Zotero companion
+0.4.2 and a Windows update client. The candidate is installed for isolated Win11
+validation; it is not a public Release. The current public download remains 1.0.0.
+
+The candidate uses `updates/windows/stable.json` for stable Windows x64 updates,
+independently of macOS release order. It checks the asset name, size and SHA-256.
+Installed checks have verified public update lookup/download, service prepare,
+cancel and shutdown, Zotero handoff and PDF preview, and preservation of the
+original Library. The Windows guide includes actual update, connected-import
+and empty-library preview screenshots. Full update installation/restart acceptance
+and an exact-commit release build remain pending.
+
+Build the final installer from the exact reviewed and pushed commit. Publish and
+verify that installer before promoting the Windows feed to its version and hash.
+Preserve previous releases. A candidate build does not authorize publication.
 
 ## Program, database and source
 
@@ -72,7 +89,7 @@ separate written authorization. Third-party terms and unresolved provenance
 questions remain separate; see [licensing](docs/LICENSING.md) and
 [dependency evidence](docs/DEPENDENCY_LICENSE_AUDIT.md).
 
-Keep this repository private. Commit, push, tag or release publication requires
+Preserve the repository's public visibility. Commit, push, tag or release publication requires
 an explicit user request. Publish only verified bytes, disclose source/version
 exceptions, and preserve existing history and releases. Windows work remains on
 `Windows`; macOS work remains on `main`.

@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='gewu-table-ui-') as temp, ExitStack() a
                 self.send_json({}); return
             super().do_GET()
         def do_POST(self):
-            if urlparse(self.path).path not in ('/api/library/add-paper','/api/library/navigation-tabs/add-paper','/api/library/workspace-tabs/rename','/api/library/shortcut-tabs/rename','/api/library/workspace-tabs/move-to-library'):
+            if urlparse(self.path).path not in ('/api/library/folders','/api/library/folders/rename','/api/library/add-paper','/api/library/navigation-tabs/add-paper','/api/library/workspace-tabs/rename','/api/library/shortcut-tabs/rename','/api/library/workspace-tabs/move-to-library'):
                 self.send_error(405); return
             super().do_POST()
     server = ui.FastLocalThreadingHTTPServer(('127.0.0.1',0), Handler)
@@ -58,7 +58,8 @@ with tempfile.TemporaryDirectory(prefix='gewu-table-ui-') as temp, ExitStack() a
         fixture.write_text(json.dumps({'url':f'http://127.0.0.1:{server.server_port}/', 'token':server.workspace_access.token,
             'parent_id':parent['id'], 'space_id':space['root_folder_id'], 'nested_id':nested['id'],
             'nested_library_id':nested_library['id'], 'recycle_id':recycle['id']}))
-        subprocess.run([sys.argv[1], 'tests/library_table_ui_probe.cjs', str(fixture)], check=True, timeout=150)
+        probe = sys.argv[2] if len(sys.argv) > 2 else 'tests/library_table_ui_probe.cjs'
+        subprocess.run([sys.argv[1], probe, str(fixture)], check=True, timeout=150)
         assert store.conn.execute('SELECT count(*) FROM resources').fetchone()[0] == 0
         print('Temporary API fixtures only; zero Paper Files changed.')
     finally:

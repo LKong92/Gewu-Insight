@@ -10,7 +10,9 @@ W3C sample PDF; it stages and cancels that capture without saving a paper.
    `python tests/windows_native/seed_workspace.py tmp/native-check`
 2. Build `tests/windows_native/NativeAcceptance.csproj` using .NET 10 and the
    pinned WebView2 SDK. Put its output in `tmp/native-check-bin`.
-3. Run `NativeAcceptance.exe REPOSITORY_ABSOLUTE_PATH WORKSPACE_ABSOLUTE_PATH`.
+3. Run `NativeAcceptance.exe REPOSITORY_ABSOLUTE_PATH WORKSPACE_ABSOLUTE_PATH [PYTHON_EXE]`.
+   The optional runtime path supports validation with the packaged Python; without
+   it, the probe uses the development virtual environment.
    `native-results.json` in that workspace contains the results. The native
    app is transparent, has no taskbar entry, and closes after completion;
    nonzero exit or `ok:false` means failure. Do not add visible test panels.

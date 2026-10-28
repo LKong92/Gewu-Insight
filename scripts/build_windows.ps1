@@ -36,10 +36,10 @@ if ($InnoCompiler -and (Test-Path -LiteralPath (Join-Path $installerOutput "Gewu
     throw 'Installer already exists. Choose a fresh InstallerDirectory to preserve the previous package.'
 }
 if ($RebuildGuide) {
-    & $Python scripts/build_windows_preview_guide.py --version $Version --html-only
+    & $Python -B scripts/build_windows_preview_guide.py --version $Version --html-only
     if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide generation failed' }
 }
-& $Python scripts/build_windows_preview_guide.py --version $GuideVersion --check
+& $Python -B scripts/build_windows_preview_guide.py --version $GuideVersion --check
 if ($LASTEXITCODE -ne 0) { throw 'Windows User Guide must match the selected guide edition. Use -RebuildGuide only for a requested guide update.' }
 if ($GuideVersion -ne $Version) { Write-Output "Reusing unchanged Windows User Guide edition $GuideVersion for Windows $Version." }
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
@@ -68,9 +68,11 @@ if ($ReuseServicePayload) {
     Assert-GewuPayloadManifest -Path $ReuseServicePayload | Out-Host
     $serviceArguments += @('--reuse-service', (Join-Path $ReuseServicePayload 'service'))
 }
-& $Python @serviceArguments
+& $Python -B @serviceArguments
 if ($LASTEXITCODE -ne 0) { throw 'Python service packaging failed' }
-& $Python scripts/package_windows_notices.py --output $payload
+& $Python -B scripts/build_zotero_plugin.py --output (Join-Path $payload 'Gewu Insight for Zotero.xpi')
+if ($LASTEXITCODE -ne 0) { throw 'Zotero companion packaging failed' }
+& $Python -B scripts/package_windows_notices.py --output $payload
 if ($LASTEXITCODE -ne 0) { throw 'Windows license document packaging failed' }
 foreach ($guide in @('Windows_Preview_Guide.html', 'Windows_Preview_Guide.pdf')) {
     Copy-Item -LiteralPath (Join-Path $repoRoot ('windows/' + $guide)) -Destination $payload

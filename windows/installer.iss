@@ -20,6 +20,8 @@ OutputBaseFilename=Gewu-Insight-Windows-{#AppVersion}-x64-Setup
 InfoBeforeFile={#PayloadDir}\PREVIEW.txt
 LicenseFile={#PayloadDir}\LICENSE
 CloseApplications=yes
+AppMutex=GewuInsight.Windows.Running.{username}
+SetupMutex=GewuInsight.Windows.Installing.{username}
 SignedUninstaller=no
 AppVersion={#AppVersion}
 VersionInfoVersion={#AppVersion}.0
@@ -56,7 +58,7 @@ Name: "{group}\Gewu Insight"; Filename: "{app}\Gewu Insight.exe"; IconFilename: 
 Name: "{group}\Uninstall Gewu Insight"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\Gewu Insight.exe"; Description: "Open Gewu Insight"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Gewu Insight.exe"; Parameters: "--after-install"; Description: "Open Gewu Insight"; Flags: nowait postinstall skipifsilent
 
 ; Data is stored outside {app}. No UninstallDelete section: uninstall retains
 ; the Library, SQLite database, reports and the separate WebView2 profiles.

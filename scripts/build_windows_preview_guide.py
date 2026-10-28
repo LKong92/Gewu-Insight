@@ -1,7 +1,8 @@
-"""Adapt Windows guide HTML while preserving the approved PDF typesetting.
+"""Adapt the shared guide for Windows without changing the approved layout.
 
-Run with the project .venv. Only documentation outputs are written. The shared
-macOS HTML/TeX/PDF, application binaries, settings and research data are untouched.
+Run with --html-only, then build_windows_user_guide_pdf.py for the matching PDF.
+Only documentation outputs are written; application code and research data are
+untouched. Both editions use the shared manual's layout and chapter structure.
 """
 from __future__ import annotations
 
@@ -13,21 +14,12 @@ from html import escape
 from pathlib import Path
 
 from bs4 import BeautifulSoup, NavigableString, Tag
-from reportlab.lib import colors
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (
-    BaseDocTemplate, Frame, Image, KeepTogether, PageBreak, PageTemplate,
-    Paragraph, Spacer, Table, TableStyle,
-)
-from reportlab.platypus.tableofcontents import TableOfContents
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "windows"
 HTML = OUT / "Windows_Preview_Guide.html"
 PDF = OUT / "Windows_Preview_Guide.pdf"
-EDITION = "October 10, 2026"
+EDITION = "October 28, 2026"
 # Keep the guide's default edition aligned with both desktop shells.
 VERSION = re.search(r'^__version__ = "([^"]+)"',
                     (ROOT / "paper_monitor/__init__.py").read_text(encoding="utf-8"), re.MULTILINE)[1]
@@ -90,7 +82,7 @@ def windows_html():
 <h2>Open this guide</h2>
 <p>Choose <strong>Help &gt; User Guide</strong> to open this searchable local manual. Search filters topics; Previous and Next follow the reading order. Use <strong>Print Guide</strong> inside the guide to open the complete PDF for reading or printing. Both editions work offline.</p>
 <p>Choose <strong>Help &gt; About Gewu Insight</strong> for the application version and build, original artwork, product description, credits, copyright and research-use license summary. Its <strong>User Guide</strong> link opens this manual; <strong>GitHub</strong> opens the project website.</p>
-<p>This Windows edition retains all 49 shared topics and the linked Product Identity chapters. macOS screenshots are omitted because their title bars, menus and platform controls do not represent Windows.</p>
+<p>This Windows edition retains all shared topics and the linked Product Identity chapters. macOS screenshots are omitted because their title bars, menus and platform controls do not represent Windows.</p>
 """)
 
     replace_topic(soup, "quick-look", "Preview Files", """
@@ -113,8 +105,8 @@ def windows_html():
         first.select_one(".lead").insert_after(node)
     replace_topic(soup, "backup-migrate", "Back Up and Upgrade", """
 <p class="lead">Back up the selected Gewu Database and keep the installer for your current version. The executable alone is not your Library.</p>
-<h2>Keep the three locations separate</h2><table class="plain-table"><tr><th>Location</th><th>Purpose</th></tr><tr><td>Installed program</td><td>Normally <code>%LOCALAPPDATA%\\Programs\\Gewu Insight</code>. Setup updates the application, bundled runtimes and guide.</td></tr><tr><td>Selected Gewu Database</td><td>Contains <code>data</code>, <code>reports</code>, <code>config</code> and <code>backups</code>, including SQLite, managed Library/Space files and notes. It stays in place during a program update.</td></tr><tr><td>Source checkout</td><td>Development code and build tools. Daily use starts the installed App from the Start menu; editing source does not update the installed App.</td></tr></table>
-<h2>Create a consistent backup</h2><ol class="steps"><li>Use <strong>File &gt; Open Gewu Database</strong> to find the selected folder. Save website drafts and finish or stop background tasks.</li><li>Choose <strong>File &gt; Exit</strong> and wait for the App and service to stop. Copy the entire database folder from this closed state, including hidden files, <code>data/paper_monitor.sqlite</code>, any accompanying WAL/SHM files, managed Library/Space files, Associated Files, notes, configuration and backups.</li><li>Preserve external originals used by Shortcuts separately. Keep Windows .lnk files intact; a shortcut does not contain its target's bytes. Historical import-source paths are provenance and need not be active file dependencies.</li><li>Keep <code>%USERPROFILE%\\.gewu-insight\\database-location.ini</code>, the current installer and relevant AI-client configuration as separate recovery material. Browser profiles are separate from the research folder.</li><li>Verify SQLite integrity, the copied file list and representative files on a separate copy. Store the backup outside the live database and keep the original until the replacement has been checked.</li></ol>
+<h2 id="source-workspace-migration">Keep the three locations separate</h2><table class="plain-table"><tr><th>Location</th><th>Purpose</th></tr><tr><td>Installed program</td><td>Normally <code>%LOCALAPPDATA%\\Programs\\Gewu Insight</code>. Setup updates the application, bundled runtimes and guide.</td></tr><tr><td>Selected Gewu Database</td><td>Contains <code>data</code>, <code>reports</code>, <code>config</code> and <code>backups</code>, including SQLite, managed Library/Space files and notes. It stays in place during a program update.</td></tr><tr><td>Source checkout</td><td>Development code and build tools. Daily use starts the installed App from the Start menu; editing source does not update the installed App.</td></tr></table>
+<h2>Create a consistent backup</h2><ol class="steps"><li>Use <strong>File &gt; Open Gewu Database</strong> to find the selected folder. Save website drafts and finish or stop background tasks.</li><li>Close the Gewu Insight tab in Zotero first, then open the standalone Gewu App and choose <strong>File &gt; Exit</strong>. Wait for the App and service to stop. Copy the entire database folder from this closed state, including hidden files, <code>data/paper_monitor.sqlite</code>, any accompanying WAL/SHM files, managed Library/Space files, Associated Files, notes, configuration and backups.</li><li>Preserve external originals used by Shortcuts separately. Keep Windows .lnk files intact; a shortcut does not contain its target's bytes. Historical import-source paths are provenance and need not be active file dependencies.</li><li>Keep <code>%USERPROFILE%\\.gewu-insight\\database-location.ini</code>, the current installer and relevant AI-client configuration as separate recovery material. Browser profiles are separate from the research folder.</li><li>Verify SQLite integrity, the copied file list and representative files on a separate copy. Store the backup outside the live database and keep the original until the replacement has been checked.</li></ol>
 <p>SQLite is authoritative. Copying only JSON exports, the program folder or a database file while it is changing is not a full backup. Do not replace the active database with an older file just to address a display problem.</p>
 <h2>Update the installed application</h2><p>After a verified backup, close Gewu Insight and run the newer versioned Setup.exe. Open <strong>Gewu Insight</strong> from the Start menu, then check the selected data folder, existing papers and file access. Check the application version and build in <strong>Help &gt; About Gewu Insight</strong>. Windows <strong>Settings &gt; Apps</strong> also lists the installed version. Keep the previous installer and backup until verification is complete. Do not open the Library with an older incompatible version.</p>
 <h2>Move a database</h2><p>For a collection already separate from the program, a routine App update keeps the same folder, identity, Gewu Keys and file classifications. Uninstalling retains research data, the locator and browser sign-ins. A move to another path needs an offline, verified migration of operational file paths and Windows shortcuts; retain the original and do not merge two populated database folders. Do not run the source service and installed App against the same collection.</p>
@@ -122,6 +114,24 @@ def windows_html():
 <p>Metadata API keys and AI Access information can be present in workspace data. Keep full backups private. Exporting bookmarks produces bookmark HTML, not cookies, passwords or browsing history.</p>
 <h2>Transfer selected research files</h2><p>Use <a href="#desktop-copy">Make a Portable Desktop Copy</a> for a selected collection. Retain its export manifest and use Folder Loader to restore the file relationships. A portable collection is not a full backup of settings, monitor history and the database. Whole-workspace macOS-to-Windows migration requires separate validation of paths and platform files.</p>
 """)
+
+    backup = soup.find("article", id="backup-migrate")
+    for node in fragment("""<span id="upgrade-installation"></span><h2 id="windows-software-updates">Update Gewu Insight for Windows</h2>
+<p>Windows 1.0.0 has no in-app updater. Download the newer Windows x64 Setup.exe from the project's Releases page, close Gewu and its Zotero tab, and run Setup over the existing program. Keep <strong>Use existing Gewu Database</strong> and its current folder. You only need this manual upgrade once to obtain the new update feature.</p>
+<ol class="steps"><li>In Windows 1.1.0 or later, choose <strong>Help &gt; Check for Updates</strong>. The updater reads the stable Windows channel. Mac releases and prereleases are not Windows update candidates.</li><li>If a newer version is available, choose <strong>Download Update</strong>. Gewu verifies the complete file size and SHA-256 before offering installation. Closing the update window cancels an unfinished download.</li><li>Close the Gewu tab in Zotero, pause a Zotero import if one is running, and let downloads and file operations finish. Choose <strong>Install Update</strong>. If work is still active, Gewu keeps the current App open and asks you to retry later.</li><li>Gewu stops its service and opens Windows Setup. Follow its normal pages, retain the existing program and database locations, and leave <strong>Open Gewu Insight</strong> selected on the final page.</li></ol>
+<p><strong>Check automatically once a day</strong> checks when the standalone App starts and the last check was at least 24 hours ago. It announces available updates; it does not automatically download or install them. Turn it off in the Software Update window to use only manual checks. If the network check fails, retry later; a failed check does not mean the App is up to date.</p>
+<p>Updating replaces program files, not your Gewu Database or original PDFs. Keep a recovery backup before upgrading. Windows packages remain unsigned; checksum verification checks the downloaded bytes against the project update feed and is not a Windows publisher signature.</p>
+<p><strong>Update Plugin</strong> in Plugin &gt; Zotero Integration is a separate action. It installs the companion bundled with your current Gewu App. After a program update, use it only if the integration window offers a newer plugin.</p>
+"""):
+        backup.select_one('.see-also').insert_before(node) if backup.select_one('.see-also') else backup.append(node)
+    connection = soup.find("article", id="zotero-connection")
+    for node in connection.find_all(string=True):
+        node.replace_with(str(node).replace('Gewu Insight > Database Location…', 'File > Open Gewu Database').replace("standalone App's macOS menu", "standalone App's menu").replace('commonly http://127.0.0.1:8765', 'using an automatically selected loopback port'))
+    for node in soup.find("article", id="zotero-save").find_all(string=True):
+        node.replace_with(str(node).replace('opens the macOS reader', 'opens the Windows default PDF application'))
+    note = soup.find("article",id="zotero-install").select_one('.note')
+    note.clear()
+    for node in fragment('<span class="callout-title">Companion version</span>This Windows edition bundles companion 0.4.2. The installed App reports the exact bundled and installed versions. Windows and Zotero version compatibility should be checked against the release validation notes.'): note.append(node)
 
     browser = soup.find("article", id="browser")
     for node in fragment("""<h2>Review PDF identity before saving</h2>
@@ -155,7 +165,7 @@ def windows_html():
 <tr><td>Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A</td><td>Copy, cut, paste or select all in the focused supported context. A Library placement action differs from editing text.</td></tr>
 <tr><td>View &gt; List View / Table View</td><td>Switch Library presentation.</td></tr>
 <tr><td>Right-click</td><td>Open the context menu for the selected item or blank area.</td></tr>
-<tr><td>File &gt; Exit</td><td>Close the Windows application and stop its service. Save webpage drafts first; tabs are not restored after quit.</td></tr></table>
+<tr><td>File &gt; Exit</td><td>Close the Windows application; a connected Gewu tab in Zotero keeps its shared service running. Save webpage drafts first; tabs are not restored after quit.</td></tr></table>
 <h2>Monitor navigation</h2><p>In Journal or Subject calendars, Left/Right moves a day and Up/Down a week. Enter selects the date. In the paper area, Up/Down selects papers and Escape returns to the calendar. Author Monitor uses Left/Right between its author and paper panes. Arrow commands do not apply while typing in an input.</p>
 """)
     startup = soup.find("article", id="startup")
@@ -176,10 +186,32 @@ def windows_html():
     download = soup.find("article", id="download-sync")
     download.select_one(".lead").insert_after(BeautifulSoup('<p>Paper downloads accept verified publisher or authorized repository sources and check redirects. Unverified destinations stop. Use your legitimate institutional or publisher access; Gewu does not bypass subscriptions or website verification.</p>', "html.parser").p)
 
+    # Replace new Mac-only instructions explicitly instead of renaming APIs.
+    replace_section(browser, "Website keys and macOS authorization", """<h2 id="browser-website-keys">Website data on Windows</h2><p>Browser uses its own WebView2 profile. It does not use Apple's Keychain or transfer sign-in cookies from another browser. Complete normal sign-in yourself; use Open in Default Browser if a site does not support this embedded browser.</p>""")
+    replace_section(browser, "Share article access with background downloads", """<h2>Share article access with background downloads</h2><p>Supported Windows publisher downloads use a bounded background WebView2 page with Gewu Browser's website session. Complete required sign-in or verification yourself in Browser, then retry Download. External browsers and Zotero have separate website sessions. Access controls and verified source restrictions still apply.</p>""")
+    replace_section(download, "Direct download and background webpage fallback", """<h2>Direct download and background webpage fallback</h2><p>Downloads try the configured direct routes first. Supported publisher requests can then use Gewu's background WebView2 page to discover the article PDF without replacing your visible workspace. It shares the standalone Gewu Browser session. Missing access or an unsupported route remains an error; use an authorized publisher page to obtain the PDF.</p>""")
+    replace_section(ai, "Example: connect DeepSeek Harness on macOS", """<h2>Connect another local MCP client</h2><p>Use Settings &gt; AI Access &gt; Copy MCP Configuration and enter that generated configuration in your Windows client's local STDIO MCP settings. Use the installed Python and adapter paths exactly, preserve the database identity and endpoint-file fields, and keep the generated token private. Do not paste a macOS path or assume a fixed port.</p>""")
+    replace_section(startup, "Before the first launch", """<h2>Before the first launch</h2><p>Install the Windows x64 Setup.exe. Open Gewu Insight from the Start menu. No separate Python or .NET installation is required for daily use. Keep the program and your selected Gewu Database in separate folders.</p>""")
+    replace_section(startup, "Find the database you are using", """<h2 id="database-location">Find the database you are using</h2><p>Choose <strong>File &gt; Open Gewu Database</strong> to open the active research folder in File Explorer. This command reveals the current database; it does not create or move one. If startup reports a missing folder or identity mismatch, locate the intended database before changing anything.</p>""")
+    replace_section(startup, "Keep the current App in the Dock", """<h2 id="dock-entry">Use the installed shortcut</h2><p>Open <strong>Gewu Insight</strong> from the Windows Start menu. You can pin that installed shortcut to your taskbar. An old development checkout is not the daily application. Upgrading the program retains the existing database selection.</p>""")
+    replace_section(trouble, "An upgrade appears to open a different or empty Library", """<h2>An upgrade appears to open a different or empty Library</h2><p>Use File &gt; Open Gewu Database to check the selected folder. Do not import again or recreate records before confirming that it is your intended database. Preserve both locations if they differ. The default program folder and the research data folder are separate.</p>""")
+    replace_section(trouble, "A WebCrypto keychain prompt keeps appearing", """<h2 id="browser-key-prompt">Website sign-in differs between interfaces</h2><p>The Windows App and Zotero use separate website sessions. Sign in normally in the interface you are using. Neither Windows interface needs the Mac Keychain or the project's Mac update-signing private key.</p>""")
+    replace_section(soup.find("article",id="storage-reference"), "App and machine locations", """<h2>App and machine locations</h2><ul><li><code>%LOCALAPPDATA%/Programs/Gewu Insight</code>: installed program and bundled resources.</li><li><code>%USERPROFILE%/.gewu-insight/database-location.ini</code>: selected database folder and identity; not the database itself.</li><li><code>%LOCALAPPDATA%/Gewu Insight/Databases/&lt;identity&gt;/Logs</code>: startup and background-service diagnostics.</li><li><code>%LOCALAPPDATA%/Gewu Insight/Databases/&lt;identity&gt;/Cache</code>: rebuildable cache; not research originals.</li><li><code>%LOCALAPPDATA%/Gewu Insight/Databases/&lt;identity&gt;/Browser</code>: separate website profile.</li><li><code>%LOCALAPPDATA%/Gewu Insight/Updates</code>: downloaded program updates and per-computer check preferences.</li></ul>""")
+    for node in soup.find("article",id="zotero-import").find_all(string=True):
+        value=str(node).replace('macOS menu:', 'Windows menu:')
+        value=value.replace('This preview has been exercised with Zotero 10.0.6 on macOS; older Zotero versions, Windows and every third-party plugin configuration are not covered by that validation.', 'Check the Windows release notes for tested Zotero versions. Third-party plugin configurations and missing external attachments may need individual review.')
+        node.replace_with(value)
+    for node in list(soup.select('article p, article li')):
+        if "Apple Passwords stays under macOS control" in node.get_text():
+            node.string = "Windows Browser uses a separate WebView2 profile. Zotero has its own website session. Gewu does not copy credentials from other browsers or grant AI connections access to website passwords."
+        elif "~/Library/Logs/Gewu Insight/paper_monitor_launcher.log" in node.get_text():
+            node.string = "For startup errors, inspect %LOCALAPPDATA%/Gewu Insight/Databases/<identity>/Logs/windows-launcher.log and windows-service.log. Keep credentials out of any report you share."
+
     # Platform-independent facts use the exact Windows labels; platform-specific
     # claims above receive explicit replacements rather than blind word swaps.
     substitutions = [
         ("Back Up or Move to Another Mac", "Back Up and Upgrade"),
+        ("mac-software-updates", "windows-software-updates"),
         ("Gewu Insight > About Gewu Insight", "the guide's About Gewu Insight section"),
         ("Setting >", "Settings >"),
         ("Literature Data Source", "Literature Data Sources"),
@@ -194,6 +226,7 @@ def windows_html():
         ("Finder alias", "Windows .lnk shortcut"),
         ("directory alias", "directory shortcut"),
         ("Finder", "File Explorer"),
+        ("Dock, startup identity", "taskbar, startup identity"),
         ("macOS Trash", "Windows Recycle Bin"),
         ("macOS Preview", "the Windows default PDF application"),
         ("macOS application", "Windows application"),
@@ -231,14 +264,13 @@ def windows_html():
         ("If macOS denies Safari file access", "Windows supports manual Sync from Chrome using one selected local bookmark file and subtree. Safari source sync is not offered. Import an exported bookmark HTML file when no supported local source is available; source files are not modified."),
         ("WebView2 follows macOS networking", "Browser uses WebView2 and the current system network configuration. Gewu does not change proxies or Clash rules. Verify the actual route for publisher, PDF, login and CDN hosts independently; institutional access remains subject to the website."),
         ("A secure-connection error such as", "A secure-connection error can reflect network, VPN, routing, system time or certificate problems. Restore the connection, then reload once. The error alone does not prove an expired site certificate. Certificate verification remains enabled."),
-        ("Browser website data and its disposable favicon cache are managed", "Browser website data is under %LOCALAPPDATA%/Gewu Insight/Databases/<identity>/Browser. Logs and Cache are adjacent, separate from SQLite bookmarks/history and the selected Gewu Database. Copying browser data does not guarantee usable sign-ins on another computer."),
         ("A failed database deletion restores the moved file when macOS", ""),
         ("Choose Help > Contact Us", "Choose Help > Contact Us to open info@gewu-insight.com in your default email application. Include the installed version, affected workflow and steps to reproduce; omit passwords, tokens and private research data. Review and send the message yourself."),
         ("A Library copy creates another reference", "A Library copy creates another placement of the same paper. Windows secondary main-file locations use .lnk shortcuts, and secondary Associated Files locations point to the canonical bundle. Versions and attachments remain associated with that paper; a placement copy does not create another unrelated identity."),
         ("Drag a card's file icon or filename", "Drag a Paper Files icon or filename to File Explorer or a compatible application to copy or open the real file. Library file icons use the same native drag. The receiving application determines its accepted formats and drag behavior; not every external destination has been verified."),
         ("Local PDFs still open in Preview", "Local files open through Windows file associations; File Explorer, the built-in preview and downloads keep their own actions. Browser's explicit Open in Default Browser opens the Windows default browser with its separate website session. Changing Website Links does not transfer cookies or existing tabs."),
         ("When the same Gewu Key appears in several folders", "When one Gewu Key appears in several folders, it shares one Paper Files bundle. The main file stays at its canonical location. Other Windows placements use .lnk shortcuts and their associated directories point to the canonical bundle. Make Copy Desktop resolves these pointers into real files for a portable export."),
-        ("Automatic monitoring runs inside the local UI service", "Automatic monitoring runs inside the local UI service with startup delays, periodic checks and saved completion/retry state. Keep Windows awake and Gewu Insight running. Closing the main Windows window stops its service. A late launch checks due work; it does not guarantee a run at the exact scheduled minute."),
+        ("Automatic monitoring runs inside the local UI service", "Automatic monitoring runs inside the local UI service with startup delays, periodic checks and saved completion/retry state. Keep Windows awake and Gewu Insight running. Closing the standalone window stops its service unless a connected Gewu tab in Zotero still needs it. A late launch checks due work; it does not guarantee a run at the exact scheduled minute."),
         ("The UI server listens on the local loopback address", "The Windows desktop starts its local service on a free loopback port. Its current address is recorded for MCP discovery; do not assume port 8765. The service is local to this computer."),
         ("The built-in preview can flash as it loads another PDF", "Switching files can briefly expose loading while a new document is prepared. Let it finish or use Open in Default App to read the file separately. Windows has no macOS system Quick Look mode; Preview Settings cannot switch to it."),
         ("A verification loop does not establish", "An embedded Browser can still be rejected by a publisher's verification. Reload once; if it repeats, use Open in Default Browser and complete the site's normal access steps yourself. The external browser has a separate session. Do not repeatedly retry or bypass the challenge."),
@@ -267,6 +299,7 @@ def windows_html():
         value = str(node)
         for old, new in [
             ("on your Mac", "on your Windows computer"),
+            ("on this Mac", "on this Windows computer"),
             ("another Mac", "another computer"),
             ("sleeping Mac", "sleeping computer"),
             ("the Mac's local time zone", "the computer's local time zone"),
@@ -299,6 +332,35 @@ def windows_html():
         if "Open Passwords" in value or "Passkey" in value or "Dock tile" in value:
             node.decompose()
 
+    # Genuine installed Windows captures, separate from the shared Mac edition.
+    # Keep their file paths for the matching PDF and inline bytes for offline HTML.
+    importer = soup.find("article", id="zotero-import")
+    scope_heading = next(h for h in importer.find_all("h2") if h.get_text(strip=True) == "Choose scope and destination")
+    scope_heading["id"] = "windows-zotero-import-scope"
+    preview_heading = next(h for h in importer.find_all("h2") if h.get_text(strip=True) == "Preview, then start the copy")
+    preview_heading["id"] = "windows-zotero-import-preview"
+    screenshots = [
+        ("windows-zotero-import-preview", "zotero-import-preview.png",
+         "Preview Import reads the selected Zotero library before copying. This empty library correctly shows zero items and attachments. Your counts depend on the selected source; no import was started for this capture."),
+        ("windows-zotero-import-scope", "zotero-import-scope.png",
+         "The installed Windows App connected to Zotero. Choose the source and Gewu destination, then use Preview Import. Connecting alone does not copy papers."),
+        ("windows-software-updates", "software-update.png",
+         "Help > Check for Updates opens the Windows update window. Automatic checks do not install updates without your action."),
+    ]
+    for anchor, filename, caption in screenshots:
+        path = ROOT / "assets/user-guide/windows" / filename
+        if not path.is_file():
+            raise ValueError("Missing installed Windows screenshot: " + filename)
+        figure = soup.new_tag("figure", attrs={"class": "guide-screenshot"})
+        image = soup.new_tag("img", attrs={"src": "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii"),
+            "data-pdf-image": str(path.relative_to(ROOT)), "alt": caption})
+        figure.append(image)
+        label = soup.new_tag("figcaption"); label.string = caption; figure.append(label)
+        heading = soup.find(id=anchor)
+        if heading is None:
+            raise ValueError("Missing Windows screenshot section: " + anchor)
+        heading.insert_after(figure)
+
     # Local standalone HTML must not request service-only image/PDF endpoints.
     spec = importlib.util.spec_from_file_location("guide_common", ROOT / "scripts/build_user_guide_pdf.py")
     common = importlib.util.module_from_spec(spec)
@@ -316,210 +378,6 @@ def windows_html():
     script.string = javascript
     soup.title.string = f"Gewu Insight User Guide - Windows {VERSION}"
     return soup, common
-
-
-def fonts():
-    """Use installed Windows fonts; no font download or installation."""
-    folder = Path("C:/Windows/Fonts")
-    for name, file in [("Guide", "arial.ttf"), ("GuideBold", "arialbd.ttf"),
-                       ("GuideItalic", "ariali.ttf"), ("GuideBoldItalic", "arialbi.ttf"),
-                       ("GuideCJK", "simsun.ttc"), ("GuideSymbols", "seguisym.ttf")]:
-        pdfmetrics.registerFont(TTFont(name, str(folder / file)))
-    pdfmetrics.registerFontFamily("Guide", normal="Guide", bold="GuideBold", italic="GuideItalic", boldItalic="GuideBoldItalic")
-
-
-def pdf_text(value):
-    value = re.sub(r"GEWU[A-Z]+(?:START|END)", "", value)
-    value = value.replace("\u2011", "-").replace("\u00a0", " ")
-    value = escape(value)
-    value = re.sub(r"([\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]+)", r'<font name="GuideCJK">\1</font>', value)
-    return value.replace("↺", '<font name="GuideSymbols">↺</font>')
-
-
-def inline(node):
-    if isinstance(node, NavigableString):
-        return pdf_text(str(node))
-    if not isinstance(node, Tag):
-        return ""
-    inner = "".join(inline(n) for n in node.children)
-    if node.name in {"b", "strong"}:
-        return f"<b>{inner}</b>"
-    if node.name in {"i", "em"}:
-        return f"<i>{inner}</i>"
-    if node.name == "br":
-        return "<br/>"
-    if node.name == "small" and re.search(r"[\u2e80-\u9fff]", node.get_text()):
-        return "<br/>" + inner
-    if node.name == "a" and node.get("href"):
-        href = node["href"]
-        if href.startswith(("#", "http:", "https:", "mailto:")):
-            return f'<a href="{escape(href, quote=True)}" color="#1769c2">{inner}</a>'
-    return inner
-
-
-class GuidePDF(BaseDocTemplate):
-    def afterFlowable(self, flowable):
-        if hasattr(flowable, "guide_bookmark"):
-            key, title, level = flowable.guide_bookmark
-            self.canv.bookmarkPage(key)
-            self.canv.addOutlineEntry(title, key, level=level, closed=level > 0)
-            if getattr(flowable, "guide_toc", False):
-                self.notify("TOCEntry", (level, escape(title), self.page, key))
-
-
-def build_pdf(soup, common):
-    fonts()
-    base = dict(fontName="Guide", fontSize=10, leading=14, textColor=colors.HexColor("#243247"), spaceAfter=8)
-    body = ParagraphStyle("GuideBody", **base)
-    small = ParagraphStyle("GuideSmall", parent=body, fontSize=8.5, leading=12)
-    headings = {
-        1: ParagraphStyle("GuidePart", parent=body, fontName="GuideBold", fontSize=25, leading=30, spaceAfter=20, keepWithNext=True),
-        2: ParagraphStyle("GuideChapter", parent=body, fontName="GuideBold", fontSize=19, leading=24, spaceBefore=16, spaceAfter=12, keepWithNext=True),
-        3: ParagraphStyle("GuideSection", parent=body, fontName="GuideBold", fontSize=14, leading=19, spaceBefore=13, spaceAfter=9, keepWithNext=True),
-        4: ParagraphStyle("GuideHeading", parent=body, fontName="GuideBold", fontSize=11, leading=15, spaceBefore=10, spaceAfter=7, keepWithNext=True),
-    }
-    toc = TableOfContents()
-    toc.levelStyles = [ParagraphStyle(f"TOC{i}", parent=small, leftIndent=i*13,
-                                      firstLineIndent=0, spaceBefore=7 if i == 0 else 3,
-                                      fontName="GuideBold" if i < 2 else "Guide") for i in range(3)]
-    story = [Spacer(1, 55), Paragraph("Gewu Insight", headings[1]),
-             Paragraph("User Guide", headings[1]),
-             Paragraph(f"Windows {VERSION}", headings[2]),
-             Paragraph(EDITION, body),
-             Spacer(1, 24), Paragraph("Library · Paper Files · Publications<br/>Journal · Subject · Author · Browser · AI Access", body),
-             Spacer(1, 18), Paragraph("A complete Windows edition of the shared 49-topic manual. Interface names match the Windows application. The HTML edition supports topic search; this PDF has linked contents and bookmarks.", body),
-             PageBreak(), Paragraph("Contents", headings[1]), toc, PageBreak()]
-
-    # Reuse the established semantic hierarchy and diagram/table conversion.
-    # The temporary source is documentation-only and lives in the ignored QA dir.
-    work = ROOT / "tmp/windows-user-guide"
-    work.mkdir(parents=True, exist_ok=True)
-    semantic_source = BeautifulSoup(str(soup), "html.parser")
-    for img in semantic_source.select("img[data-pdf-image]"):
-        img["src"] = str(ROOT / img["data-pdf-image"])
-    input_path = work / "windows-semantic-source.html"
-    input_path.write_text(str(semantic_source), encoding="utf-8")
-    common.HTML_SOURCE = input_path
-    semantic = BeautifulSoup(common.clean_guide_html(), "html.parser")
-    counters = [0, 0, 0, 0]
-    anchors = set()
-    part_number = 0
-    topic_ids = {node["id"] for node in soup.select("article.guide-topic")}
-
-    def paragraph(node, style=body):
-        content = inline(node).strip()
-        key = node.get("id") if isinstance(node, Tag) else None
-        if key and key not in anchors:
-            anchors.add(key)
-            content = f'<a name="{escape(key)}"/>' + content
-        return Paragraph(content or " ", style)
-
-    def blocks(parent):
-        nonlocal part_number
-        output = []
-        # Preserve inline runs in callouts. The shared semantic converter may
-        # leave text, strong and span siblings directly inside a blockquote.
-        # Treating each text node as a paragraph fragments warning sentences.
-        nodes, run = [], []
-        block_names = {"p", "pre", "div", "section", "blockquote", "figure", "figcaption", "table", "ul", "ol", "img"}
-        def flush_inline():
-            if run and any(str(n).strip() for n in run):
-                nodes.append(BeautifulSoup("<p>" + "".join(str(n) for n in run) + "</p>", "html.parser").p)
-            run.clear()
-        for child in parent.children:
-            if isinstance(child, Tag) and (child.name in block_names or re.fullmatch("h[1-6]", child.name)):
-                flush_inline()
-                nodes.append(child)
-            else:
-                run.append(child)
-        flush_inline()
-        for node in nodes:
-            if isinstance(node, NavigableString):
-                if node.strip():
-                    output.append(paragraph(node))
-                continue
-            if not isinstance(node, Tag):
-                continue
-            if re.fullmatch("h[1-6]", node.name):
-                level = int(node.name[1])
-                if level == 1:
-                    if part_number:
-                        output.append(PageBreak())
-                    part_number += 1
-                    counters[:] = [part_number, 0, 0, 0]
-                    prefix = str(part_number)
-                else:
-                    slot = min(level-1, 3)
-                    counters[slot] += 1
-                    for index in range(slot+1, 4):
-                        counters[index] = 0
-                    prefix = f"{counters[0]}-{counters[1]}" + (f".{counters[2]}" if level == 3 else "") if level <= 3 else ""
-                title = node.get_text(" ", strip=True)
-                p = Paragraph(pdf_text(f"{prefix}  {title}".strip()), headings[min(level, 4)])
-                key = node.get("id") or f"heading-{len(anchors)}"
-                if key not in anchors:
-                    anchors.add(key)
-                    if level <= 3:
-                        p.guide_bookmark = (key, f"{prefix}  {title}".strip(), level-1)
-                        p.guide_toc = level <= 2 or key in topic_ids
-                    else:
-                        p = Paragraph(f'<a name="{escape(key)}"/>' + pdf_text(title), headings[4])
-                # Chapters 4-1 through 4-4 intentionally have no forced breaks.
-                output.append(p)
-            elif node.name == "table":
-                rows = [[paragraph(cell, small) for cell in row.find_all(["td", "th"], recursive=False)] for row in node.find_all("tr")]
-                rows = [row for row in rows if row]
-                if rows:
-                    count = max(map(len, rows))
-                    for row in rows:
-                        row.extend([""] * (count-len(row)))
-                    widths = [142, 365] if count == 2 else [507/count]*count
-                    table = Table(rows, colWidths=widths, repeatRows=1, hAlign="LEFT")
-                    table.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#e8f2ff")),
-                        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#f6f8fb")]),
-                        ("VALIGN", (0,0), (-1,-1), "TOP"), ("LEFTPADDING", (0,0),(-1,-1),7),
-                        ("RIGHTPADDING", (0,0),(-1,-1),7), ("TOPPADDING",(0,0),(-1,-1),7),
-                        ("BOTTOMPADDING",(0,0),(-1,-1),7), ("LINEBELOW", (0,0),(-1,0),.5,colors.HexColor("#b9cfe6"))]))
-                    output.extend([table, Spacer(1, 9)])
-            elif node.name in {"ul", "ol"}:
-                for index, li in enumerate(node.find_all("li", recursive=False), 1):
-                    output.append(Paragraph((f"{index}. " if node.name == "ol" else "• ") + inline(li), body))
-            elif node.name == "img":
-                path = node.get("src", "")
-                if Path(path).is_file():
-                    img = Image(path)
-                    factor = min(400/img.imageWidth, 220/img.imageHeight, 1)
-                    img.drawWidth = img.imageWidth * factor
-                    img.drawHeight = img.imageHeight * factor
-                    img.hAlign = "CENTER"
-                    output.extend([img, Spacer(1, 9)])
-            elif node.find("img"):
-                output.extend(blocks(node))
-            elif node.name in {"p", "pre", "figcaption"}:
-                if node.get_text(strip=True) and not re.fullmatch(r"GEWU[A-Z]+", node.get_text(strip=True)):
-                    related = "GEWURELATEDSTART" in node.get_text()
-                    item = paragraph(node, small if related else body)
-                    if related and output and isinstance(output[-1], Paragraph):
-                        output.append(KeepTogether([output.pop(), item]))
-                    else:
-                        output.append(item)
-            else:
-                output.extend(blocks(node))
-        return output
-
-    story.extend(blocks(semantic.body))
-    doc = GuidePDF(str(PDF), pagesize=(595,842), leftMargin=44, rightMargin=44,
-                   topMargin=43, bottomMargin=43, title=f"Gewu Insight User Guide - Windows {VERSION}",
-                   author="Gewu Insight", allowSplitting=True)
-    def footer(canvas, document):
-        canvas.saveState()
-        canvas.setFont("Guide", 8)
-        canvas.setFillColor(colors.HexColor("#64748b"))
-        canvas.drawString(44, 23, f"Gewu Insight | Windows {VERSION} | {EDITION}")
-        canvas.drawRightString(551, 23, str(document.page))
-        canvas.restoreState()
-    doc.addPageTemplates(PageTemplate(id="guide", frames=Frame(44,43,507,756,leftPadding=0,rightPadding=0,topPadding=0,bottomPadding=0), onPage=footer))
-    doc.multiBuild(story)
 
 
 def main():
@@ -540,11 +398,11 @@ def main():
         if (soup.title.get_text() != title or
                 not soup.select_one(".guide-revision").get_text().startswith(f"Windows {VERSION} ·") or
                 reader.metadata.title != title or f"Windows {VERSION}" not in reader.pages[0].extract_text()):
-            parser.error("User Guide version mismatch; update HTML and the approved PDF edition without changing its typesetting.")
+            parser.error("User Guide version mismatch; regenerate HTML and build its PDF with scripts/build_windows_user_guide_pdf.py.")
         print(f"HTML and PDF User Guide match Windows {VERSION}.")
         return
     if not args.html_only:
-        parser.error("The approved PDF must not be replaced by the legacy ReportLab layout. Use --html-only to update HTML; edit the existing PDF separately while preserving its typesetting.")
+        parser.error("Use --html-only to update HTML, then scripts/build_windows_user_guide_pdf.py to generate the matching PDF with the shared LaTeX layout.")
     soup, _ = windows_html()
     HTML.write_text(str(soup), encoding="utf-8")
     print(HTML)

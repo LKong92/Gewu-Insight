@@ -97,15 +97,17 @@ def validate_metadata(value, *, partial=False):
 
 
 def metadata_payload(meta, paper_id, grant):
+    from .paper_website import website_url
     raw = {'authors': meta.get('authors', []), 'ai_metadata': {'connection_id': grant['id'],
            'source_url': meta.get('source_url',''), 'supplied_at': utc_now(), 'verified_by_gewu': False}}
     if meta.get('arxiv_id'): raw['arxiv_id'] = meta['arxiv_id']
     if meta.get('publication_notice'): raw['publication_notice'] = meta['publication_notice']
     raw.update({k:meta[k] for k in ('volume','issue','pages') if k in meta})
+    url = website_url({'doi': meta.get('doi'), 'url': meta.get('source_url'), 'raw': raw})
     return {'paper_id': paper_id, 'title': meta.get('title',''), 'doi': meta.get('doi') or '',
             'journal': meta.get('journal',''), 'publication_date':meta.get('publication_date',''),
             'abstract':meta.get('abstract',''), 'abstract_source':'AI supplied', 'source':'ai_import',
-            'url':meta.get('source_url',''), 'landing_url':meta.get('source_url',''),
+            'url':url, 'landing_url':url,
             'type':meta.get('publication_type',''), 'raw':raw}
 
 

@@ -179,7 +179,15 @@ def prepare(root, *, create=False, expected_identity="", select=False, desktop_o
             raise ValueError("New Gewu Database requires a new or empty directory; existing files are never overwritten.")
         root.mkdir(parents=True, exist_ok=True)
     else:
-        check_database(root, expected_identity)
+        _, identity = check_database(root, expected_identity)
+        # A live Zotero host already owns the DB leases. Opening its window must
+        # attach to that authenticated service, never start a second writer.
+        if not desktop_owned:
+            from .windows_service import live_status
+            if live_status(root, identity):
+                if select:
+                    save_locator(root, identity)
+                return {"workspace": str(root), "identity": identity, "runtime": str(runtime_root(root, identity))}
     from contextlib import ExitStack
     with ExitStack() as stack:
         if not desktop_owned:

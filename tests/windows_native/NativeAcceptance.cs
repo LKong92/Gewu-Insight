@@ -16,19 +16,28 @@ internal static class NativeAcceptance
     [STAThread]
     static void Main(string[] args)
     {
+        // The real shell relaunches this executable for its windowless helper.
+        if (args.Contains("--background")) {
+            using var gate = InstallationGuard.Enter(false);
+            Environment.ExitCode = BackgroundService.Run(args);
+            return;
+        }
         string root = Path.GetFullPath(args[0]), scratch = Path.GetFullPath(args[1]);
         if (!scratch.StartsWith(Path.Combine(root, "tmp") + Path.DirectorySeparatorChar)) throw new Exception("A disposable repo tmp workspace is required.");
         output = Path.Combine(scratch, "native-results.json");
         Environment.SetEnvironmentVariable("GEWU_DOCUMENTATION_MODE", "1");
         ApplicationConfiguration.Initialize();
-        form = new WorkspaceWindow(["--source", root, "--workspace", scratch, "--python", Path.Combine(root, ".venv/Scripts/python.exe")]);
+        string python = args.Length > 2 ? Path.GetFullPath(args[2]) : Path.Combine(root, ".venv/Scripts/python.exe");
+        form = new WorkspaceWindow(["--source", root, "--workspace", scratch, "--python", python]);
         form.Opacity = 0; form.ShowInTaskbar = false;
         workspace = (WebView2)typeof(WorkspaceWindow).GetField("workspace", Private)!.GetValue(form)!;
         form.Shown += async (_, _) => {
             try {
-                await Until(async () => workspace.CoreWebView2 != null && await Js("typeof state !== 'undefined' && typeof quickLookLibraryPdf === 'function'") == "true", 60);
-                await TestAIAccess();
-                await TestPreview();
+                await Until(async () => workspace.CoreWebView2 != null && await Js("typeof state !== 'undefined' && state.libraryLoaded && typeof quickLookLibraryPdf === 'function' && typeof openAIAccessSettings === 'function'") == "true", 60);
+                if (!args.Contains("--capture-only")) {
+                    await TestAIAccess();
+                    await TestPreview();
+                }
                 await TestCapture();
                 File.WriteAllText(output, JsonSerializer.Serialize(new { ok = true, results }, new JsonSerializerOptions { WriteIndented = true }));
             } catch (Exception error) {
@@ -85,8 +94,11 @@ internal static class NativeAcceptance
         await Until(async () => await Js("!!document.querySelector('.windows-pdf-sheet[data-page=\"240\"] img')") == "true");
         await AssertJs("state.libraryQuickLookPageCount === 240", "240-page document navigation");
         await AssertJs("document.querySelectorAll('.windows-pdf-body img').length < 12", "offscreen page pixels released");
+        await Js("window.__pdfInfoRequests=0; window.__realFetch=window.fetch; window.fetch=(input,...args)=>{if(String(input).startsWith('/api/pdf-info?')) __pdfInfoRequests++; return __realFetch(input,...args)}");
         await Js("for(let n=0;n<20;n++) quickLookLibraryPdf({merged_pdf_path:__files[n%2].path}); quickLookLibraryFile({native_file_path:__files[2].path})");
         await Until(async () => await Js("!!document.querySelector('.library-file-preview.markdown strong')") == "true");
+        await Js("window.fetch=window.__realFetch");
+        await AssertJs("__pdfInfoRequests === 0", "superseded PDF selections never queue stale metadata requests");
         await AssertJs("!document.querySelector('.windows-pdf-reader') && state.libraryQuickLookPath === __files[2].path", "stale PDF requests cannot replace Markdown");
         await Js("quickLookLibraryFile({native_file_path:__files[4].path})");
         await Until(async () => await Js("document.querySelector('.library-file-preview.image img')?.naturalWidth === 640") == "true");
@@ -113,7 +125,7 @@ internal static class NativeAcceptance
         await AssertJs("document.querySelector('#aiToken').value === '' && document.querySelector('#aiMcpConfig').value === ''", "closing AI Access clears displayed credentials");
         await Js("openAIAccessSettings()");
         await Until(async () => await Js("document.querySelector('#aiAccessStatus').textContent === ''") == "true");
-        await Js("document.querySelector('.ai-connection button').click()");
+        await Js("[...document.querySelectorAll('.ai-connection button')].find(button=>button.textContent==='Revoke').click()");
         await Until(async () => await Js("document.querySelector('#aiAccessStatus').textContent === 'Connection revoked.'") == "true");
         await Js("document.querySelector('#aiAccessEnabled').click()");
         await Until(async () => await Js("document.querySelector('#aiAccessStatus').textContent === 'AI access disabled.'") == "true");
@@ -124,7 +136,7 @@ internal static class NativeAcceptance
     static async Task TestCapture()
     {
         await Js("window.__captureEvents=[]; window.__originalBrowserEvent=window.gewuBrowserNativeEvent; window.gewuBrowserNativeEvent=e=>{if(e.event.startsWith('capture-')) __captureEvents.push(e); else __originalBrowserEvent(e)}");
-        await Call("OpenPageAsync", "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", true, "");
+        await Call("OpenPageAsync", "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf", true, "", "");
         await Until(async () => {
             var page = (BrowserPage?)typeof(WorkspaceWindow).GetField("selected", Private)!.GetValue(form);
             return page is { Loading:false, Home:false } && page.Url.Contains("dummy.pdf");

@@ -6,6 +6,7 @@ separately. No external JSON files, Library files or placements are changed.
 import json
 import re
 import threading
+from . import update_runtime
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -292,4 +293,4 @@ def start(db_path):
                     storage.close()
                 if pending:
                     start(db_path)
-    threading.Thread(target=worker, name='metadata-refresh', daemon=True).start()
+    update_runtime.Thread(target=worker, name='metadata-refresh', daemon=True).start()

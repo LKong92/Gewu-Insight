@@ -160,8 +160,13 @@
       const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? a.body.clientHeight : 1);
       zoom(a, Math.exp(-Math.max(-120, Math.min(120, delta)) * .01), event.clientX, event.clientY);
     }, {passive:false});
-    fetch('/api/pdf-info?' + new URLSearchParams({path, layout:1}), {signal:a.controller.signal, cache:'no-store'})
-      .then(async response => { const data = await response.json(); if (!response.ok) throw Error(data.error || 'PDF could not be read.'); return data; })
+    // Coalesce selections made in the same event turn. Aborted previews must
+    // not fill the local connection queue ahead of the current attachment.
+    Promise.resolve().then(() => {
+      if (!live(a) || a.controller.signal.aborted) return;
+      return fetch('/api/pdf-info?' + new URLSearchParams({path, layout:1}), {signal:a.controller.signal, cache:'no-store'});
+    })
+      .then(async response => { if (!live(a)) return; const data = await response.json(); if (!response.ok) throw Error(data.error || 'PDF could not be read.'); return data; })
       .then(data => {
         if (!live(a)) return;
         if (!data.page_count || data.page_sizes?.length !== data.page_count) throw Error('PDF page layout is unavailable.');

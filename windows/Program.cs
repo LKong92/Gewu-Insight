@@ -12,6 +12,13 @@ internal static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        using var installation = args.Contains("--configure-database") ? null : EnterInstallation(args);
+        if (!args.Contains("--configure-database") && installation == null) { Environment.ExitCode = 1; return; }
+        if (args.Contains("--background")) {
+            try { Environment.ExitCode = BackgroundService.Run(args); }
+            catch { Environment.ExitCode = 1; }
+            return;
+        }
         TaskbarIdentity.Initialize();
         ApplicationConfiguration.Initialize();
         try {
@@ -25,6 +32,15 @@ internal static class Program
         catch (OperationCanceledException) { Environment.ExitCode = 1; }
         catch (Exception error) { Environment.ExitCode = 1; MessageBox.Show(error.Message, "Gewu Insight could not start", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
+    static Mutex? EnterInstallation(string[] args)
+    {
+        try { return InstallationGuard.Enter(args.Contains("--after-install")); }
+        catch (Exception error) {
+            if (!args.Contains("--background")) MessageBox.Show(error.Message,"Gewu Insight installation",MessageBoxButtons.OK,MessageBoxIcon.Information);
+            return null;
+        }
+    }
+
 }
 
 internal sealed class BrowserPage
@@ -88,16 +104,26 @@ internal sealed partial class WorkspaceWindow : Form
         Activated += (_, _) => { if (!startup.Visible) { var view = selected?.View?.Visible == true ? selected.View : workspace; ActiveControl = view; view.Focus(); } };
         Shown += async (_, _) => {
             startup.Refresh();
-            try { await StartAsync(); }
+            try { await StartAsync(); _ = CheckUpdatesAutomaticallyAsync(); }
             catch (Exception error) { startup.SetStatus("Startup failed", error.Message); startup.Show(); startup.BringToFront(); }
         };
         FormClosing += async (_, e) => {
-            if (closeApproved) { applicationLifetime.Cancel(); browserPageMenu?.Dispose(); favicons.Dispose(); CancelCapture(); StopServer(); return; }
+            if (closeApproved) { stopping = true; applicationLifetime.Cancel(); browserPageMenu?.Dispose(); favicons.Dispose(); CancelCapture(); zoteroTimer.Stop();
+                if (detachService) { server?.Dispose(); server = null; } else StopServer();
+                return; }
             e.Cancel = true;
             if (stopping) return;
+            if (NativeHandoffBusy) { MessageBox.Show(this, "Wait for Browser downloads and file operations to finish before closing.", "Gewu Insight is still working"); return; }
             stopping = true;
             try {
-                await StopServerGracefullyAsync();
+                // A live Zotero tab still needs this same service after the UI exits.
+                if (origin != null && server != null && !server.HasExited) {
+                    using var presence = await client.GetAsync(new Uri(origin, "api/integrations/zotero/session"));
+                    presence.EnsureSuccessStatusCode();
+                    using var state = JsonDocument.Parse(await presence.Content.ReadAsStringAsync());
+                    detachService = state.RootElement.GetProperty("active").GetBoolean();
+                }
+                if (!detachService) await StopServerGracefullyAsync();
                 closeApproved = true;
                 Close();
             } catch (Exception error) {
@@ -106,7 +132,7 @@ internal sealed partial class WorkspaceWindow : Form
             }
         };
         FormClosed += (_, _) => {
-            loaderWindow?.Dispose(); foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose();
+            zoteroTimer.Dispose(); loaderWindow?.Dispose(); foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose();
         };
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("File");
@@ -129,7 +155,7 @@ internal sealed partial class WorkspaceWindow : Form
         viewMenu.DropDownItems.Add("Table View", null, async (_, _) => await WorkspaceScriptAsync("window.setLibraryContentView('table')"));
         viewMenu.DropDownItems.Add("Toggle List/Table", null, async (_, _) => await WorkspaceScriptAsync("window.toggleLibraryContentView()"));
         var loader = new ToolStripMenuItem("Loader");
-        foreach (var (label, function) in new[] { ("Open Loader", "openLibraryLoader"), ("Refresh All Metadata", "openMetadataRefreshWindow"), ("Find All Missing Identifiers", "openIdentifierRecoveryWindow") })
+        foreach (var (label, function) in new[] { ("Open Loader", "openLibraryLoader"), ("Import from Zotero", "openZoteroImport"), ("Refresh All Metadata", "openMetadataRefreshWindow"), ("Find All Missing Identifiers", "openIdentifierRecoveryWindow") })
             loader.DropDownItems.Add(label, null, async (_, _) => await WorkspaceScriptAsync("window." + function + "()"));
         var settings = new ToolStripMenuItem("Settings");
         var naming = new ToolStripMenuItem("Naming Rule");
@@ -163,12 +189,15 @@ internal sealed partial class WorkspaceWindow : Form
                 if (!stopping) MessageBox.Show(this, "Monitor network cache cleared. Saved research results and Browser sign-ins are kept.", "Monitor cache cleared");
             } catch (Exception error) { if (!stopping) MessageBox.Show(this, error.Message, "Could not clear Monitor cache"); }
         });
+        var plugin = new ToolStripMenuItem("Plugin");
+        plugin.DropDownItems.Add("Zotero Integration", null, async (_, _) => await WorkspaceScriptAsync("window.openZoteroSettings()"));
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("User Guide", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.html")) { UseShellExecute = true }));
+        help.DropDownItems.Add("Check for Updates", null, (_, _) => ShowUpdates());
         help.DropDownItems.Add("Contact Us", null, (_, _) => Process.Start(new ProcessStartInfo("mailto:info@gewu-insight.com") { UseShellExecute = true }));
         help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add("About Gewu Insight", null, (_, _) => ShowAboutWindow());
-        menu.Items.AddRange([file, edit, viewMenu, loader, settings, help]); MainMenuStrip = menu; Controls.Add(menu);
+        menu.Items.AddRange([file, edit, viewMenu, loader, settings, plugin, help]); MainMenuStrip = menu; Controls.Add(menu);
     }
 
     Task WorkspaceScriptAsync(string script) => workspace.CoreWebView2 == null ? Task.CompletedTask : workspace.CoreWebView2.ExecuteScriptAsync(script);
@@ -202,6 +231,7 @@ internal sealed partial class WorkspaceWindow : Form
                 using var doc = JsonDocument.Parse(e.WebMessageAsJson);
                 string channel = doc.RootElement.GetProperty("channel").GetString() ?? "";
                 if (channel == "browser") await BrowserCommandAsync(doc.RootElement.GetProperty("payload"));
+                else if (channel == "zotero") await BeginZoteroHandoffAsync(doc.RootElement.GetProperty("payload"));
                 else if (channel == "dismissMenus") DismissMenus();
                 else if (channel == "choosePath") await ChoosePathAsync(doc.RootElement.GetProperty("payload"));
                 else if (channel == "libraryLoaderWindow" && TextValue(doc.RootElement.GetProperty("payload"), "type") == "open") await ShowLibraryLoaderAsync();
@@ -213,7 +243,7 @@ internal sealed partial class WorkspaceWindow : Form
                     var paths = e.AdditionalObjects.OfType<CoreWebView2File>().Select(file => file.Path).Where(path => File.Exists(path) || Directory.Exists(path)).Take(256).ToArray();
                     if (paths.Length > 0) await WorkspaceScriptAsync("window.handleNativeFinderDrop(" + JsonSerializer.Serialize(paths) + "," + doc.RootElement.GetProperty("payload").GetRawText() + ")");
                 }
-                else if (channel == "appReady" && !recoveringService) startup.Visible = false;
+                else if (channel == "appReady" && !recoveringService && !zoteroActive) startup.Visible = false;
                 else if (channel == "paperFileChooser") {
                     using var chooser = new OpenFileDialog { Multiselect = true, Title = "Add Paper Files" };
                     var paperId = TextValue(doc.RootElement.GetProperty("payload"), "paper_id");
@@ -230,42 +260,36 @@ internal sealed partial class WorkspaceWindow : Form
             await workspace.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(bridge.ReadToEnd().Replace("__WORKSPACE_ORIGIN__", JsonSerializer.Serialize(origin!.GetLeftPart(UriPartial.Authority))));
         using (var preview = new StreamReader(typeof(Program).Assembly.GetManifestResourceStream("GewuInsight.Windows.pdf-preview.js")!))
             await workspace.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("if(location.origin === " + JsonSerializer.Serialize(origin!.GetLeftPart(UriPartial.Authority)) + ") {" + preview.ReadToEnd() + "}");
-        workspace.CoreWebView2.NavigationCompleted += (_, e) => { if (e.IsSuccess && !recoveringService) { startup.Visible = false; ActiveControl = workspace; workspace.Focus(); } };
+        workspace.CoreWebView2.NavigationCompleted += (_, e) => { if (e.IsSuccess && !recoveringService && !zoteroActive) { startup.Visible = false; ActiveControl = workspace; workspace.Focus(); } };
         var initialRequest = environment.CreateWebResourceRequest(origin!.AbsoluteUri, "GET", null,
             "X-Gewu-Workspace: " + workspaceToken + "\r\n");
         workspace.CoreWebView2.NavigateWithWebResourceRequest(initialRequest);
         workspaceReady = true;
+        StartZoteroPresence();
         if (server!.HasExited) await RecoverServiceAsync(server);
     }
 
     async Task StartServerAsync()
     {
-        var bundled = Path.Combine(root, "service", "python.exe");
-        if (!File.Exists(bundled) && Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar).Equals(
-            Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
-            throw new IOException("The installed runtime is missing. Reinstall Gewu Insight.");
-        var start = new ProcessStartInfo(File.Exists(bundled) ? bundled : python) { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true,
-            StandardOutputEncoding = System.Text.Encoding.UTF8, StandardErrorEncoding = System.Text.Encoding.UTF8 };
-        start.ArgumentList.Add("-X"); start.ArgumentList.Add("utf8");
-        start.ArgumentList.Add("-B");
-        if (File.Exists(bundled)) start.ArgumentList.Add(Path.Combine(root, "service", "service_entry.py"));
-        else { start.ArgumentList.Add("-m"); start.ArgumentList.Add("paper_monitor"); }
-        foreach (var argument in new[] { "--db", Path.Combine(dataRoot, "data", "paper_monitor.sqlite"), "ui", "--host", "127.0.0.1", "--port", origin!.Port.ToString() }) start.ArgumentList.Add(argument);
-        start.Environment["GEWU_WORKSPACE_ROOT"] = dataRoot;
-        start.Environment["GEWU_DATA_ROOT"] = Path.Combine(dataRoot, "data");
-        start.Environment["GEWU_DATABASE_IDENTITY"] = database.Identity;
-        start.Environment["GEWU_RUNTIME_ROOT"] = database.Runtime;
-        start.Environment["GEWU_DESKTOP_HOST"] = Environment.ProcessId.ToString();
-        start.Environment["PYTHONUTF8"] = "1";
-        start.Environment["PYTHONIOENCODING"] = "utf-8";
-        server = Process.Start(start) ?? throw new IOException("Could not start the local service.");
+        var existing = await FindBackgroundServiceAsync();
+        if (existing != null) { server = existing; WatchService(server); return; }
+        var start = new ProcessStartInfo(Environment.ProcessPath!) { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var argument in new[] { "--background", "--workspace", dataRoot, "--port", origin!.Port.ToString() }) start.ArgumentList.Add(argument);
+        if (!Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar).Equals(Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) {
+            foreach (var argument in new[] { "--source", root, "--python", python }) start.ArgumentList.Add(argument);
+        }
+        var launched = Process.Start(start) ?? throw new IOException("Could not start the Gewu background service.");
+        server = launched;
         WatchService(server);
-        server.OutputDataReceived += (_, e) => { if (e.Data != null) lock (log!) log.WriteLine(e.Data); };
-        server.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (log!) log.WriteLine(e.Data); };
-        server.BeginOutputReadLine(); server.BeginErrorReadLine();
-        for (int i = 0; i < 600; i++) {
-            if (server.HasExited) throw new IOException("The local service stopped. See " + Path.Combine(database.Runtime, "Logs", "windows-launcher.log"));
-            try { using var response = await client.GetAsync(new Uri(origin, "api/health")); if (response.IsSuccessStatusCode) return; } catch (HttpRequestException) { }
+        var deadline = DateTime.UtcNow.AddMinutes(2);
+        while (DateTime.UtcNow < deadline) {
+            existing = await FindBackgroundServiceAsync();
+            if (existing != null) {
+                if (existing.Id != launched.Id) { server = existing; WatchService(server); launched.Dispose(); }
+                else existing.Dispose();
+                return;
+            }
+            if (launched.HasExited) throw new IOException("The local service stopped. See " + Path.Combine(database.Runtime, "Logs", "windows-service.log"));
             await Task.Delay(200, applicationLifetime.Token);
         }
         throw new TimeoutException("The local service did not become ready in two minutes.");
@@ -380,7 +404,7 @@ internal sealed partial class WorkspaceWindow : Form
         }
     }
 
-    void LayoutBrowser() { foreach (var page in pages) if (page.View != null) { page.View.Bounds = browserBounds; page.View.Visible = (browserVisible || (browserActive && capturePreparing)) && page == selected && !page.Home; if (page.View.Visible) page.View.BringToFront(); } if (suggestions.Visible) suggestions.BringToFront(); }
+    void LayoutBrowser() { foreach (var page in pages) if (page.View != null) { page.View.Bounds = browserBounds; page.View.Visible = !zoteroActive && (browserVisible || (browserActive && capturePreparing)) && page == selected && !page.Home; if (page.View.Visible) page.View.BringToFront(); } if (suggestions.Visible) suggestions.BringToFront(); }
     async Task ClosePageAsync(string id) { var page = pages.FirstOrDefault(p => p.Id == id); if (page == null) return; pages.Remove(page); ForgetLoadedPdfs(page); page.View?.Dispose(); if (selected == page) selected = pages.LastOrDefault(); if (selected == null) await OpenPageAsync("", true); LayoutBrowser(); await SendStateAsync(); }
     static string TextValue(JsonElement e, string key) => e.TryGetProperty(key, out var value) ? value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : value.ValueKind == JsonValueKind.Number ? value.GetRawText() : "" : "";
 

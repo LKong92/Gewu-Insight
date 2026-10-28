@@ -90,7 +90,8 @@ internal sealed partial class WorkspaceWindow
                     // including unsent forms. Only the trusted workspace reloads.
                     await SendStateAsync();
                     await ResumeLoaderAfterServiceRecoveryAsync();
-                    startup.Hide(); ActiveControl = workspace; workspace.Focus();
+                    if (!zoteroActive) { startup.Hide(); ActiveControl = workspace; workspace.Focus(); }
+                    else { startup.SetStatus("Open in Zotero", "Your Gewu workspace is being used in Zotero.\nClose its Gewu Insight tab to continue here."); startup.Show(); startup.BringToFront(); }
                     log?.WriteLine("Local service recovered; existing Browser tabs retained.");
                     return;
                 } catch (OperationCanceledException) when (stopping) { return; }

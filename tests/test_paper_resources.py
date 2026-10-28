@@ -2287,7 +2287,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertIsNotNone(self.storage.get_paper_resource(int(primary_resource["id"])))
         self.assertTrue(primary.exists())
 
-    def test_current_primary_resource_cannot_be_deleted(self) -> None:
+    def test_only_primary_resource_can_be_deleted_without_reappearing(self) -> None:
         self.add_paper("paper-keep-primary")
         primary = self.write_pdf("Topic/Current.pdf")
         self.storage.update_download_status(
@@ -2298,15 +2298,70 @@ class PaperResourceStorageTests(unittest.TestCase):
         )
         primary_resource = self.storage.ensure_primary_pdf_resource("paper-keep-primary")
 
-        with self.assertRaisesRegex(ValueError, "current default file"):
+        self.storage.add_library_item(paper_id='paper-keep-primary', folder_id=1)
+        before = self.storage.get_paper('paper-keep-primary')
+        trash = self.root / 'trashed.pdf'
+        with patch.object(ui_server, 'move_path_to_macos_trash', side_effect=lambda path: path.replace(trash)):
             ui_server.delete_paper_resource(
                 self.storage,
                 "paper-keep-primary",
                 int(primary_resource["id"]),
             )
 
-        self.assertTrue(primary.exists())
-        self.assertIsNotNone(self.storage.get_paper_resource(int(primary_resource["id"])))
+        self.assertFalse(primary.exists())
+        self.assertTrue(trash.exists())
+        self.assertEqual(self.storage.list_paper_resources('paper-keep-primary'), [])
+        after = self.storage.get_paper('paper-keep-primary')
+        self.assertEqual(after['storage_key'], before['storage_key'])
+        self.assertEqual(after['title'], before['title'])
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM library_items WHERE paper_id=?', ('paper-keep-primary',)).fetchone()[0], 1)
+        self.assertFalse(ui_server.paper_to_api(after)['native_file_path'])
+        self.assertFalse(after['primary_resource_id'])
+
+    def test_deleting_default_promotes_remaining_file_and_preserves_bytes(self):
+        self.add_paper('default-delete')
+        self.storage.add_library_item(paper_id='default-delete', folder_id=1)
+        primary = ui_server.attach_file_to_paper(self.storage, paper_id='default-delete',
+            filename='Published.pdf', content=self.valid_pdf_bytes('published'), file_type='published_version')
+        remaining = ui_server.attach_file_to_paper(self.storage, paper_id='default-delete',
+            filename='Preprint.pdf', content=self.valid_pdf_bytes('preprint'), file_type='preprint')
+        content = Path(self.storage.get_paper_resource(remaining['id'])['stored_path']).read_bytes()
+        with patch.object(ui_server, 'move_path_to_macos_trash', side_effect=lambda p: p.replace(self.root/'trash.pdf')):
+            ui_server.delete_paper_resource(self.storage, 'default-delete', primary['id'])
+        files = self.storage.list_paper_resources('default-delete')
+        self.assertEqual([r['id'] for r in files], [remaining['id']])
+        self.assertTrue(files[0]['is_default'])
+        self.assertEqual(Path(files[0]['stored_path']).read_bytes(), content)
+        self.assertEqual(self.storage.get_paper('default-delete')['primary_resource_id'], remaining['id'])
+
+    def test_only_file_delete_rolls_back_on_pointer_update_failure(self):
+        self.add_paper('sole-rollback')
+        file = ui_server.attach_file_to_paper(self.storage, paper_id='sole-rollback',
+            filename='Only.txt', content=b'preserve', file_type='unknown')
+        before = self.storage.get_paper('sole-rollback')
+        path = Path(file['stored_path'])
+        with patch.object(ui_server, 'move_path_to_macos_trash', side_effect=lambda p: p.replace(self.root/'trash.txt')), \
+             patch('paper_monitor.file_reassignment._repair_source_pointers', side_effect=RuntimeError('pointer failure')):
+            with self.assertRaisesRegex(RuntimeError, 'pointer failure'):
+                ui_server.delete_paper_resource(self.storage, 'sole-rollback', file['id'])
+        self.assertEqual(path.read_bytes(), b'preserve')
+        self.assertEqual(self.storage.get_paper('sole-rollback'), before)
+        self.assertIsNotNone(self.storage.get_paper_resource(file['id']))
+
+    def test_deleting_linked_default_preserves_original_and_clears_projection(self):
+        self.add_paper('linked-default')
+        path = self.write_pdf('linked.pdf')
+        resource = self.storage.create_paper_resource(paper_id='linked-default', stored_path=str(path), storage_mode='linked')
+        self.storage.conn.execute('UPDATE papers SET main_pdf_path=?,merged_pdf_path=?,primary_resource_id=?,source_path=? WHERE paper_id=?',
+            (str(path), str(path), resource['id'], str(path), 'linked-default'))
+        self.storage.conn.commit()
+        with patch.object(ui_server, 'move_path_to_macos_trash') as trash:
+            result = ui_server.delete_paper_resource(self.storage, 'linked-default', resource['id'])
+        trash.assert_not_called()
+        self.assertTrue(result['external_source_preserved'])
+        self.assertTrue(path.exists())
+        self.assertEqual(self.storage.list_paper_resources('linked-default'), [])
+        self.assertFalse(ui_server.paper_to_api(self.storage.get_paper('linked-default'))['native_file_path'])
 
     def test_v14_file_path_index_migration_preserves_rows_and_skips_backfill(self) -> None:
         self.add_paper("index-migration")

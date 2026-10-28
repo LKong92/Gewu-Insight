@@ -14,7 +14,7 @@ files and notes accumulate, so research context can be revisited and reused.
 
 This is the `Windows` development branch. The macOS implementation is maintained
 on [main](https://github.com/LKong92/Gewu-Insight/tree/main).
-The repository and release downloads require GitHub access while private.
+The repository and release downloads are publicly available.
 
 <p align="center"><img src="assets/gewu-insight-app-icon.png" width="96" alt="Gewu Insight app icon"></p>
 
@@ -39,7 +39,29 @@ change Windows security settings. A source ZIP is not an installer; pulling
 source does not update the installed App. See [distribution](DISTRIBUTION.md)
 and [development](docs/DEVELOPMENT.md) for build and verification instructions.
 
-For macOS, use the separate [macOS installer](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.0.0).
+For macOS, use the separate [macOS installer](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0).
+
+## Windows 1.1.0 candidate
+
+Windows 1.1.0 / Build 11001 is under validation and has not been published yet.
+The download link above still points to the released 1.0.0 installer. Candidate
+features below describe this source branch; they are not present in 1.0.0.
+
+- **Help → Check for Updates** checks a separate stable Windows channel and
+  verifies the downloaded installer. Checks may run automatically once a day;
+  downloading and installing remain explicit actions. Existing 1.0.0 users will
+  need to install the next verified Setup.exe manually once to obtain the updater.
+- **Plugin → Zotero Integration** guides installation of the bundled 0.4.2
+  companion. Zotero displays the same Gewu Library, Paper Files, monitors and
+  settings through the existing Gewu installation and background service.
+  **Save to Zotero** explicitly copies a paper into Zotero's separate library.
+- **Loader → Import from Zotero** previews and copies a library or selected
+  collections, retaining hierarchy and empty disk folders while following
+  Gewu's Default/Associated Files rules. Zotero records and originals remain
+  unchanged. These transfers are explicit copies, not continuous synchronization.
+
+The public update channel currently advertises only the verified 1.0.0 release.
+It will point to 1.1.0 only after the final installer is published and checked.
 
 ## Explore the workspace
 
@@ -72,6 +94,11 @@ through Gewu so their records and paths stay coordinated. Additional Windows
 placements use native shortcuts where needed. **Folder Loader** imports a tree;
 portable folder export retains file relationships in a manifest. It does not
 replace a complete database backup.
+
+Gewu is developed and tested primarily on macOS, with a separate Windows port.
+Windows testing is limited; current installed-App checks use a Parallels Windows
+11 virtual machine. Windows 10 corrections have relied on external tester reports
+and have not received comprehensive in-house testing.
 
 ## Work with an AI client
 
@@ -121,11 +148,10 @@ service keys belong in **Settings → Literature Data Sources**.
 
 ## Citation
 
-If you use Gewu in research, please cite the accompanying manuscript. Its arXiv
-identifier will be added once posted; the provisional reference is:
+If you use Gewu in research, please cite the accompanying paper:
 
 > Kong, L. & Wu, Z. A stateful research information infrastructure for scientific
-> discovery. Manuscript in preparation (2026).
+> discovery. [arXiv:2610.14538](https://arxiv.org/abs/2610.14538) (2026).
 
 GitHub citation metadata is in [CITATION.cff](CITATION.cff).
 

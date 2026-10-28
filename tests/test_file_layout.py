@@ -98,6 +98,44 @@ class FileLayoutTests(unittest.TestCase):
         for value in json.loads(self.storage.get_paper('work')['raw_json'])['file_layout']['associated_aliases']:
             self.assert_alias(Path(value), bundle)
 
+    def test_empty_old_bundle_does_not_block_copy_item_move_or_folder_move(self):
+        items, resources, paths = self.fixture()
+        reconcile(self.storage, 'work')
+        raw = json.loads(self.storage.get_paper('work')['raw_json'])
+        alias = Path(raw['file_layout']['associated_aliases'][0])
+        alias.unlink()
+        (alias / 'Files' / 'Empty').mkdir(parents=True)
+        target = self.storage.create_library_folder(name='Model', parent_id=1)
+        self.storage.add_library_item(paper_id='work', folder_id=target['id'])
+        reconcile(self.storage, 'work')
+        self.assert_alias(alias, ui.existing_associated_work_dir(self.storage, 'work'))
+        # Move the actual paper, then its containing folder; all resources keep
+        # their IDs and exact bytes after the previously failing reconciliation.
+        ui.move_or_alias_library_item_pdf(self.storage, item=items[1], target_folder_id=target['id'])
+        self.storage.move_library_item(item_id=items[1]['id'], folder_id=target['id'])
+        reconcile(self.storage, 'work')
+        destination = self.storage.create_library_folder(name='Destination', parent_id=1)
+        plan = ui.folder_tree_pdf_move_plan(self.storage, target['id'])
+        self.storage.move_library_folder(folder_id=target['id'], parent_id=destination['id'])
+        ui.apply_folder_tree_pdf_move_plan(self.storage, plan)
+        self.assertEqual([r['id'] for r in self.storage.list_paper_resources('work')], [r['id'] for r in resources])
+        self.assertEqual([Path(r['stored_path']).read_bytes() for r in self.storage.list_paper_resources('work')],
+                         [b'%PDF-1.4 first bytes', b'%PDF-1.4 different bytes'])
+        self.assertEqual(ui.canonical_file_path_for_paper(self.storage.get_paper('work')).parent,
+                         self.library_root / 'Destination' / 'Model')
+
+    def test_occupied_old_bundle_preserves_unregistered_files(self):
+        self.fixture()
+        reconcile(self.storage, 'work')
+        alias = Path(json.loads(self.storage.get_paper('work')['raw_json'])['file_layout']['associated_aliases'][0])
+        alias.unlink()
+        (alias / 'Files').mkdir(parents=True)
+        original = alias / 'Files' / 'unregistered.txt'
+        original.write_text('keep these bytes')
+        with self.assertRaisesRegex(FileExistsError, 'location is occupied'):
+            sync_associated_aliases(self.storage, 'work')
+        self.assertEqual(original.read_text(), 'keep these bytes')
+
     def test_failed_second_move_restores_database_files_and_displaced_alias(self):
         items, resources, paths = self.fixture()
         third = paths[0].with_name('third.pdf'); third.write_bytes(b'%PDF third')

@@ -30,6 +30,7 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from . import update_runtime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
@@ -40,6 +41,7 @@ from pypdf import PdfReader, PdfWriter
 import requests
 
 from . import finder_alias
+from .paper_website import website_url, save_website_url
 from . import folder_rename
 from .file_layout import normalize_files, sync_associated_aliases, finish_aliases, bundle_name
 from . import search_matching, author_profile_retry
@@ -395,6 +397,8 @@ class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler, *args, **kwargs):
         from .local_access import WorkspaceAccess
         self.workspace_access = WorkspaceAccess(handler.configured_db_path)
+        from .zotero_integration import ZoteroSessions
+        self.zotero_sessions = ZoteroSessions()
         super().__init__(server_address, handler, *args, **kwargs)
 
     def server_bind(self) -> None:
@@ -445,6 +449,7 @@ def run_ui_server(
 ) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("Gewu Insight serves local clients only; use a loopback host.")
+    update_runtime.enable()
     documentation_mode = str(os.environ.get("GEWU_DOCUMENTATION_MODE") or "").strip().lower() in {
         "1",
         "true",
@@ -480,10 +485,10 @@ def run_ui_server(
     config = load_config(db_path=db_path)
     journals = configured_source_names(config)
     if not documentation_mode:
-        threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
-        threading.Thread(target=trim_pdf_thumbnail_cache_if_needed, daemon=True).start()
-        threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
-        threading.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
+        update_runtime.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
+        update_runtime.Thread(target=trim_pdf_thumbnail_cache_if_needed, daemon=True).start()
+        update_runtime.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
+        update_runtime.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
@@ -591,6 +596,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.UNAUTHORIZED, "Workspace authentication is required. AI clients must use the authorized /api/v1 interface.")
         return False
 
+    @update_runtime.request
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if not self.trusted_local_request():
@@ -603,6 +609,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/ai-access":
                 from .ai_http import handle_admin
                 handle_admin(self)
+                return
+            if parsed.path == "/zotero-import.js":
+                self.send_bytes(Path(__file__).with_name("zotero_import.js").read_bytes(), content_type="text/javascript; charset=utf-8")
+                return
+            if parsed.path == "/manual-doi.js":
+                self.send_bytes(Path(__file__).with_name("manual_doi.js").read_bytes(), content_type="text/javascript; charset=utf-8")
+                return
+            if parsed.path == "/api/zotero-import":
+                from .zotero_import.http import handle
+                handle(self)
+                return
+            if parsed.path in {"/embedded-ui.js", "/zotero-settings.js"}:
+                filename = "embedded_ui.js" if parsed.path == "/embedded-ui.js" else "zotero_settings.js"
+                self.send_bytes(Path(__file__).with_name(filename).read_bytes(), content_type="text/javascript; charset=utf-8")
                 return
             if parsed.path in {"/ai-access.js", "/ai-access.css"}:
                 name = "ai_access_ui.js" if parsed.path.endswith(".js") else "ai_access_ui.css"
@@ -625,8 +645,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/markdown-preview":
                 self.handle_markdown_preview(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/integrations/zotero":
+                from .zotero_integration import status
+                self.send_json(status())
+                return
+            if parsed.path == "/api/integrations/zotero/session":
+                self.send_json(self.server.zotero_sessions.status())
+                return
             if parsed.path == "/api/health":
-                self.send_json({"ok": True})
+                from . import __version__, __build__
+                from .zotero_integration import database_identity
+                health = {"ok": True, "version": __version__, "build": __build__,
+                          "database_uuid": database_identity(self.configured_db_path),
+                          "instance_id": os.environ.get("GEWU_INSTANCE_ID", ""),
+                          "integrations": {"zotero": 1}}
+                if self.server.workspace_access.accepts(self.headers):
+                    health["database_path"] = str(Path(self.configured_db_path).resolve())
+                    health["app_path"] = os.environ.get("GEWU_APP_PATH", "")
+                    health["host_pid"] = int(os.environ.get("GEWU_SERVICE_HOST_PID", "0"))
+                    health["zotero_active"] = self.server.zotero_sessions.status()["active"]
+                self.send_json(health)
                 return
             if parsed.path == "/api/app-icon":
                 self.handle_app_icon()
@@ -839,6 +877,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
+    @update_runtime.request
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if not self.trusted_local_request(browser=parsed.path == "/api/browser"):
@@ -851,6 +890,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     drain()
                     self.server.shutdown()
                 threading.Thread(target=stop_service, name="gewu-shutdown", daemon=False).start()
+                return
+            if parsed.path == "/api/macos-update" or (parsed.path == "/api/windows-update" and sys.platform == "win32"):
+                update_runtime.handle(self)
+                return
+            if parsed.path in {"/api/zotero-import", "/api/zotero-import/host"}:
+                from .zotero_import.http import handle
+                handle(self)
                 return
             if parsed.path.startswith("/api/v1/"):
                 from .ai_http import handle_api
@@ -880,6 +926,18 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_set_author_monitor_photo()
                 return
             payload = self.read_json_body()
+            if parsed.path == "/api/integrations/zotero/session":
+                if not self.server.workspace_access.matches(self.headers.get("X-Gewu-Workspace", "")):
+                    self.send_error_json(HTTPStatus.FORBIDDEN, "Zotero host authentication is required.")
+                    return
+                self.send_json(self.server.zotero_sessions.update(payload))
+                return
+            if parsed.path == "/api/integrations/zotero":
+                from .zotero_integration import configure
+                port = self.server.server_address[1]
+                origin = f"http://127.0.0.1:{port}"
+                self.send_json(configure(Path(self.configured_db_path).parent.parent, origin, str(payload.get("action", ""))))
+                return
             if parsed.path == "/api/manual-pdf-path":
                 self.handle_manual_pdf_path(payload)
                 return
@@ -897,6 +955,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/paper-files/delete":
                 self.handle_delete_paper_file(payload)
+                return
+            if parsed.path == "/api/paper-website":
+                self.handle_update_paper_website(payload)
                 return
             if parsed.path == "/api/paper-files/arxiv":
                 self.handle_download_arxiv_versions(payload)
@@ -1416,7 +1477,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 finish_active_fetch(selected)
                 fetch_storage.close()
 
-        threading.Thread(target=refresh_arxiv, daemon=True).start()
+        update_runtime.Thread(target=refresh_arxiv, daemon=True).start()
         self.send_json({"date": selected, "status": "started"})
 
     def handle_paper(self, query: dict[str, list[str]]) -> None:
@@ -2239,7 +2300,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         if needs_initial_import:
-            threading.Thread(
+            update_runtime.Thread(
                 target=refresh_author_monitor_for_db,
                 kwargs={
                     "db_path": self.configured_db_path,
@@ -2378,7 +2439,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 )
             finally:
                 storage.close()
-            threading.Thread(
+            update_runtime.Thread(
                 target=refresh_author_monitor_for_db,
                 kwargs={
                     "db_path": self.configured_db_path,
@@ -2701,7 +2762,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             identifiers_only=identifiers_only,
             max_papers=max_papers,
         )
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_author_monitor_enrichment_job,
             kwargs={
                 "job_id": job_id,
@@ -2902,7 +2963,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_json({"job_id": active["job_id"], "job": active})
             return
         job_id = create_my_publication_metrics_job()
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_my_publication_metrics_job,
             kwargs={"job_id": job_id, "db_path": self.configured_db_path},
             daemon=True,
@@ -3594,7 +3655,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             preserve_top_level=preserve_top_level,
             metadata_mode=metadata_mode,
         )
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_library_import_job,
             kwargs={
                 "job_id": job_id,
@@ -3632,7 +3693,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         skip_days = int(payload.get("skip_days") or 7)
         skip_days = max(0, min(90, skip_days))
         job_id = create_library_identifier_recovery_job(skip_days=skip_days)
-        thread = threading.Thread(
+        thread = update_runtime.Thread(
             target=run_library_identifier_recovery_job,
             kwargs={
                 "job_id": job_id,
@@ -3794,6 +3855,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             folder = storage.create_library_folder(parent_id=parent_id, name=name)
+            folder_rename.remember_new_empty_folder(storage, folder)
             snapshot = library_snapshot(storage) if include_snapshot else {}
             folder_api = library_folder_to_api(folder, storage)
         finally:
@@ -4843,6 +4905,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"paper": paper_to_api(result["paper"]), "metadata_refresh": result["metadata_refresh"],
                         "publications": publications, **snapshot})
 
+    def handle_update_paper_website(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = save_website_url(storage, str(payload.get("paper_id") or ""), payload.get("url"))
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"paper": paper_to_api(paper)})
+
     def handle_update_preprint_identifier(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
         identifier = clean_text(str(payload.get("identifier") or ""))
@@ -4851,6 +4927,25 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            if payload.get("kind") == "doi":
+                from . import manual_doi
+                item_id = int(payload.get("item_id") or 0)
+                if payload.get("conflict_action"):
+                    result = manual_doi.resolve_conflict(storage, paper_id, identifier,
+                        action=payload["conflict_action"], fingerprint=payload.get("fingerprint"), item_id=item_id)
+                    papers = annotate_papers_with_library_status(storage, result["changed_papers"])
+                    self.send_json({"paper": paper_to_api(papers[0]),
+                        "changed_papers": [paper_to_api(p) for p in papers],
+                        "merged_paper_id": result["merged_paper_id"], "warning": result["warning"],
+                        "library_items": [library_item_to_api(dict(row), papers[0]) for row in storage.conn.execute(
+                            'SELECT * FROM library_items WHERE paper_id=?', (papers[0]["paper_id"],))],
+                        "paper_files": [paper_files_state_payload(storage, papers[0]["paper_id"])],
+                        "publications": [my_publication_to_api(row) for row in storage.list_my_publications()]})
+                    return
+                conflict = manual_doi.review(storage, paper_id, identifier, item_id=item_id)
+                if conflict:
+                    self.send_json({"doi_conflict": conflict}, status=HTTPStatus.CONFLICT)
+                    return
             paper = (metadata_refresh.save_doi(storage, paper_id, identifier) if payload.get("kind") == "doi"
                      else update_manual_preprint_identifier(storage, paper_id, identifier))
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
@@ -4859,6 +4954,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except OSError as exc:
+            self.send_error_json(HTTPStatus.CONFLICT, str(exc))
             return
         finally:
             storage.close()
@@ -6519,7 +6617,7 @@ def run_theme_keyword_recommendation_fetcher_threads(
     for term in search_terms:
         for source_name, fetcher in fetchers:
             result_queue: queue.Queue = queue.Queue(maxsize=1)
-            thread = threading.Thread(
+            thread = update_runtime.Thread(
                 target=theme_keyword_recommendation_fetch_worker,
                 args=(source_name, fetcher, term, result_queue),
                 daemon=True,
@@ -9188,18 +9286,19 @@ def run_auto_journal_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_JOURNAL_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            now = datetime.now().astimezone()
-            if auto_journal_monitor_due(now):
-                run_date = now.date()
-                storage = Storage(db_path)
-                try:
-                    claimed = claim_auto_journal_monitor_day(storage, run_date)
-                finally:
-                    storage.close()
-                if claimed:
-                    print(f"Auto Journal Monitor starting for {run_date.isoformat()}")
-                    run_auto_journal_monitor_once(db_path, run_date)
-                run_pending_auto_journal_monitor_once(db_path)
+            with update_runtime.work("Automatic journal monitor"):
+                now = datetime.now().astimezone()
+                if auto_journal_monitor_due(now):
+                    run_date = now.date()
+                    storage = Storage(db_path)
+                    try:
+                        claimed = claim_auto_journal_monitor_day(storage, run_date)
+                    finally:
+                        storage.close()
+                    if claimed:
+                        print(f"Auto Journal Monitor starting for {run_date.isoformat()}")
+                        run_auto_journal_monitor_once(db_path, run_date)
+                    run_pending_auto_journal_monitor_once(db_path)
             time.sleep(AUTO_JOURNAL_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Journal Monitor scheduler error: {exc}")
@@ -9408,9 +9507,10 @@ def run_auto_arxiv_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_ARXIV_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            result = run_auto_arxiv_monitor_once(db_path)
-            if result.get("status") not in {"skipped", "fetched"}:
-                print(f"Auto arXiv Monitor: {json.dumps(result, ensure_ascii=False, sort_keys=True)}")
+            with update_runtime.work("Automatic arxiv monitor"):
+                result = run_auto_arxiv_monitor_once(db_path)
+                if result.get("status") not in {"skipped", "fetched"}:
+                    print(f"Auto arXiv Monitor: {json.dumps(result, ensure_ascii=False, sort_keys=True)}")
             time.sleep(AUTO_ARXIV_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto arXiv Monitor scheduler error: {exc}")
@@ -9760,18 +9860,19 @@ def run_auto_subject_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_SUBJECT_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            now = datetime.now().astimezone()
-            if auto_subject_monitor_due(now):
-                run_date = now.date()
-                storage = Storage(db_path)
-                try:
-                    claimed = claim_auto_subject_monitor_day(storage, run_date)
-                finally:
-                    storage.close()
-                if claimed:
-                    print(f"Auto Subject Monitor starting for {run_date.isoformat()}")
-                    run_auto_subject_monitor_once(db_path, run_date)
-                run_due_auto_subject_retries_once(db_path, now)
+            with update_runtime.work("Automatic subject monitor"):
+                now = datetime.now().astimezone()
+                if auto_subject_monitor_due(now):
+                    run_date = now.date()
+                    storage = Storage(db_path)
+                    try:
+                        claimed = claim_auto_subject_monitor_day(storage, run_date)
+                    finally:
+                        storage.close()
+                    if claimed:
+                        print(f"Auto Subject Monitor starting for {run_date.isoformat()}")
+                        run_auto_subject_monitor_once(db_path, run_date)
+                    run_due_auto_subject_retries_once(db_path, now)
             time.sleep(AUTO_SUBJECT_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Subject Monitor scheduler error: {exc}")
@@ -9897,10 +9998,11 @@ def run_auto_author_monitor_scheduler(db_path: Path) -> None:
     time.sleep(AUTO_AUTHOR_MONITOR_STARTUP_DELAY_SECONDS)
     while True:
         try:
-            now = datetime.now(local_timezone())
-            run_auto_author_monitor_once(
-                db_path, now.date(), retry_only=now.hour < AUTO_AUTHOR_MONITOR_HOUR, now=now,
-            )
+            with update_runtime.work("Automatic author monitor"):
+                now = datetime.now(local_timezone())
+                run_auto_author_monitor_once(
+                    db_path, now.date(), retry_only=now.hour < AUTO_AUTHOR_MONITOR_HOUR, now=now,
+                )
             time.sleep(AUTO_AUTHOR_MONITOR_POLL_SECONDS)
         except Exception as exc:
             print(f"Auto Author Monitor scheduler error: {exc}")
@@ -10228,7 +10330,8 @@ def paper_to_api(
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
-        "url": paper.get("url") or paper.get("landing_url") or "",
+        "url": website_url(paper),
+        "website_url_override": raw.get("website_url_override") or "",
         "section": section,
         "section_color": section_color(section),
         "section_badge_background": section_badge_background(section),
@@ -10313,7 +10416,7 @@ def monitor_paper_to_api(
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
-        "url": paper.get("url") or paper.get("landing_url") or "",
+        "url": website_url(paper),
         "section": section,
         "section_color": section_color(section),
         "section_badge_background": section_badge_background(section),
@@ -10397,7 +10500,7 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
-        "url": paper.get("url") or paper.get("landing_url") or "",
+        "url": website_url(paper),
         "authors": author_summary(paper),
         "full_authors": full_author_names(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
@@ -10477,7 +10580,7 @@ def rebuild_author_monitor_card_cache(
 
 
 def request_author_monitor_card_cache_build(db_path: Path) -> None:
-    threading.Thread(
+    update_runtime.Thread(
         target=rebuild_author_monitor_card_cache,
         args=(db_path,),
         daemon=True,
@@ -19375,6 +19478,11 @@ def paper_storage_mode(paper: dict[str, Any], *, merged_pdf: str = "", main_pdf:
     if copy_mode in {"copy", "link"}:
         return copy_mode
     if source_path and source_path in {merged_pdf, main_pdf}:
+        # Making a Paper File independent records its managed copy here even
+        # though its source and current paths are equal and no import batch remains.
+        imported = parse_raw_json(paper).get("import")
+        if isinstance(imported, dict) and imported.get("copy_mode") == "copy":
+            return "copy"
         return "link"
     return "local"
 
@@ -22065,53 +22173,43 @@ def update_paper_resource_role(
 
 
 def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+    with paper_download_lock(storage.db_path, storage.resolve_paper_id(paper_id)):
+        return _delete_paper_resource(storage, paper_id, resource_id)
+
+
+def _delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
     paper_id = storage.resolve_paper_id(paper_id)
     if sys.platform == "win32":
         from .windows_recycle import resource_removal
         with resource_removal(storage, paper_id, resource_id):
             storage.conn.execute("BEGIN IMMEDIATE")
             try:
-                return _delete_paper_resource(storage, paper_id, resource_id)
+                return _delete_paper_resource_contents(storage, paper_id, resource_id)
             except Exception:
                 storage.conn.rollback()
                 raise
-    return _delete_paper_resource(storage, paper_id, resource_id)
+    return _delete_paper_resource_contents(storage, paper_id, resource_id)
 
 
-def _delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+def _delete_paper_resource_contents(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+    from .file_reassignment import _repair_source_pointers
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
         raise KeyError(int(resource_id))
-    if (int(paper.get("primary_resource_id") or 0) == int(resource_id)
-            or int(parse_raw_json(paper).get("file_layout", {}).get("default_resource_id") or 0) == int(resource_id)):
-        raise ValueError("The current default file cannot be deleted. Select another version first.")
-
-    stored_text = clean_text(resource.get("stored_path") or "")
+    stored_text = clean_text(storage.resource_local_path(resource))
     stored_path = Path(stored_text).expanduser().resolve() if stored_text else None
     managed_roots = local_copy_roots(include_legacy=True)
     managed_file = bool(
         stored_path
         and stored_path.is_file()
         and is_allowed_file(stored_path, managed_roots)
+        and resource.get("storage_mode") != "linked"
     )
-    shared_file = False
-    if managed_file and stored_path:
-        shared_resource = storage.conn.execute(
-            "SELECT 1 FROM resources WHERE id != ? AND stored_path = ? LIMIT 1",
-            (int(resource_id), stored_text),
-        ).fetchone()
-        shared_paper = storage.conn.execute(
-            """
-            SELECT 1 FROM papers
-            WHERE main_pdf_path = ? OR merged_pdf_path = ?
-            LIMIT 1
-            """,
-            (stored_text, stored_text),
-        ).fetchone()
-        shared_file = bool(shared_resource or shared_paper)
+    shared_file = bool(stored_path and paper_resource_path_is_shared(storage, stored_path, paper_id, resource_id))
 
     trash_destination: Path | None = None
+    removed_aliases = []
     if managed_file and stored_path and not shared_file:
         trash_destination = move_path_to_macos_trash(stored_path)
     try:
@@ -22126,22 +22224,48 @@ def _delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) ->
             (str(paper_id), int(resource_id)),
         )
         storage.conn.execute("DELETE FROM resources WHERE id = ?", (int(resource_id),))
+        _repair_source_pointers(storage, paper, resource)
+        remaining = storage.list_paper_resources(paper_id, ensure_primary=False)
+        if not remaining:
+            raw = parse_raw_json(storage.get_paper(paper_id))
+            for value in raw.get("file_layout", {}).get("associated_aliases", []):
+                alias = Path(value)
+                if finder_alias.is_alias(alias):
+                    removed_aliases.append((alias, finder_alias.snapshot(alias)))
+                    alias.unlink()
+            raw.pop("file_layout", None)
+            if isinstance(raw.get("import"), dict):
+                raw["import"]["stored_path"] = ""
+            storage.conn.execute("""UPDATE papers SET primary_resource_id=NULL,
+                preferred_resource_id=NULL, preferred_resource_manual=0, main_pdf_path='',
+                merged_pdf_path='', source_path='', download_status='pending', download_message='',
+                raw_json=? WHERE paper_id=?""", (json.dumps(raw, ensure_ascii=False), paper_id))
+        if stored_path and not shared_file:
+            for root in (LIBRARY_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT):
+                for alias in finder_alias.iter_aliases(root):
+                    if finder_alias.points_to(alias, stored_path):
+                        removed_aliases.append((alias, finder_alias.snapshot(alias)))
+                        alias.unlink()
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
         if stored_path and not stored_path.exists() and trash_destination and trash_destination.exists() and not (sys.platform == "win32" and trash_destination.name.startswith("$R")):
             stored_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(trash_destination), str(stored_path))
+        for alias, saved in reversed(removed_aliases):
+            finder_alias.restore(alias, saved)
         raise
     if managed_file and stored_path and not shared_file:
         cleanup_local_copy_empty_parents([str(stored_path)])
-    sync_associated_aliases(storage, str(paper_id))
+    from .file_layout import reconcile_after_write
+    reconcile_after_write(storage, str(paper_id))
     return {
         "resource_id": int(resource_id),
         "name": clean_text(resource.get("display_name") or "") or (stored_path.name if stored_path else "Attached File"),
         "trashed": bool(managed_file and not shared_file),
         "shared_file_preserved": bool(shared_file),
-        "external_source_preserved": bool(stored_path and not is_allowed_file(stored_path, managed_roots)),
+        "external_source_preserved": bool(stored_path and (resource.get("storage_mode") == "linked"
+                                                         or not is_allowed_file(stored_path, managed_roots))),
     }
 
 
@@ -37892,6 +38016,11 @@ INDEX_HTML = """<!doctype html>
       return ensureLibraryFolderLoaded(folderId, options)
         .then(() => {
           if (state.mode === "library" && state.libraryTab !== "my-publications") {
+            // Keep an active rename input intact when a folder load finishes.
+            // Its data is already cached; saving/cancelling renders that data.
+            // Replacing the input here would trigger blur and save the draft.
+            if ((state.libraryRenamingFolderId || state.libraryRenamingItemId)
+                && document.querySelector("[data-library-rename-input]")) return;
             renderLibraryNavigationContent();
             refreshLibraryQuickLookForSelection();
           }
@@ -39365,7 +39494,7 @@ INDEX_HTML = """<!doctype html>
           event.stopPropagation();
           const nextRootId = Number(button.dataset.workspaceRootId || 0);
           if (!nextRootId) return;
-          const nextSelectedId = nextRootId === mainRootId ? Number(unsortedId || nextRootId) : nextRootId;
+          const nextSelectedId = nextRootId === mainRootId && !options.selectWorkspaceRoot ? Number(unsortedId || nextRootId) : nextRootId;
           renderLibraryAddMenu(menu, paperId, article, nextRootId, [], nextSelectedId, options);
           positionLibraryAddMenu(menu, article.querySelector('[data-action="add-library"]'));
         });
@@ -40234,13 +40363,41 @@ INDEX_HTML = """<!doctype html>
       if (finishEditing) identifierSaveNotice(root, context, "Saving identifier…");
       const request = (async () => {
         try {
+          const selectedItem = state.mode === "library" && state.libraryTab !== "my-publications"
+            && state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id) : null;
+          const itemId = selectedItem?.paper_id === paper.paper_id ? selectedItem.id : 0;
           const res = await fetch("/api/library/preprint-identifier", {
             method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({paper_id: paper.paper_id, kind, identifier: value})
+            body: JSON.stringify({paper_id: paper.paper_id, kind, identifier: value, ...(kind === "doi" && itemId ? {item_id: itemId} : {})})
           });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Could not save identifier");
-          return finish(data.paper);
+          let data = await res.json();
+          if (kind === "doi" && data.doi_conflict) {
+            data = await window.reviewManualDoiConflict(data.doi_conflict);
+            if (!data) throw new Error("DOI change cancelled. Records and files were not changed.");
+            if (data.merged_paper_id) {
+              updatePaperState(data.merged_paper_id, data.paper);
+              delete state.paperFilesByPaperId[data.merged_paper_id];
+              state.libraryItems = state.libraryItems.filter(item => ![data.merged_paper_id, data.paper.paper_id].includes(item.paper_id))
+                .concat(data.library_items || []);
+              state.libraryPaperLocationsLoaded.clear();
+              state.libraryLoadedFolderIds.clear();
+              state.reportCache = {};
+              state.reportCacheOrder = [];
+              state.themePapersByDate = {};
+              Object.values(state.monitorPaperDomCache || {}).forEach(cached => { if (cached) cached.signature = ""; });
+              invalidateAuthorMonitorViewCache();
+              rebuildLibraryIndexes();
+            }
+            (data.changed_papers || []).forEach(p => updatePaperState(p.paper_id, p));
+            if (data.publications) state.myPublications = data.publications;
+            applyPaperFilesPayloads(data.paper_files);
+            // Reload only the current paper's file/folder view. Monitor rows are
+            // updated in place above, retaining their date/group provenance.
+            if (data.merged_paper_id) loadLibraryPaperLocations({paper_id: data.paper.paper_id});
+          } else if (!res.ok) throw new Error(data.error || "Could not save identifier");
+          const saved = finish(data.paper);
+          if (data.warning) identifierSaveNotice(root, context, data.warning, true);
+          return saved;
         } catch (error) {
           if (finishEditing) identifierSaveNotice(root, context, error.message || "Could not save identifier", true);
           throw error;
@@ -46934,7 +47091,7 @@ INDEX_HTML = """<!doctype html>
               ${file.exists && file.file_type !== "invalid_file" && !file.is_preferred ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}" title="Use this file for Open in Preview and paper preview">Set as Default</button>` : ""}
               ${file.is_default && file.is_preferred ? `<button class="action" type="button" data-action="auto-paper-file" title="Let Gewu Insight choose the default from file type">Use Automatic Selection</button>` : ""}
               ${file.exists ? `<button class="action" type="button" data-action="reveal-paper-file" data-file-path="${escapeAttr(file.local_path || "")}">Show in Finder</button>` : ""}
-              ${!file.is_primary ? `<button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>` : ""}
+              <button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>
             </span>
           </span>
         </div>
@@ -47441,6 +47598,79 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function wirePaperWebsiteEditor(root, paper) {
+      const button = root?.querySelector('[data-action="open-library-page"], [data-action="author-open-page"], [data-action="open-page"]');
+      if (!button || button.dataset.websiteEditor) return;
+      button.dataset.websiteEditor = "true";
+      button.title = "Right-click to edit website link";
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideThemeContextMenu();
+        const menu = document.createElement("div");
+        menu.className = "library-context-menu open theme-context-menu";
+        menu.innerHTML = '<button type="button">Edit Website Link…</button>';
+        document.body.appendChild(menu);
+        menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8))}px`;
+        menu.querySelector("button").onclick = () => { menu.remove(); openPaperWebsiteEditor(paper); };
+      });
+    }
+
+    function openPaperWebsiteEditor(paper) {
+      document.getElementById("paperWebsiteBackdrop")?.remove();
+      const dialog = document.createElement("div");
+      dialog.id = "paperWebsiteBackdrop";
+      dialog.className = "settings-backdrop open";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-labelledby", "paperWebsiteTitle");
+      dialog.innerHTML = `<div class="settings-modal" style="width:min(600px,92vw);padding:20px">
+        <h2 id="paperWebsiteTitle">Edit Website Link</h2>
+        <p style="overflow-wrap:anywhere">${escapeHtml(paper.title || "Paper")}</p>
+        <label for="paperWebsiteInput">Article website or DOI URL</label>
+        <input id="paperWebsiteInput" type="url" style="width:100%;box-sizing:border-box;margin:8px 0" value="${escapeAttr(paper.url || "")}">
+        <p>Refresh Info keeps your saved link. Metadata is refreshed using DOI/arXiv.</p>
+        <p role="status" style="overflow-wrap:anywhere"></p>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
+          <button type="button" class="smallbtn" data-website="auto">Use Automatic Link</button>
+          <button type="button" class="smallbtn" data-website="cancel">Cancel</button>
+          <button type="button" class="smallbtn" data-website="save">Save</button>
+        </div></div>`;
+      document.body.appendChild(dialog);
+      const input = dialog.querySelector("input");
+      const status = dialog.querySelector('[role="status"]');
+      let busy = false;
+      const close = () => { if (!busy) dialog.remove(); };
+      const save = async (automatic) => {
+        if (busy) return;
+        const url = automatic ? "" : input.value.trim();
+        if (!automatic && !url) { status.textContent = "Enter a website URL, or choose Use Automatic Link."; return; }
+        busy = true;
+        dialog.querySelectorAll("button").forEach(button => { button.disabled = true; });
+        try {
+          const response = await fetch("/api/paper-website", {method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_id: paper.paper_id, url})});
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Could not save website link");
+          Object.assign(paper, data.paper);
+          updatePaperState(paper.paper_id, data.paper);
+          dialog.remove();
+        } catch (error) { status.textContent = error.message; }
+        finally { busy = false; dialog.querySelectorAll("button").forEach(button => { button.disabled = false; }); }
+      };
+      dialog.querySelector('[data-website="cancel"]').onclick = close;
+      dialog.querySelector('[data-website="auto"]').onclick = () => save(true);
+      dialog.querySelector('[data-website="save"]').onclick = () => save(false);
+      dialog.onclick = event => { if (event.target === dialog) close(); };
+      dialog.addEventListener("keydown", event => {
+        if (event.key === "Escape") { event.stopPropagation(); close(); }
+        if (event.key === "Enter" && event.target === input) { event.preventDefault(); save(false); }
+      });
+      input.focus();
+      input.select();
+    }
+
     function wirePreprintIdentifierControls(root, paper) {
       wireDoiIdentifierControls(root, paper);
       if (root) {
@@ -47928,6 +48158,7 @@ INDEX_HTML = """<!doctype html>
         wireLibraryFolderOccurrenceControls(root);
         wireLibraryFileLocationLinks(root);
         wirePreprintIdentifierControls(root, paper);
+        wirePaperWebsiteEditor(root, paper);
         loadLibraryItemPaperDetail(item);
         return;
       }
@@ -47950,7 +48181,7 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${isPdfLike ? `<button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
-          ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          <button class="action" data-action="open-library-page" title="Right-click to edit website link">Open Website</button>
           </div>
           <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
@@ -47985,6 +48216,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
+      wirePaperWebsiteEditor(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
       wireLibraryFolderOccurrenceControls(root);
       wireLibraryFileLocationLinks(root);
@@ -48137,6 +48369,7 @@ INDEX_HTML = """<!doctype html>
         `;
         wireLibraryFileLocationLinks(root);
         wirePreprintIdentifierControls(root, paper);
+        wirePaperWebsiteEditor(root, paper);
         loadMyPublicationPaperDetail(publication);
         return;
       }
@@ -48147,7 +48380,7 @@ INDEX_HTML = """<!doctype html>
           <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
-          ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          <button class="action" data-action="open-library-page" title="Right-click to edit website link">Open Website</button>
           </div>
           <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
@@ -48187,6 +48420,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
+      wirePaperWebsiteEditor(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
       root.querySelector('[data-action="publication-comments"]')?.addEventListener("click", () => openMyPublicationComments(publication.id));
       wireLibraryFileLocationLinks(root);
@@ -49967,13 +50201,6 @@ INDEX_HTML = """<!doctype html>
       if (!paperId || !resourceId) return false;
       const deletionKey = `${paperId}:${resourceId}`;
       if (state.deletingPaperResources.has(deletionKey)) return true;
-      if (file?.is_primary) {
-        updateLibraryActivityStatus(
-          "The current file cannot be deleted. Select another Publication Version first.",
-          {live: false, clear: false}
-        );
-        return true;
-      }
       const name = file?.display_name || String(file?.local_path || "").split("/").pop() || "Attached File";
       if (!(await confirmPaperFileDeletion(name))) return true;
       const filesBeforeDelete = orderedLibraryPaperResources(paperId);
@@ -50183,7 +50410,7 @@ INDEX_HTML = """<!doctype html>
         button.onclick = () => { hidePaperResourceContextMenu(); openPaperFileReassignment(paperId, file, createNew); };
       }
       if (deleteButton) {
-        deleteButton.style.display = file && !file.is_primary ? "" : "none";
+        deleteButton.style.display = file ? "" : "none";
         deleteButton.onclick = () => {
           hidePaperResourceContextMenu();
           deleteSelectedLibraryPaperResource(file);
@@ -54785,6 +55012,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshAuthorMonitorMetadataFromIdentifier(paper));
       wirePreprintIdentifierControls(root, paper);
+      wirePaperWebsiteEditor(root, paper);
       wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
@@ -60055,6 +60283,7 @@ INDEX_HTML = """<!doctype html>
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     function handleGewuInsightWindowKeydown(event) {
       if ($("aiAccessBackdrop")?.classList.contains("open")) return;
+      if (event.target?.closest?.(".zotero-import-backdrop")) return;
       if (handlePreviewCloseShortcut(event)) return;
       if (handleSearchShortcut(event)) return;
       if (handleLibraryViewShortcut(event)) return;
@@ -60347,6 +60576,10 @@ INDEX_HTML = """<!doctype html>
   <script src="/ai-access.js"></script>
   <script src="/browser-keyboard.js"></script>
   <script src="/browser-ui.js"></script>
+  <script src="/zotero-settings.js"></script>
+  <script src="/manual-doi.js"></script>
+  <script src="/zotero-import.js"></script>
+  <script src="/embedded-ui.js"></script>
 </body>
 </html>
 """
