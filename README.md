@@ -1,116 +1,143 @@
 # Gewu Insight
 
-**A research workspace that keeps papers, their versions, and research context
-connected—from discovery to reuse.**
+**Follow new papers. Keep your PDFs and notes together. Pick up where your research left off.**
 
-Gewu Insight brings continuous literature discovery, organization, and reading
-into one workspace. It organizes scientific works as persistent, stateful
-research objects: each paper retains a shared identity as metadata, publication
-versions, supporting files, project associations, and analyses accumulate.
-Researchers and authorized AI clients can return to the same record, inspect
-earlier materials, and continue their work. This provides an inspectable
-scientific memory layer, with questions and scientific judgment directed by
-the researcher.
+Gewu Insight is a desktop workspace for researchers who need to discover,
+organize, and read scientific literature. Keep a paper's versions, supporting
+files, and reading notes connected across projects. Optionally connect your AI
+assistant so a later session can continue from the sources and analyses you saved.
 
-**Keep research objects visible, evidence traceable, and insight cumulative.**
+**English** · [简体中文](docs/readme/README.zh-CN.md) · [繁體中文](docs/readme/README.zh-TW.md) · [日本語](docs/readme/README.ja.md) · [한국어](docs/readme/README.ko.md) · [Français](docs/readme/README.fr.md) · [Deutsch](docs/readme/README.de.md)
 
-[Website](https://gewu-insight.com) · [Paper](https://arxiv.org/abs/2610.14538) ·
-[Quick start](#quick-start) ·
-[Explore the workspace](#explore-the-workspace) ·
-[User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) ·
-[AI & MCP](#work-with-an-ai-client) · [Citation](#citation) ·
-[License](#copyright-and-license)
+[**Download for macOS**](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) ·
+[**Download for Windows**](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.1.0) ·
+[**Watch the product film**](https://gewu-insight.com/product.html?lang=en#tour) ·
+[Website](https://gewu-insight.com) · [User guides](https://gewu-insight.com/resources.html#resources)
 
-**macOS 1.1.0 · Windows 1.0.0** · Source-available research software
+**macOS 1.1.0 · Windows 1.1.0** · Local research library · Optional AI connection
 
-Academic/non-commercial research use is permitted under the custom
-[LICENSE](LICENSE). Commercial use requires separate prior written authorization.
+## Watch Gewu Insight in action
 
+<!-- Original video cover: https://gewu-insight.com/assets/product-poster-en.jpg -->
 <p align="center">
-  <img src="assets/gewu-insight-app-icon.png" width="96" alt="Gewu Insight app icon">
+  <a href="https://gewu-insight.com/product.html?lang=en#tour"><img src="assets/readme/product-film-en.jpg" width="720" alt="Play the Gewu Insight product film on the website — English, 5 minutes 19 seconds"></a>
 </p>
 
-<p align="center">
-  <a href="assets/user-guide/screenshots/library-paper-files.png"><img src="assets/user-guide/screenshots/library-paper-files.png" width="920" alt="Library folders, a selected paper's Published version and Preprint in Paper Files, and Paper Details"></a>
-</p>
+**[▶ Watch in English · 5:19](https://gewu-insight.com/product.html?lang=en#tour)** ·
+**[▶ 观看中文版 · 5:23](https://gewu-insight.com/product.html?lang=zh#tour)**
 
-<p align="center"><em>One paper, connected files: inspect its versions, choose a Default, and read its metadata alongside your Library.</em></p>
+Click the cover to watch on the website. Follow discovery, the Library, reading,
+My Publications, and AI collaboration, with chapters to jump between workflows.
+
+[Try one paper](#try-one-paper-from-reading-to-reuse) · [Zotero](#work-with-zotero) ·
+[AI & MCP](#work-with-an-ai-client) · [Platform support](#platform-support) ·
+[Citation](#citation) · [License](#copyright-and-license)
+
+These language links translate the project introduction, not the App interface.
+The App and detailed manuals currently use English. Academic/non-commercial
+research use is permitted under the custom [LICENSE](LICENSE); commercial use
+requires written authorization. This is source-available software, not an
+open-source license.
 
 ## Why Gewu Insight
 
-- **Follow the literature.** Track journals, research topics, and authors through
-  three complementary monitors. Save relevant papers into your own collections.
-- **Organize around your research.** Use Library folders and project Spaces;
-  the same paper can appear in several contexts with one shared identity.
-- **Keep the evidence together.** Read PDFs and Markdown notes, compare versions,
-  and retain supplements, annotations, data, and code in Paper Files.
-- **Continue with context.** Revisit saved reading material, maintain your own
-  publication record, and optionally let an authorized AI client read papers
-  and append analyses with source references.
+| What you want to do | What Gewu keeps together |
+| --- | --- |
+| Keep up with your field | Journal, Subject, and Author Monitors, with saved results you can revisit. |
+| Read a paper as it develops | Published versions, preprints, supplements, annotations, and notes in **Paper Files**. |
+| Work across research projects | **Library** folders and **Spaces** that can refer to the same paper record. |
+| Continue a reading session with AI | Authorized source files and saved analyses, available to a later connected session. |
+| Manage your own research output | **My Publications**, authorship roles, citation evidence, and export tools. |
+
+The [website's product tour](https://gewu-insight.com/product.html) shows all six
+views. Its **5:19 product film** walks through discovery, reading, publication
+management, and AI collaboration.
 
 ## Quick start
 
-Download the installer for your platform from the release page's **Assets**.
-Both packages include Python and application dependencies. GitHub's **Source
-code ZIP** is for source-based setup, not an App installer.
+Download the installer under the release page's **Assets**, rather than GitHub's
+**Source code** ZIP. Python and application dependencies are included.
 
-This repository and its release downloads are public; no repository invitation
-is required. For installation help, contact
-[info@gewu-insight.com](mailto:info@gewu-insight.com).
-
-| Platform | Requirements | Download |
+| Platform | Requirements | Installer and release notes |
 | --- | --- | --- |
-| macOS | macOS 14 or later; Apple silicon or Intel | [macOS 1.1.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) |
-| Windows | Windows 10 version 1607+ (build 14393+) or Windows 11; Intel/AMD x64 | [Windows 1.0.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) |
+| macOS | macOS 14+; Apple silicon or Intel | [macOS 1.1.0 DMG](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) |
+| Windows | Windows 10 version 1607+ (build 14393+) or Windows 11; Intel/AMD x64 | [Windows 1.1.0 Setup](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.1.0) |
 
-### macOS
+1. **Install.** On Mac, open the DMG and drag **Gewu Insight.app** to
+   **Applications**. On Windows, run Setup and then open Gewu from the Start menu.
+2. **Choose your data folder.** Create a **Gewu Database**, or open your existing
+   one. Keep it separate from the program. Windows users retaining a collection
+   should choose **Use existing Gewu Database**.
+3. **Bring in one paper.** Drag a PDF into a Library folder, or visit its article
+   page in **Browser** and choose **Save to Gewu**. Check its metadata and files.
 
-1. Download **Gewu-Insight-macOS-1.1.0.dmg** and open it.
-2. Drag **Gewu Insight.app** to **Applications**, eject the disk image, and open
-   the installed App.
-3. Choose **Create New Database** or **Open Existing Database**. Keep your
-   **Gewu Database** in a separate folder outside the App. The App menu's
-   **Database Location…** shows the active folder.
+Read the [installation notes](https://gewu-insight.com/download.html) for
+first-launch guidance. Mac builds are not Apple-notarized; Windows installers
+are unsigned. Setup may need internet access to install Microsoft WebView2.
+Optional LibreOffice and TeX tools are installed separately.
 
-### Windows
+**Already using Gewu?** Mac 1.0.x and Windows 1.0.0 users install 1.1.0 manually
+once, retaining their existing database. After that, use **Gewu Insight → Check
+for Updates** on Mac or **Help → Check for Updates** on Windows. Automatic daily
+checks are optional; installation is your choice. Back up your data, close the
+Gewu tab in Zotero, and finish or pause imports before installing.
 
-1. Download **Gewu-Insight-Windows-1.0.0-x64-Setup.exe** and run Setup.
-2. Choose the program and **Gewu Database** folders. To retain an existing
-   collection, select **Use existing Gewu Database** and its root folder.
-3. Open **Gewu Insight** from the Start menu. Python and .NET are bundled;
-   Setup needs internet access if Microsoft WebView2 must be installed.
+## Try one paper: from reading to reuse
 
-Read the release's checksum and first-launch notes. The macOS package uses
-ad-hoc integrity signing and is not Apple-notarized; the Windows installer is
-unsigned. Optional LibreOffice and TeX tools are installed separately.
+Start with a PDF you already have, or the [Gewu Insight paper](https://arxiv.org/abs/2610.14538).
+For the latter, open its page in **Browser**, choose **Save to Gewu**, and review
+the destination and metadata. If the PDF is unavailable through that action,
+download it from the arXiv page and attach it to the same record in **Paper Files**.
 
-**Try one paper:** drag a PDF into a Library folder, or visit an article in
-**Browser** and choose **Save to Gewu**. Inspect **Paper Files** and **Paper
-Details**, then create a Space for a project. Open **Help → User Guide** for
-the manual bundled with your platform. The [website](https://gewu-insight.com)
-also provides both platform guides.
+1. **Collect:** keep the paper in a folder for a question you are working on.
+2. **Read:** inspect **Paper Details** and preview the PDF in **Paper Files**.
+3. **Connect, if you want AI:** configure **AI Access** for that collection with
+   metadata, file-reading, saved-analysis-reading, and analysis-writing permissions.
+   Follow the [client setup guide](docs/AI_ACCESS.md).
+4. **Save what you learned:** give the connected client the paper's **Gewu Key**
+   from Paper Details and explicitly ask it to save its analysis. For example:
 
-**Updating an existing installation:** Mac 1.0.x users need to download the
-1.1.0 DMG once, quit Gewu and replace the App in Applications. Keep the same
-Gewu Database. From 1.1.0 onward, use **Gewu Insight → Check for Updates** to
-download, install and restart. Daily automatic checks are optional; installation
-requires your choice. Close the Gewu tab in Zotero and finish or pause imports
-before installing. See [Mac updates](docs/MACOS_UPDATES.md) for data safety and
-recovery. Keep a complete backup of the database and research files. Older
-source-folder installations should follow the
-[migration instructions](docs/SOURCE_DATA_MIGRATION.md) before updating.
-For source-based setup, use [Manual setup](docs/DEVELOPMENT.md#manual-setup).
+   > Use the Gewu MCP tools to read paper YOUR_GEWU_KEY and its authorized PDF.
+   > Summarize the question, evidence, and limitations, with page references.
+   > Save the analysis to this paper through save_analysis, retaining the source
+   > file ID and SHA-256. Do not overwrite existing files.
 
-If startup fails, follow your platform's release notes and User Guide. Installed
-macOS App logs are in `~/Library/Logs/Gewu Insight`; do not delete the database
-to repair startup.
+5. **Continue later:** start another connected session with access to the same
+   collection and ask it to read the sources and saved analysis before proceeding:
+
+   > For YOUR_GEWU_KEY, read the saved analysis and check it against the source
+   > PDF. Which questions remain open, and what evidence would help resolve them?
+
+Replace `YOUR_GEWU_KEY` with the actual key. Check the saved note in Paper Files.
+This continuity comes from saved records; Gewu does not automatically archive
+or synchronize your AI conversations. Discovery, organizing, and reading also
+work without an AI account.
+
+## Work with Zotero
+
+- **Use Gewu inside Zotero:** install the bundled companion through
+  **Plugin → Zotero Integration**. It opens the same Gewu installation and
+  selected database in a Zotero tab, with the same papers and settings.
+- **Choose where to save:** **Save to Gewu** keeps the paper in Gewu;
+  **Save to Zotero** copies metadata and, optionally, the available Default PDF.
+- **Bring your Zotero library over:** **Loader → Import from Zotero** lets you
+  preview and copy collections, including their hierarchy and empty folders,
+  into Gewu's file layout. The source Zotero library and originals remain intact.
+
+These are explicit copies between libraries, not continuous two-way syncing.
+See the [illustrated Zotero walkthrough](https://gewu-insight.com/zotero.html)
+for installation, saving, and import steps.
 
 ## Explore the workspace
 
-Six main tabs connect discovery, reading, organization, and your own publications.
-The Library tab provides access to Library, independent Spaces, and shortcuts.
-Spaces are project roots at the same organizational level as Library. These
-screenshots show the real macOS App; select an image to inspect it at full size.
+<details>
+<summary><strong>See all six views — real macOS screenshots</strong></summary>
+
+<p align="center">
+  <a href="assets/user-guide/screenshots/library-paper-files.png"><img src="assets/user-guide/screenshots/library-paper-files.png" width="920" alt="The macOS Library: folders on the left, a paper's published version and preprint in Paper Files, and article details on the right"></a>
+</p>
+
+*One paper, its versions, and its research context together. Actual macOS App screenshot; click to enlarge.*
 
 <table>
   <tr>
@@ -163,133 +190,74 @@ screenshots show the real macOS App; select an image to inspect it at full size.
   </tr>
 </table>
 
-For an existing collection, **Folder Loader** imports a directory tree. Portable
-folder export includes files and a manifest for importing their relationships
-into another Gewu workspace; see the [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf).
-
-Browser tab controls, bookmark import and sync, downloads, and system Passwords
-behavior are covered in the [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf)
-and [Browser documentation](#documentation). Website links from the other
-workspaces open in Browser; on macOS, local PDFs open in Preview.
+</details>
 
 ## One paper, connected files and evidence
 
-A paper's **Gewu Key** connects its identifiers, metadata, files, and placements
-across the workspace. Adding that paper to another folder or Space reuses the
-shared record. Start with metadata and add files later under the same Key.
-
-**Paper Files** keeps the Published version, accepted manuscript, preprints,
-supplements, annotated copies, and other attachments associated with that paper.
-Choose which file is **Default**; your choice is retained when other versions
-arrive. Use **Quick Look** to preview PDFs and Markdown, or open local PDFs in
-**Preview** on macOS.
-
-Supported corrections and retractions stay linked to the original paper.
-**Refresh Info** checks explicit Crossref update relations; coverage depends on
-the source, and saved papers are not continuously monitored for notices.
-See [publication updates](paper_monitor/user_guide.html#paper-publication-updates).
-
+A **Gewu Key** connects a paper's identifiers, metadata, files, and placements.
+Adding it to another folder or Space reuses the shared record. **Paper Files**
+keeps the **Published version**, preprints, and attachments together; you choose
+the **Default** file.
 Managed documents remain real files. Move and rename them through the App so
-records and disk paths stay coordinated. See
-[Paper Files](paper_monitor/user_guide.html#paper-files) and
-[managed file layout](docs/MANAGED_FILE_LAYOUT.md) for classifications, storage
-and file operations.
+records and disk paths stay coordinated. See [managed file layout](docs/MANAGED_FILE_LAYOUT.md).
+
+Supported correction and retraction notices remain linked to the original paper.
+**Refresh Info** checks explicit Crossref relations; coverage depends on the
+source, and saved papers are not continuously checked for notices.
 
 ## Work with an AI client
 
-AI Access is **optional and off by default**. Gewu provides a local API and an
-MCP adapter so an AI client can work with explicitly authorized collections.
-Enabling access does not itself call a model, upload a library, or start an
-analysis job.
+AI Access is **optional and off by default**. In **Setting** (Mac) or **Settings**
+(Windows) **→ AI Access**, choose a collection, an expiry, and separate permissions
+for reading, saving analyses, and organizing or importing. Connect a client
+supporting local stdio MCP using the generated configuration.
 
-In **Setting** (macOS) or **Settings** (Windows) **→ AI Access**, create a named
-connection and choose its collection, expiry and permissions. Use the generated
-configuration with a client supporting local stdio MCP. The setup guide covers
-**Codex** and **DeepSeek Harness**; compatible clients such as **Claude Code**
-can use the same interface.
+Codex and DeepSeek Harness have been used with Gewu. Other compatible clients
+require their own setup and verification. Enabling access does not itself call
+a model or start an analysis. Saved analyses append Markdown notes rather than
+overwriting source files; connections can be revoked.
 
-A typical workflow is: select a paper → read its authorized source files and
-earlier analyses → save a new Markdown analysis → review it in Paper Files.
-A later authorized session can retrieve the same record and continue from
-the retained sources and notes. Saving is an explicit client action; there is
-no automatic synchronization of AI conversations.
-
-Reading, saving analyses, and organizing/importing have separate permissions.
-Analysis saves append notes with source references without overwriting existing
-Paper Files. You can revoke connections, and upgrades do not expand existing
-grants. The [AI Access guide](docs/AI_ACCESS.md) explains setup, metadata-only
-imports, file attachment, Resolve, provenance and the limits of each operation.
-
-Your AI client may send authorized content to its chosen model provider. These
-grants govern API/MCP access; they do not restrict a program's independent
-operating-system access to local files. Review generated analyses against their
-sources.
+Your AI client may send authorized content to its model provider. MCP grants
+control the Gewu connection, not a program's independent operating-system file
+access. Review analyses against their sources.
+[Setup and permissions](docs/AI_ACCESS.md) · [Website walkthrough](https://gewu-insight.com/ai.html)
 
 ## Local data and online services
 
-**SQLite is the source of truth** for paper identities, relationships, file
-records, and workspace state. PDFs and attachments remain on disk; reports and
-exports do not replace the database.
+The App and your **Gewu Database** are separate. SQLite holds identities and
+relationships; PDFs and attachments remain on disk. With the App and backend
+stopped, back up the entire database folder, other managed roots, and externally
+linked originals. Copying the App or source checkout is not a research backup.
 
-The installed App and your **Gewu Database** are stored separately. With the App
-and its service stopped, back up the **complete selected database folder**,
-any additional managed file roots, and externally linked originals. Copying the
-App or source checkout alone does not back up your research. A pre-upgrade
-SQLite snapshot or a portable folder export does not replace this full backup.
-See [backup and recovery](paper_monitor/user_guide.html#backup-migrate) and the
-platform's bundled User Guide.
-
-The workspace uses a local-first architecture, with online services supporting
-discovery, metadata, citation counts, and publisher access. Availability can depend on a
-service's limits, the network or VPN exit address, and institutional access.
-Gewu uses pacing and cooldowns; it does not bypass paywalls or access controls.
-Configure optional service keys in **Setting** (macOS) or **Settings** (Windows)
-**→ Literature Data Source**.
+Discovery, metadata refresh, publisher access, and online AI services require
+network access and may depend on service limits or subscriptions. Gewu does not
+bypass paywalls or access controls. See the [data and backup FAQ](https://gewu-insight.com/resources.html#data).
 
 ## Platform support
 
-Gewu Insight was originally developed for macOS, which remains the primary
-platform for development and testing. The Windows version was subsequently
-ported from the macOS implementation.
-
-- **macOS** — a standalone desktop release with Finder, Preview, Quick Look,
-  Dock, and native drag-and-drop integration.
-- **Windows** — a separately packaged desktop release for Windows 10/11 x64,
-  with its own installer and User Guide. See the
-  [Windows release notes](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0)
-  for requirements and platform details.
-
-Windows validation is currently more limited. Windows 11 has undergone limited
-testing in a virtual machine. Compatibility fixes for Windows 10 have been guided
-by feedback from external testers, while direct testing and regression
-verification by the development team on Windows 10 remain limited.
-
-The evaluation reported in the accompanying paper was conducted on macOS.
-
-The Python, SQLite, and web-interface core is separated from native desktop
-integration. Screenshots in this README show macOS; use your platform's release
-notes and User Guide for installation and native behavior.
+macOS remains the primary development and testing platform. Windows was ported
+from it and is maintained on the separate **Windows** branch. Windows 11 has
+received limited testing in a virtual machine; Windows 10 fixes have followed
+external tester feedback, with limited direct testing by the development team.
+The paper's evaluation was conducted on macOS. Screenshots here show macOS;
+use your platform's manual for native controls and behavior.
 
 ## Documentation
 
 | Start here | What it covers |
 | --- | --- |
-| [macOS User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) · [Both platform guides](https://gewu-insight.com/#resources) | Daily workflows, settings, shortcuts, backup, and troubleshooting; each App includes its own guide under Help → User Guide. |
-| [AI Access & MCP](docs/AI_ACCESS.md) | Client setup, collection grants, reading, analysis saves, imports, moves, and renames. |
-| [Gewu Insight for Zotero — local preview](docs/ZOTERO_MONITOR.md) | Use all six Gewu tabs and Save to Zotero with the same local database; macOS background startup and App setup. |
-| [Browser: Save to Gewu](docs/BROWSER_CAPTURE.md) | Reviewing article identity, PDF candidates, file types, and import destinations. |
-| [Browser: keyboard & bookmarks](docs/BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md) | Navigation, bookmark import/export, and explicit one-way sync. |
-| [Browser: PDFs](docs/BROWSER_PDF_PREVIEW.md) · [Passwords](docs/BROWSER_PASSWORD_AUTOFILL.md) | PDF viewing and the boundaries of system password integration. |
-| [Managed file layout](docs/MANAGED_FILE_LAYOUT.md) | Default files, Associated Files, aliases, and recovery boundaries. |
-| [macOS release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) · [Windows release & installation](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.0.0) | Current installers, requirements, checksums, and first-launch notes. |
-| [Older source-installation migration](docs/SOURCE_DATA_MIGRATION.md) | Back up and separate research data from a legacy source checkout before updating. |
-| [Development guide](docs/DEVELOPMENT.md) | Manual setup, architecture, CLI commands, builds, updates, and verification. |
-| [Distribution guide](DISTRIBUTION.md) | Package formats, separate database storage, signing, and release checks. |
-| [Licensing explained](docs/LICENSING.md) · [Contributing](CONTRIBUTING.md) | Research use and sharing, reserved commercial rights, and contribution terms. |
+| [Website](https://gewu-insight.com) · [Product film](https://gewu-insight.com/product.html?lang=en#tour) | Product overview and real research workflows; English/Chinese website. |
+| [macOS User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) · [Windows User Guide](https://github.com/LKong92/Gewu-Insight/blob/Windows/windows/Windows_Preview_Guide.pdf) | Illustrated platform manuals; also available in **Help → User Guide** and on the [website](https://gewu-insight.com/resources.html#resources). |
+| [AI Access & MCP](docs/AI_ACCESS.md) | Client setup, collection grants, reading, saving analyses, and allowed writes. |
+| [Zotero walkthrough](https://gewu-insight.com/zotero.html) · [Companion architecture](docs/ZOTERO_MONITOR.md) · [Import details](docs/ZOTERO_MIGRATION.md) | One Gewu workspace through two interfaces, plus explicit copies between libraries. |
+| [Paper Files](paper_monitor/user_guide.html#paper-files) · [File layout](docs/MANAGED_FILE_LAYOUT.md) | Versions, Default files, attachments, and storage. |
+| [Browser capture](docs/BROWSER_CAPTURE.md) · [Keyboard & bookmarks](docs/BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md) | Save articles and use the built-in browser. |
+| [Mac updates](docs/MACOS_UPDATES.md) · [Windows distribution](https://github.com/LKong92/Gewu-Insight/blob/Windows/DISTRIBUTION.md) | Updates, installation, and platform requirements. |
+| [Legacy migration](docs/SOURCE_DATA_MIGRATION.md) · [Development](docs/DEVELOPMENT.md) · [Distribution](DISTRIBUTION.md) | Source-based setup, migration, builds, and release procedures. |
 
-The [HTML manual](paper_monitor/user_guide.html) is the source for the bundled
-PDF. [Guide coverage and screenshot provenance](docs/USER_GUIDE_AUDIT.md) are
-recorded separately from the product overview.
+Questions or a reproducible bug? [Open an issue](https://github.com/LKong92/Gewu-Insight/issues)
+with your platform, App version, steps, and expected behavior. For installation
+help, contact [info@gewu-insight.com](mailto:info@gewu-insight.com).
 
 ## Citation
 
