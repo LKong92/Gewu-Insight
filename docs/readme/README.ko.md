@@ -1,6 +1,6 @@
 # Gewu Insight
 
-**새 논문을 살펴보고, PDF와 노트를 정리하고, 지난번 연구에서 이어서 시작하세요.**
+**문헌 탐색, 읽기, 연구 프로젝트 관리, AI 협업을 연결하는 통합 연구 작업 공간.**
 
 Gewu Insight는 연구자를 위한 데스크톱 문헌 작업 공간입니다. 논문 탐색, 정리, 읽기를 연결하고 프리프린트, 출판본, 부록, 읽기 노트를 같은 논문에 모아 둡니다. 여러 연구 프로젝트에서 같은 기록을 활용할 수 있으며, 원하면 AI 도우미가 허용된 자료와 저장된 분석을 읽고 연구를 이어가도록 연결할 수 있습니다.
 
@@ -11,6 +11,12 @@ Gewu Insight는 연구자를 위한 데스크톱 문헌 작업 공간입니다. 
 **macOS 1.1.0 · Windows 1.1.0**. 이 페이지는 한국어 소개입니다. 앱 화면과 상세 안내서는 현재 영어이며, 메뉴 이름도 실제 화면의 영어 표기를 사용합니다.
 
 ## 영상으로 살펴보기
+
+**[▶ YouTube 소개 영상 · 영어 · 1:18](https://www.youtube.com/watch?v=8-dK6H2t2gQ)** · [Bilibili 영상 · 중국어](https://www.bilibili.com/video/BV1tRxt68E7p/) · [知乎 소개 글 · 중국어](https://zhuanlan.zhihu.com/p/2100363950269506568)
+
+문헌 탐색, 읽기, 연구 프로젝트 관리, AI 협업, Zotero 연동이 하나의 작업 공간에서 어떻게 이어지는지 살펴보세요.
+
+### 공식 사이트의 상세 사용 영상
 
 <!-- Original video cover: https://gewu-insight.com/assets/product-poster-en.jpg -->
 <p align="center">

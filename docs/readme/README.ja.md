@@ -1,6 +1,6 @@
 # Gewu Insight
 
-**新しい論文を追い、PDF とノートを整理し、前回の研究の続きから始める。**
+**文献探索、読解、研究プロジェクトの整理、AI との協働をつなぐ統合研究ワークスペース。**
 
 Gewu Insight は、学術論文の発見・整理・読解を一つにまとめた研究者向けデスクトップアプリです。プレプリント、出版版、補足資料、読書ノートを同じ論文に紐づけ、複数の研究プロジェクトから参照できます。必要に応じて AI アシスタントを接続し、許可した資料と保存済みの分析を読み返して研究を続けられます。
 
@@ -11,6 +11,12 @@ Gewu Insight は、学術論文の発見・整理・読解を一つにまとめ�
 **macOS 1.1.0 · Windows 1.1.0**。このページは日本語の紹介です。アプリの画面と詳細マニュアルは現在英語です。操作名は画面と同じ英語表記にしています。
 
 ## 動画で見る Gewu Insight
+
+**[▶ YouTube で概要を見る（英語・1:18）](https://www.youtube.com/watch?v=8-dK6H2t2gQ)** · [Bilibili の動画（中国語）](https://www.bilibili.com/video/BV1tRxt68E7p/) · [知乎の紹介記事（中国語）](https://zhuanlan.zhihu.com/p/2100363950269506568)
+
+文献探索、読解、研究プロジェクトの整理、AI との協働、Zotero 連携を、一つのワークスペースでつなぐ流れを紹介します。
+
+### 公式サイトの詳しい操作ガイド動画
 
 <!-- Original video cover: https://gewu-insight.com/assets/product-poster-en.jpg -->
 <p align="center">

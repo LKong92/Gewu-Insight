@@ -1,6 +1,6 @@
 # Gewu Insight
 
-**Neue Fachliteratur verfolgen. PDFs und Notizen zusammenhalten. Dort weiterforschen, wo Sie aufgehört haben.**
+**Ein integrierter Forschungsarbeitsbereich für Literatursuche, Lesen, Projektorganisation und KI-Zusammenarbeit.**
 
 Gewu Insight ist ein Desktop-Arbeitsbereich für Forschende, der Literatursuche, Organisation und Lesen verbindet. Preprints, veröffentlichte Fassungen, ergänzende Dateien und Notizen bleiben demselben Artikel zugeordnet – auch über mehrere Projekte hinweg. Optional kann ein KI-Assistent auf freigegebene Quellen und gespeicherte Analysen zugreifen, um die Arbeit später fortzusetzen.
 
@@ -11,6 +11,12 @@ Gewu Insight ist ein Desktop-Arbeitsbereich für Forschende, der Literatursuche,
 **macOS 1.1.0 · Windows 1.1.0**. Dies ist eine deutschsprachige Einführung. Die App-Oberfläche und die ausführlichen Handbücher sind derzeit auf Englisch. Menübezeichnungen entsprechen deshalb der englischen Oberfläche.
 
 ## Gewu Insight im Video
+
+**[▶ Überblick auf YouTube · Englisch · 1:18](https://www.youtube.com/watch?v=8-dK6H2t2gQ)** · [Video auf Bilibili · Chinesisch](https://www.bilibili.com/video/BV1tRxt68E7p/) · [Bebilderte Einführung auf Zhihu · Chinesisch](https://zhuanlan.zhihu.com/p/2100363950269506568)
+
+Erfahren Sie, wie Literatursuche, Lesen, Projektorganisation, KI-Zusammenarbeit und Zotero-Integration in einem gemeinsamen Arbeitsbereich zusammenkommen.
+
+### Ausführlicher Rundgang auf der Website
 
 <!-- Original video cover: https://gewu-insight.com/assets/product-poster-en.jpg -->
 <p align="center">

@@ -1,22 +1,32 @@
 # Gewu Insight
 
-**Follow new papers. Keep your PDFs and notes together. Pick up where your research left off.**
+**An integrated research workspace for literature discovery, reading, project organization, and AI collaboration.**
 
-Gewu Insight is a desktop workspace for researchers who need to discover,
-organize, and read scientific literature. Keep a paper's versions, supporting
-files, and reading notes connected across projects. Optionally connect your AI
-assistant so a later session can continue from the sources and analyses you saved.
+Gewu Insight connects literature discovery, reading, and research projects in one
+desktop workspace, with support for Zotero. Keep a paper's versions, supporting
+files, and reading notes connected across projects. Optionally connect an AI
+assistant to work with the same authorized sources and saved analyses, and
+continue that research in later sessions.
 
 **English** · [简体中文](docs/readme/README.zh-CN.md) · [繁體中文](docs/readme/README.zh-TW.md) · [日本語](docs/readme/README.ja.md) · [한국어](docs/readme/README.ko.md) · [Français](docs/readme/README.fr.md) · [Deutsch](docs/readme/README.de.md)
 
 [**Download for macOS**](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) ·
 [**Download for Windows**](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.1.0) ·
-[**Watch the product film**](https://gewu-insight.com/product.html?lang=en#tour) ·
+[**Watch the English demo**](https://www.youtube.com/watch?v=8-dK6H2t2gQ) ·
 [Website](https://gewu-insight.com) · [User guides](https://gewu-insight.com/resources.html#resources)
 
 **macOS 1.1.0 · Windows 1.1.0** · Local research library · Optional AI connection
 
 ## Watch Gewu Insight in action
+
+**[▶ English overview on YouTube · 1:18](https://www.youtube.com/watch?v=8-dK6H2t2gQ)** ·
+[中文视频 · B站](https://www.bilibili.com/video/BV1tRxt68E7p/) ·
+[中文图文介绍 · 知乎](https://zhuanlan.zhihu.com/p/2100363950269506568)
+
+See how literature discovery, reading, project organization, AI collaboration,
+and Zotero integration fit together in one research workspace.
+
+### Detailed walkthrough on the website
 
 <!-- Original video cover: https://gewu-insight.com/assets/product-poster-en.jpg -->
 <p align="center">

@@ -1,6 +1,6 @@
 # Gewu Insight
 
-**Suivez les nouvelles publications. Retrouvez vos PDF et vos notes. Reprenez votre recherche là où vous l’aviez laissée.**
+**Un espace de recherche intégré pour la découverte bibliographique, la lecture, l’organisation des projets et la collaboration avec l’IA.**
 
 Gewu Insight est un espace de travail sur ordinateur pour découvrir, organiser et lire la littérature scientifique. Prépublications, versions publiées, annexes et notes restent rattachées au même article, même lorsqu’il figure dans plusieurs projets. Vous pouvez aussi connecter un assistant IA pour reprendre un travail à partir des sources autorisées et des analyses enregistrées.
 
@@ -11,6 +11,12 @@ Gewu Insight est un espace de travail sur ordinateur pour découvrir, organiser 
 **macOS 1.1.0 · Windows 1.1.0**. Cette présentation est en français ; l’interface et les manuels détaillés sont actuellement en anglais. Les noms des commandes sont conservés tels qu’ils apparaissent dans l’application.
 
 ## Découvrir Gewu Insight en vidéo
+
+**[▶ Présentation sur YouTube · anglais · 1:18](https://www.youtube.com/watch?v=8-dK6H2t2gQ)** · [Vidéo sur Bilibili · chinois](https://www.bilibili.com/video/BV1tRxt68E7p/) · [Présentation illustrée sur Zhihu · chinois](https://zhuanlan.zhihu.com/p/2100363950269506568)
+
+Découvrez comment la recherche bibliographique, la lecture, l’organisation des projets, la collaboration avec l’IA et l’intégration Zotero s’articulent dans un même espace de travail.
+
+### Visite détaillée sur le site officiel
 
 <!-- Original video cover: https://gewu-insight.com/assets/product-poster-en.jpg -->
 <p align="center">

@@ -1,16 +1,22 @@
 # Gewu Insight · 格物洞见
 
-**追踪新论文，整理 PDF 与笔记，让下一次研究接着上一次继续。**
+**一体化科研工作台，连接文献发现、阅读整理、课题组织与 AI 协作。**
 
-格物洞见是面向研究者的桌面文献工作空间，把论文发现、整理、阅读和积累放在一起。同一篇论文的预印本、正式版本、附件和阅读笔记保持关联，也可以在多个研究项目中使用。你还可以连接 AI 助手，让它读取你授权的资料和已保存分析，继续研究。
+格物洞见将文献发现、阅读整理与课题组织贯通在同一个桌面工作台中，并支持与 Zotero 联用。同一篇论文的预印本、正式版本、附件和阅读笔记保持关联，也可以在多个研究项目中使用。你还可以连接 AI 助手，基于同一份授权资料与已保存分析协作，让后续研究接着已有积累继续。
 
 [English](../../README.md) · **简体中文** · [繁體中文](README.zh-TW.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
-[**下载 Mac 版**](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) · [**下载 Windows 版**](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.1.0) · [**观看产品演示**](https://gewu-insight.com/product.html?lang=zh#tour) · [官网](https://gewu-insight.com) · [使用手册](https://gewu-insight.com/resources.html#resources)
+[**下载 Mac 版**](https://github.com/LKong92/Gewu-Insight/releases/tag/macos-1.1.0) · [**下载 Windows 版**](https://github.com/LKong92/Gewu-Insight/releases/tag/windows-1.1.0) · [**观看中文演示 · B站**](https://www.bilibili.com/video/BV1tRxt68E7p/) · [官网](https://gewu-insight.com) · [使用手册](https://gewu-insight.com/resources.html#resources)
 
 **macOS 1.1.0 · Windows 1.1.0**。本页提供中文介绍；软件界面和详细手册目前为英文，菜单名称保留英文以便查找。
 
 ## 观看操作演示
+
+**[▶ 中文视频 · B站](https://www.bilibili.com/video/BV1tRxt68E7p/)** · **[图文介绍 · 知乎](https://zhuanlan.zhihu.com/p/2100363950269506568)** · [英文视频 · YouTube · 1:18](https://www.youtube.com/watch?v=8-dK6H2t2gQ)
+
+了解文献发现、阅读整理、研究空间、AI 协作与 Zotero 联用，看看这些环节如何在一个科研工作台中衔接。
+
+### 官网详细操作演示
 
 <!-- Original video cover: https://gewu-insight.com/assets/product-poster-zh.jpg -->
 <p align="center">
