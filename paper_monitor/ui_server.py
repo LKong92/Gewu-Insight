@@ -8758,24 +8758,37 @@ def missing_theme_group_keys_for_date(storage: Storage, selected: str, group_key
 
 def mark_stale_theme_fetch_runs(storage: Storage) -> None:
     cutoff = (datetime.now(local_timezone()) - timedelta(minutes=THEME_FETCH_STALE_AFTER_MINUTES)).isoformat(timespec="seconds")
-    cursor = storage.conn.execute(
-        """
-        UPDATE fetch_runs
-        SET status = 'error',
-            message = CASE
-              WHEN message IS NULL OR message = '' THEN 'Fetch was interrupted before completion.'
-              ELSE message
-            END,
-            finished_at = ?
-        WHERE monitor_type = 'theme'
-          AND source IN ('openalex', 'multi')
-          AND status = 'running'
-          AND started_at < ?
-        """,
-        (now_iso(), cutoff),
-    )
-    if cursor.rowcount:
-        storage.conn.commit()
+    predicate = """monitor_type = 'theme'
+        AND source IN ('openalex', 'multi')
+        AND status = 'running' AND started_at < ?"""
+    # Status/calendar reads normally have nothing to repair. Even a zero-row
+    # UPDATE starts a write transaction, blocking unrelated settings/downloads.
+    if not storage.conn.execute(
+        f"SELECT 1 FROM fetch_runs WHERE {predicate} LIMIT 1", (cutoff,)
+    ).fetchone():
+        return
+    # A savepoint owns only this cleanup. Release it even if another connection
+    # repaired the rows first; never commit or roll back a caller's transaction.
+    storage.conn.execute("SAVEPOINT stale_theme_fetch_runs")
+    try:
+        storage.conn.execute(
+            f"""
+            UPDATE fetch_runs
+            SET status = 'error',
+                message = CASE
+                  WHEN message IS NULL OR message = '' THEN 'Fetch was interrupted before completion.'
+                  ELSE message
+                END,
+                finished_at = ?
+            WHERE {predicate}
+            """,
+            (now_iso(), cutoff),
+        )
+        storage.conn.execute("RELEASE SAVEPOINT stale_theme_fetch_runs")
+    except Exception:
+        storage.conn.execute("ROLLBACK TO SAVEPOINT stale_theme_fetch_runs")
+        storage.conn.execute("RELEASE SAVEPOINT stale_theme_fetch_runs")
+        raise
 
 
 def theme_existing_summary(
@@ -9768,8 +9781,10 @@ def run_due_auto_subject_retries_once(db_path: Path, now: datetime | None = None
         if not try_start_theme_fetch(selected):
             retained.extend(due_items)
             continue
-        retry_storage = Storage(db_path)
+        retry_storage = None
+        retry_batch = due_items
         try:
+            retry_storage = Storage(db_path)
             target_date = date.fromisoformat(selected)
             theme_groups = load_theme_groups(retry_storage)
             runnable: list[dict[str, Any]] = []
@@ -9787,8 +9802,10 @@ def run_due_auto_subject_retries_once(db_path: Path, now: datetime | None = None
                     runnable.append({**item, "failed_tasks": failed_tasks})
             if not runnable:
                 continue
+            retry_batch = runnable
             group_keys = [clean_text(item.get("group_key") or "") for item in runnable]
             retry_tasks = {str(item["group_key"]): list(item["failed_tasks"]) for item in runnable}
+            attempted += len(runnable)
             summary = run_theme_monitor(
                 storage=retry_storage,
                 start_date=target_date,
@@ -9798,7 +9815,6 @@ def run_due_auto_subject_retries_once(db_path: Path, now: datetime | None = None
                 retry_tasks_by_group=retry_tasks,
                 trigger="automatic_retry",
             )
-            attempted += len(runnable)
             for item in runnable:
                 group_key = str(item["group_key"])
                 group_summary = (summary.get("groups") or {}).get(group_key) or {}
@@ -9846,9 +9862,22 @@ def run_due_auto_subject_retries_once(db_path: Path, now: datetime | None = None
                     )
         except Exception as exc:
             print(f"Auto Subject Monitor retry failed for {selected}: {exc}")
-            retained.extend(due_items)
+            # Exceptions must consume a retry and respect the same cooldown as
+            # source failures, rather than replaying the batch every poll.
+            failed_at = datetime.now(local_timezone()) if now is None else current
+            next_retry_at = failed_at + timedelta(seconds=AUTO_SUBJECT_MONITOR_RETRY_SECONDS)
+            for item in retry_batch:
+                retry_count = int(item.get("retry_count") or 0) + 1
+                retained.append({
+                    **item,
+                    "retry_count": retry_count,
+                    "exhausted": retry_count >= AUTO_SUBJECT_MONITOR_MAX_RETRIES,
+                    "last_attempt_at": failed_at.isoformat(timespec="seconds"),
+                    "next_retry_at": next_retry_at.isoformat(timespec="seconds"),
+                })
         finally:
-            retry_storage.close()
+            if retry_storage is not None:
+                retry_storage.close()
             finish_theme_fetch(selected)
 
     retry_storage = Storage(db_path)
